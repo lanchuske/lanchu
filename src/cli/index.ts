@@ -371,14 +371,21 @@ async function cmdWork(prefillObjective: string): Promise<void> {
 
     // 7) final confirmation
     const go = (await rl.question(`\nLaunch Claude now? [Y/n] `)).trim().toLowerCase();
-    rl.close();
     if (go === "" || go === "y" || go === "yes") {
+      rl.close();
       const instruction =
         "You are connected to Lanchu. Read the lanchu://me resource for your objective, role and tasks, " +
         "then claim (task_claim) and work the tasks in your scope, reporting progress with task_update.";
       spawn(claudeCmd, [instruction], { stdio: "inherit" });
     } else {
-      console.log(`\nWhen ready:  claude\nPanel:       ${baseUrl()}`);
+      const op = (await rl.question(`Open the supervisor panel instead? [Y/n] `)).trim().toLowerCase();
+      rl.close();
+      if (op === "" || op === "y" || op === "yes") {
+        openBrowser(baseUrl());
+        console.log(`Opening the panel: ${baseUrl()}`);
+      } else {
+        console.log(`\nWhen ready:  claude\nPanel:       ${baseUrl()}`);
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -434,7 +441,7 @@ async function main(): Promise<void> {
     case "version":
     case "-v":
     case "--version":
-      return void console.log("0.2.0");
+      return void console.log("0.2.1");
     case "serve":
       return cmdServe();
     case "doctor":
