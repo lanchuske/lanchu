@@ -1,88 +1,88 @@
 <h1 align="center">Lanchu</h1>
 
 <p align="center">
-  <b>El panel de control y los límites para los agentes de IA que ya tienes corriendo.</b><br>
-  Coordínalos sin que se pisen. Míralos en tiempo real. Confía en lo que hacen.
+  <b>The control panel and the limits for the AI agents you already have running.</b><br>
+  Coordinate them without collisions. Watch them in real time. Trust what they do.
 </p>
 
 ---
 
-## ¿Qué problema resuelve?
+## What problem does it solve?
 
-Cada vez más personas usan varios agentes de IA (como Claude o Cursor) para construir
-aplicaciones o automatizar su empresa. Pero cuando pones **varios agentes a la vez**,
-aparecen dos dolores:
+More and more people use several AI agents (like Claude or Cursor) to build
+apps or automate their company. But when you put **several agents to work at once**,
+two pains show up:
 
-**No se coordinan** — y se estorban:
-- 🔁 **Se pisan el trabajo** — dos agentes hacen lo mismo.
-- 🤷 **Trabajan a ciegas** — el uno no sabe qué hizo el otro.
+**They don't coordinate** — and they get in each other's way:
+- 🔁 **They step on each other's work** — two agents do the same thing.
+- 🤷 **They work blind** — one doesn't know what the other did.
 
-**No los puedes controlar** — ni confiar:
-- 🚧 **Se salen de su carril** — un agente toca algo que no le corresponde.
-- 📄 **La documentación queda vieja** — nadie mantiene el conocimiento al día.
-- 👀 **No ves nada** — no sabes quién hizo qué, ni en qué gastó.
+**You can't control them** — or trust them:
+- 🚧 **They stray out of their lane** — an agent touches something it shouldn't.
+- 📄 **The documentation goes stale** — nobody keeps the knowledge up to date.
+- 👀 **You can't see anything** — you don't know who did what, or what they spent.
 
-La mayoría de las herramientas solo atacan la coordinación, y son para programadores.
-**Lanchu añade lo que falta: control y confianza para quien supervisa.**
+Most tools only tackle coordination, and they're built for programmers.
+**Lanchu adds what's missing: control and trust for whoever supervises.**
 
-Lanchu **no orquesta** tus agentes (no decide su plan). Les da un **lugar de trabajo
-común** para que se coordinen sin chocar, les pone **límites de alcance**, mantiene la
-**documentación al día**, y te da un **panel + historial** para *ver y confiar* en lo
-que hacen — aunque no seas técnico.
+Lanchu **does not orchestrate** your agents (it doesn't decide their plan). It gives them a
+**shared workspace** so they coordinate without colliding, sets **scope limits** on them, keeps the
+**documentation up to date**, and gives you a **panel + history** to *see and trust* what
+they do — even if you're not technical.
 
-## Cómo funciona (la idea)
+## How it works (the idea)
 
-1. Lanzas tus agentes como siempre (con la herramienta que ya uses).
-2. Cada agente **se registra en tu organización y asume un rol**.
-3. A partir de ahí, solo trabaja en **lo que le corresponde**: toma tareas, lee la
-   documentación compartida, y Lanchu **rechaza y registra** cualquier acción fuera de su
-   carril. Los agentes se coordinan **a través de Lanchu**, no hablándose entre ellos —
-   por eso tú lo ves y lo puedes acotar todo.
-4. Tú miras el **panel en tiempo real**: quién está activo, en qué trabaja, qué
-   documentación crea, y un **historial** de todo lo que hicieron.
+1. You launch your agents as always (with the tool you already use).
+2. Each agent **registers in your organization and takes on a role**.
+3. From there, it only works on **what it's responsible for**: it claims tasks, reads the
+   shared documentation, and Lanchu **rejects and records** any action outside its
+   lane. The agents coordinate **through Lanchu**, not by talking to each other —
+   that's why you can see and bound everything.
+4. You watch the **real-time panel**: who's active, what they're working on, what
+   documentation they create, and a **history** of everything they did.
 
-> Lanchu pone **límites cooperativos y auditables**: bloquea lo que pasa por él y deja
-> **todo a la vista**. No es una jaula del sistema — la confianza viene de *verlo todo*.
+> Lanchu sets **cooperative, auditable limits**: it blocks what passes through it and leaves
+> **everything in plain sight**. It's not a system cage — the trust comes from *seeing it all*.
 
-## Inicio rápido
+## Quick start
 
 ```bash
 npx lanchu
 ```
 
-> ⚠️ El proyecto está en fase de definición. El comando anterior es la meta de
-> instalación; todavía no está publicado. Mira [`DEFINITION.md`](./DEFINITION.md) para
-> entender hacia dónde va.
+> ⚠️ The project is in the definition phase. The command above is the installation
+> goal; it isn't published yet. See [`DEFINITION.md`](./DEFINITION.md) to
+> understand where it's headed.
 
-## Qué incluye la primera versión
+## What the first version includes
 
-- **Organizaciones y proyectos** — agrupa a tus agentes y su trabajo.
-- **Registro y roles** — cada agente sabe quién es y qué puede tocar.
-- **Coordinación con control de alcance** — nadie duplica ni se pisa; las acciones fuera
-  del rol se rechazan y quedan registradas.
-- **Panel en tiempo real** — ves qué hace cada agente y en qué está.
-- **Historial (audit log)** — todo lo que hicieron queda registrado, para que confíes.
-- **Documentación compartida y trazable** — el conocimiento siempre al día.
+- **Organizations and projects** — group your agents and their work.
+- **Registration and roles** — each agent knows who it is and what it can touch.
+- **Coordination with scope control** — nobody duplicates or steps on each other; actions outside
+  the role are rejected and recorded.
+- **Real-time panel** — you see what each agent does and what it's on.
+- **History (audit log)** — everything they did is recorded, so you can trust it.
+- **Shared, traceable documentation** — the knowledge is always up to date.
 
-Lo que viene después (funciones recurrentes, skills, organizaciones en la nube…) está en
-el [roadmap](./DEFINITION.md#9-roadmap-fuera-del-v0).
+What comes next (recurring functions, skills, cloud organizations…) is in
+the [roadmap](./DEFINITION.md#10-roadmap-deliberately-outside-the-v0).
 
-## Para quién es
+## Who it's for
 
-Para cualquiera que **supervise a varios agentes** trabajando sobre un objetivo común:
-para construir una app, automatizar procesos o coordinar el trabajo de una empresa.
-Lanchu se pone **encima o al lado** de las herramientas que ya uses para lanzar agentes.
+For anyone who **supervises several agents** working toward a common objective:
+to build an app, automate processes, or coordinate a company's work.
+Lanchu sits **on top of or alongside** the tools you already use to launch agents.
 
-En esta primera versión hay dos papeles: un **operador** (semi-técnico) que hace el
-montaje inicial —correr un comando, conectar tus agentes—, y un **supervisor** que
-observa y confía desde el panel, **sin necesidad de ser programador**.
+In this first version there are two roles: an **operator** (semi-technical) who does the
+initial setup —running a command, connecting your agents—, and a **supervisor** who
+watches and trusts from the panel, **without needing to be a programmer**.
 
-## Contribuir
+## Contributing
 
-Lanchu es open source y las contribuciones son bienvenidas de forma controlada.
-Empieza por leer la [definición del proyecto](./DEFINITION.md). (Guía de contribución
-detallada próximamente.)
+Lanchu is open source and contributions are welcome in a controlled way.
+Start by reading the [project definition](./DEFINITION.md). (Detailed contribution
+guide coming soon.)
 
-## Licencia
+## License
 
 [MIT](./LICENSE)

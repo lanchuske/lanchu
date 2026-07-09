@@ -1,194 +1,194 @@
-# Lanchu — CLI y flujo de arranque
+# Lanchu — CLI and startup flow
 
-> Superficie de comandos del v0 y qué pasa exactamente al ejecutar `npx lanchu`.
-> Resuelve **C2** (comandos + selección de org/proyecto/rol) y **C3** (cómo el cliente
-> del agente se conecta al servidor MCP). Concreta el pilar #1: *onboarding sin fricción*.
-> Complementa [`ARCHITECTURE.md`](./ARCHITECTURE.md) y [`SCHEMA.md`](./SCHEMA.md).
-
----
-
-## 1. Invocación
-
-```bash
-npx lanchu <objetivo> [opciones]     # comando principal (onboard/resume)
-npx lanchu <subcomando> [opciones]   # gestión
-```
-
-Sin instalar nada global. El primer `npx lanchu` en una máquina también **levanta el
-servidor local** si no está corriendo (ver §7).
+> Command surface for v0 and exactly what happens when you run `npx lanchu`.
+> Resolves **C2** (commands + org/project/role selection) and **C3** (how the agent's
+> client connects to the MCP server). Delivers pillar #1: *frictionless onboarding*.
+> Complements [`ARCHITECTURE.md`](./ARCHITECTURE.md) and [`SCHEMA.md`](./SCHEMA.md).
 
 ---
 
-## 2. El comando principal: `lanchu <objetivo>`
-
-Mete un agente en la org con un trabajo y lo deja listo para empezar.
+## 1. Invocation
 
 ```bash
-npx lanchu 'arregla el login'
+npx lanchu <objective> [options]     # main command (onboard/resume)
+npx lanchu <subcommand> [options]    # management
 ```
 
-**Opciones:**
+No global install required. The first `npx lanchu` on a machine also **starts the
+local server** if it isn't already running (see §7).
 
-| Opción | Efecto |
+---
+
+## 2. The main command: `lanchu <objective>`
+
+Puts an agent into the org with a job and leaves it ready to start.
+
+```bash
+npx lanchu 'fix the login'
+```
+
+**Options:**
+
+| Option | Effect |
 |--------|--------|
-| `--org <nombre>` | Fuerza la organización (si no, se resuelve del directorio; ver §4). |
-| `--project <nombre>` | Fuerza el proyecto. |
-| `--role <nombre>` | Rol del agente **nuevo** (si no, se elige interactivo). |
-| `--as <nombre>` | Nombre del agente nuevo (si no, se deriva del objetivo: `arregla-login`). |
-| `--reuse <agente>` | Reutiliza ese agente sin preguntar. |
-| `--new` | Fuerza crear uno nuevo (salta la pregunta de reutilizar). |
-| `--client <claude\|cursor\|print>` | Cómo conectar el agente (ver §5). `print` = solo imprime la config. |
-| `--run "<cmd>"` | Además, **lanza** ese comando de agente por ti (conveniencia; opt-in). |
+| `--org <name>` | Forces the organization (otherwise resolved from the directory; see §4). |
+| `--project <name>` | Forces the project. |
+| `--role <name>` | Role of the **new** agent (otherwise chosen interactively). |
+| `--as <name>` | Name of the new agent (otherwise derived from the objective: `fix-login`). |
+| `--reuse <agent>` | Reuses that agent without asking. |
+| `--new` | Forces creating a new one (skips the reuse prompt). |
+| `--client <claude\|cursor\|print>` | How to connect the agent (see §5). `print` = just prints the config. |
+| `--run "<cmd>"` | Additionally **launches** that agent command for you (convenience; opt-in). |
 
-**Ejemplo de sesión:**
+**Example session:**
 ```text
-$ npx lanchu 'arregla el login'
-● Servidor Lanchu activo (http://127.0.0.1:4319)
-● Org: acme · Proyecto: web   (desde ./.lanchu/config.json)
+$ npx lanchu 'fix the login'
+● Lanchu server active (http://127.0.0.1:4319)
+● Org: acme · Project: web   (from ./.lanchu/config.json)
 
-? Un agente ya trabajó en 'login':
-  › arregla-login   (idle · rol frontend · 2 tareas abiertas · hace 3 h)
-    ─ crear un agente nuevo ─
-  [Enter] reutilizar   ·   [n] nuevo
+? An agent already worked on 'login':
+  › fix-login   (idle · frontend role · 2 open tasks · 3 h ago)
+    ─ create a new agent ─
+  [Enter] reuse   ·   [n] new
 
-▸ Reutilizando 'arregla-login'  (rol: frontend)
-▸ Sesión iniciada · token emitido
-▸ Cliente MCP 'claude' conectado a lanchu (session-scoped)
+▸ Reusing 'fix-login'  (role: frontend)
+▸ Session started · token issued
+▸ MCP client 'claude' connected to lanchu (session-scoped)
 
-Listo. Inicia tu agente; leerá su objetivo, rol y tareas desde Lanchu.
-  claude "continúa con tu trabajo en Lanchu"
+Done. Start your agent; it will read its objective, role, and tasks from Lanchu.
+  claude "continue with your work in Lanchu"
 Panel: http://127.0.0.1:4319
 ```
 
 ---
 
-## 3. Flujo de arranque (paso a paso)
+## 3. Startup flow (step by step)
 
 ```
-npx lanchu 'arregla el login'
+npx lanchu 'fix the login'
    │
-   1. ¿Servidor local vivo?  ── no ─▶ arráncalo en background (§7)
+   1. Local server alive?  ── no ─▶ start it in the background (§7)
    │
-   2. Resolver ORG + PROYECTO  (desde ./.lanchu/config.json; si falta → `lanchu init`)
+   2. Resolve ORG + PROJECT  (from ./.lanchu/config.json; if missing → `lanchu init`)
    │
-   3. Reutilizar-o-crear:
-   │     · buscar agentes idle con huella que solape el objetivo
-   │     · hay candidatos → preguntar al humano (CLI)
-   │     · crear → elegir ROL (--role o interactivo) + nombre
+   3. Reuse-or-create:
+   │     · look for idle agents whose footprint overlaps the objective
+   │     · candidates found → ask the human (CLI)
+   │     · create → choose ROLE (--role or interactive) + name
    │
-   4. El servidor emite un TOKEN de sesión ligado al agente  →  agente ACTIVO
+   4. The server issues a session TOKEN bound to the agent  →  agent ACTIVE
    │
-   5. Conectar el cliente del agente al servidor MCP con ese token (§5)
+   5. Connect the agent's client to the MCP server with that token (§5)
    │
-   6. (nuevo) registrar el objetivo; el agente lo descompondrá en tareas al arrancar
+   6. (new) register the objective; the agent will break it down into tasks on startup
    │
    ▼
-   El agente, al iniciar, lee `lanchu://me` (objetivo + rol + tareas + reglas) y trabaja.
+   On startup, the agent reads `lanchu://me` (objective + role + tasks + rules) and works.
 ```
 
-Los pasos 1–5 ocurren en la **CLI/launcher**. El paso 6 en adelante es el agente vía
-tools MCP. La CLI **no gestiona el proceso del agente** (salvo `--run`, opt-in).
+Steps 1–5 happen in the **CLI/launcher**. Step 6 onward is the agent via
+MCP tools. The CLI **does not manage the agent's process** (except `--run`, opt-in).
 
 ---
 
-## 4. Org / proyecto / rol
+## 4. Org / project / role
 
-### Org y proyecto (C2)
-Se resuelven del **directorio actual**, estilo git:
-- La CLI busca `./.lanchu/config.json` (subiendo por los padres):
+### Org and project (C2)
+Resolved from the **current directory**, git-style:
+- The CLI looks for `./.lanchu/config.json` (walking up the parents):
   ```json
   { "org": "acme", "project": "web" }
   ```
-- Si no existe → corre `lanchu init` (interactivo): crea/elige org y proyecto y escribe
-  el config. Así, la próxima vez es cero fricción.
-- `--org` / `--project` siempre mandan por encima del config.
+- If it doesn't exist → it runs `lanchu init` (interactive): creates/picks an org and project and writes
+  the config. That way, next time is zero friction.
+- `--org` / `--project` always take precedence over the config.
 
-### Rol (al crear un agente nuevo)
-- `--role <nombre>` si lo sabes.
-- Si no, la CLI muestra los **roles de la org** para elegir.
-- Si la org **no tiene roles**, ofrece: crear uno (`nombre` + `--tags ui,css`) o usar el
-  **rol comodín `*`** (toca todo) para empezar rápido.
-- Un agente **reutilizado conserva su rol**; no se vuelve a preguntar.
+### Role (when creating a new agent)
+- `--role <name>` if you know it.
+- Otherwise, the CLI shows the **org's roles** to choose from.
+- If the org **has no roles**, it offers: create one (`name` + `--tags ui,css`) or use the
+  **wildcard role `*`** (touches everything) to get started quickly.
+- A **reused agent keeps its role**; you're not asked again.
 
 ---
 
-## 5. Conectar el cliente del agente (C3)
+## 5. Connecting the agent's client (C3)
 
-El agente (Claude Code, Cursor, …) necesita saber **a qué servidor MCP hablar y con qué
-token**. La CLI lo cablea por ti:
+The agent (Claude Code, Cursor, …) needs to know **which MCP server to talk to and with which
+token**. The CLI wires it up for you:
 
-- **Clientes conocidos** (`--client claude|cursor`): la CLI registra un servidor MCP
-  *scoped* a esta sesión. Para Claude Code equivale a:
+- **Known clients** (`--client claude|cursor`): the CLI registers an MCP server
+  *scoped* to this session. For Claude Code this is equivalent to:
   ```bash
   claude mcp add lanchu --transport http \
     http://127.0.0.1:4319/mcp \
-    --header "Authorization: Bearer <token-de-sesión>"
+    --header "Authorization: Bearer <session-token>"
   ```
-- **Cualquier otro** (`--client print`): imprime el snippet de configuración para pegarlo.
-- El **token va en la cabecera `Authorization`** (no en la URL). El servidor lo valida y
-  sabe **qué agente** es cada conexión (evita suplantación local).
-- Al terminar la sesión (`lanchu retire`, o cerrar), la entrada *scoped* se puede quitar.
+- **Anything else** (`--client print`): prints the config snippet for you to paste.
+- The **token goes in the `Authorization` header** (not in the URL). The server validates it and
+  knows **which agent** each connection is (prevents local impersonation).
+- When the session ends (`lanchu retire`, or closing), the *scoped* entry can be removed.
 
-**Cómo sabe el agente qué hacer al conectarse:** el servidor MCP expone unas
-*instructions* de nivel servidor —"eres un agente de Lanchu: empieza leyendo
-`lanchu://me` (tu objetivo, rol, tareas y reglas); trabaja solo dentro de tu alcance;
-coordínate creando/reclamando tareas"— que el cliente le pasa al modelo. El objetivo y
-las tareas viven en `lanchu://me`, no en el prompt.
+**How the agent knows what to do on connecting:** the MCP server exposes server-level
+*instructions* —"you are a Lanchu agent: start by reading
+`lanchu://me` (your objective, role, tasks, and rules); work only within your scope;
+coordinate by creating/claiming tasks"— which the client passes to the model. The objective and
+tasks live in `lanchu://me`, not in the prompt.
 
 ---
 
-## 6. Comandos de gestión
+## 6. Management commands
 
-| Comando | Qué hace |
+| Command | What it does |
 |---------|----------|
-| `lanchu init` | Inicializa org/proyecto para este directorio (escribe `.lanchu/config.json`). |
-| `lanchu agents` (alias `ls`) | Lista agentes: estado, rol, nº de tareas, última actividad. |
-| `lanchu tasks` | Lista tareas: estado, dueño, etiquetas, workspace. Marca ⚠ las **stale** (dueño idle sin cambios ≥ umbral). |
-| `lanchu task release <id>` | **Override del supervisor**: suelta una tarea al pool aunque tenga dueño. Auditado. Escape para *stale* sin retirar al agente. |
-| `lanchu task reassign <id> <agente>` | **Override del supervisor**: reasigna una tarea a otro agente. Auditado. |
-| `lanchu retire <agente>` | **Retiro seguro**: si tiene tareas abiertas, exige por cada una reasignar o soltar; luego archiva. |
-| `lanchu roles` | Lista roles y sus etiquetas. |
-| `lanchu roles add <nombre> --tags ui,css` \| `--wildcard` | Crea un rol. |
-| `lanchu stats` | Vista **local** para ti (agentes, tareas, orgs). No sale de tu máquina. |
-| `lanchu panel` (alias `open`) | Abre el panel web en el navegador. |
-| `lanchu serve` | Corre el servidor en primer plano (normalmente se auto-arranca). |
-| `lanchu stop` | Detiene el servidor en background. |
-| `lanchu doctor` | Chequea entorno: versión de Node, puerto libre, config, DB. |
+| `lanchu init` | Initializes org/project for this directory (writes `.lanchu/config.json`). |
+| `lanchu agents` (alias `ls`) | Lists agents: status, role, task count, last activity. |
+| `lanchu tasks` | Lists tasks: status, owner, tags, workspace. Flags ⚠ the **stale** ones (idle owner with no changes ≥ threshold). |
+| `lanchu task release <id>` | **Supervisor override**: releases a task back to the pool even if it has an owner. Audited. Escape hatch for *stale* tasks without retiring the agent. |
+| `lanchu task reassign <id> <agent>` | **Supervisor override**: reassigns a task to another agent. Audited. |
+| `lanchu retire <agent>` | **Safe retirement**: if it has open tasks, requires reassigning or releasing each one; then archives. |
+| `lanchu roles` | Lists roles and their tags. |
+| `lanchu roles add <name> --tags ui,css` \| `--wildcard` | Creates a role. |
+| `lanchu stats` | **Local** view for you (agents, tasks, orgs). Never leaves your machine. |
+| `lanchu panel` (alias `open`) | Opens the web panel in the browser. |
+| `lanchu serve` | Runs the server in the foreground (normally it auto-starts). |
+| `lanchu stop` | Stops the background server. |
+| `lanchu doctor` | Checks the environment: Node version, free port, config, DB. |
 
 ---
 
-## 7. El servidor local
+## 7. The local server
 
-- **Auto-arranque:** el comando principal levanta el servidor en background si no está.
-  `lanchu serve` lo corre en primer plano; `lanchu stop` lo detiene.
-- **Puerto:** `4319` por defecto (configurable con `LANCHU_PORT` o en el config).
-- **Endpoints:** panel en `http://127.0.0.1:4319/` · MCP en `http://127.0.0.1:4319/mcp`.
-- **Estado en disco:** vía `env-paths('lanchu')` (OS-agnóstico):
+- **Auto-start:** the main command starts the server in the background if it isn't running.
+  `lanchu serve` runs it in the foreground; `lanchu stop` stops it.
+- **Port:** `4319` by default (configurable with `LANCHU_PORT` or in the config).
+- **Endpoints:** panel at `http://127.0.0.1:4319/` · MCP at `http://127.0.0.1:4319/mcp`.
+- **State on disk:** via `env-paths('lanchu')` (OS-agnostic):
   - macOS: `~/Library/Application Support/lanchu/`
   - Linux: `~/.local/share/lanchu/`
   - Windows: `%APPDATA%\lanchu\`
   - DB: `<stateDir>/lanchu.db` (SQLite/WAL).
-- **Seguridad (v0):** solo `127.0.0.1`. El **MCP exige token** (por sesión) → ningún
-  proceso local suplanta a un agente. El **panel es de lectura, sin auth** (local,
-  monousuario). Nada escucha fuera de localhost; nada sale de la máquina.
-- **`LANCHU_STALE_HOURS`** (por defecto `24`): a partir de cuántas horas una tarea de un
-  agente idle se marca **stale**.
+- **Security (v0):** `127.0.0.1` only. The **MCP requires a token** (per session) → no
+  local process can impersonate an agent. The **panel is read-only, no auth** (local,
+  single-user). Nothing listens outside localhost; nothing leaves the machine.
+- **`LANCHU_STALE_HOURS`** (default `24`): after how many hours a task belonging to an
+  idle agent is marked **stale**.
 
 ---
 
-## 8. Tareas *stale* y documentación (C4, C5)
+## 8. *Stale* tasks and documentation (C4, C5)
 
-- **Stale (C4):** dos señales derivadas — *reservada* (dueño idle, cualquier antigüedad)
-  y *stale* (dueño idle **y** sin cambios ≥ `LANCHU_STALE_HOURS`). Se ven en
-  `lanchu tasks` y en el panel. **No hay auto-liberación**; el supervisor decide con
-  `lanchu task release/reassign` (override, auditado).
-- **Docs (C5):** *nudge + observabilidad*, sin obligar. Al cerrar una tarea (`task.update`
-  → `done`), el resultado **recuerda actualizar el doc relevante**; y el panel muestra si
-  un objetivo cerró tareas **sin tocar documentación** (⚠), para que el supervisor lo
-  vea. La promesa honesta es *documentación viva y trazable*, no garantizada.
+- **Stale (C4):** two derived signals — *reserved* (idle owner, any age)
+  and *stale* (idle owner **and** no changes ≥ `LANCHU_STALE_HOURS`). Both show up in
+  `lanchu tasks` and in the panel. **There is no auto-release**; the supervisor decides with
+  `lanchu task release/reassign` (override, audited).
+- **Docs (C5):** *nudge + observability*, without forcing anything. When you close a task (`task.update`
+  → `done`), the result **reminds you to update the relevant doc**; and the panel shows whether
+  an objective closed tasks **without touching documentation** (⚠), so the supervisor can
+  see it. The honest promise is *living, traceable documentation*, not guaranteed.
 
 ---
 
-## 9. Detalle menor pendiente
+## 9. Minor pending detail
 
-- Retirar/limpiar automáticamente la entrada MCP *scoped* al terminar la sesión.
+- Automatically retire/clean up the *scoped* MCP entry when the session ends.

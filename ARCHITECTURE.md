@@ -1,167 +1,167 @@
-# Lanchu — Arquitectura
+# Lanchu — Architecture
 
-> Diseño concreto: **superficies**, **ciclo de vida**, **identidad**, **tools MCP**,
-> **recursos**, **roles/gobernanza**, **eventos**. Complementa
-> [`DEFINITION.md`](./DEFINITION.md) (el porqué) y
-> [`OPEN-QUESTIONS.md`](./OPEN-QUESTIONS.md) (lo aún abierto). Responde: *¿cómo funciona,
-> exactamente?*
+> Concrete design: **surfaces**, **lifecycle**, **identity**, **MCP tools**,
+> **resources**, **roles/governance**, **events**. Complements
+> [`DEFINITION.md`](./DEFINITION.md) (the why) and
+> [`OPEN-QUESTIONS.md`](./OPEN-QUESTIONS.md) (what's still open). It answers: *how does it
+> work, exactly?*
 
 ---
 
-## 1. Las tres superficies
+## 1. The three surfaces
 
-| Superficie | Qué es | Responsabilidad |
+| Surface | What it is | Responsibility |
 |-----------|--------|-----------------|
-| **CLI / launcher** (`npx lanchu`) | Lo que corres en la terminal. | Onboarding: empareja el objetivo, hace la pregunta **reutilizar-o-crear** al humano, elige rol, emite el **token de identidad** y mantiene la conexión viva (= presencia). |
-| **Servidor MCP** | El servicio compartido al que el agente se conecta (`localhost` HTTP/SSE). | Tools, estado (SQLite), roles/gobernanza, event bus, audit. |
-| **Panel web** | Dashboard del supervisor (local, sin auth). | Ver agentes/actividad/audit en tiempo real; retirar agentes con handoff. |
+| **CLI / launcher** (`npx lanchu`) | What you run in the terminal. | Onboarding: matches the objective, asks the human the **reuse-or-create** question, picks a role, issues the **identity token**, and keeps the connection alive (= presence). |
+| **MCP server** | The shared service the agent connects to (`localhost` HTTP/SSE). | Tools, state (SQLite), roles/governance, event bus, audit. |
+| **Web panel** | Supervisor dashboard (local, no auth). | View agents/activity/audit in real time; retire agents with handoff. |
 
-> **Clave:** la pregunta *"¿reutilizar?"* ocurre en la **CLI** (interacción con el
-> humano), **no** es una tool MCP. El launcher consulta candidatos y conecta la sesión a
-> la identidad durable elegida.
-
----
-
-## 2. Identidad, sesión y actividad (decisión A4)
-
-- Al arrancar, el launcher **emite un token de sesión** ligado a un `agent_id`. Toda
-  llamada MCP viaja con ese token → el servidor sabe **qué agente** es cada conexión (y
-  nadie lo suplanta localmente).
-- **Presencia (activo/idle):** mientras el launcher está vivo y conectado (SSE abierto),
-  el agente está **ACTIVO**. Cuando el launcher termina (cierras la ventana) → **IDLE**.
-- **Actividad ("qué hace ahora"):** se **deriva de las tool-calls recientes** (última
-  tarea reclamada/actualizada, último doc tocado). **No** depende de que el agente llame
-  a un heartbeat. Opcionalmente el agente puede anotar con `session.note`, pero la
-  presencia y la actividad no dependen de ello.
+> **Key:** the *"reuse?"* question happens in the **CLI** (interaction with the
+> human), it is **not** an MCP tool. The launcher queries candidates and connects the
+> session to the chosen durable identity.
 
 ---
 
-## 3. Ciclo de vida y agentes durables
+## 2. Identity, session, and activity (decision A4)
 
-### Sesión ≠ Agente
-- **Agente** = identidad durable (rol, alcance, tareas, *huella*, historial).
-- **Sesión** = una conexión viva atada a un agente vía token. Efímera.
+- On startup, the launcher **issues a session token** bound to an `agent_id`. Every MCP
+  call travels with that token → the server knows **which agent** each connection is (and
+  nobody can impersonate it locally).
+- **Presence (active/idle):** while the launcher is alive and connected (SSE open),
+  the agent is **ACTIVE**. When the launcher ends (you close the window) → **IDLE**.
+- **Activity ("what it's doing now"):** it is **derived from recent tool-calls** (the last
+  task claimed/updated, the last doc touched). It does **not** depend on the agent calling
+  a heartbeat. Optionally the agent can annotate with `session.note`, but presence and
+  activity don't depend on it.
 
-### Estados
+---
+
+## 3. Lifecycle and durable agents
+
+### Session ≠ Agent
+- **Agent** = durable identity (role, scope, tasks, *footprint*, history).
+- **Session** = a live connection tied to an agent via a token. Ephemeral.
+
+### States
 ```
-   crear / reutilizar
+   create / reuse
         │
         ▼
-   ACTIVO ──(launcher termina)──▶ IDLE ──(reabres/reutilizas)──▶ ACTIVO
+   ACTIVE ──(launcher ends)──▶ IDLE ──(reopen/reuse)──▶ ACTIVE
         │                           │
-        └──────── retirar ──────────┘
+        └──────── retire ───────────┘
                      │
-        ¿tareas abiertas? ── SÍ ─▶ handoff obligatorio (reasignar/soltar) por tarea
-                          └─ NO ─▶ RETIRADO (archivado; permanece en audit)
+        open tasks? ── YES ─▶ mandatory handoff (reassign/release) per task
+                     └─ NO ─▶ RETIRED (archived; remains in audit)
 ```
-Eventos: `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
+Events: `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
 `agent.retired`.
 
-### Del objetivo a las tareas (decisión A1)
-El launcher registra el objetivo y **el agente lo descompone en tareas** con `task.create`
-(Lanchu no descompone por él). A partir de ahí hay tareas concretas sobre las que
-coordinar y aplicar límites.
+### From the objective to the tasks (decision A1)
+The launcher registers the objective and **the agent breaks it down into tasks** with `task.create`
+(Lanchu doesn't break it down for it). From there on there are concrete tasks to
+coordinate around and apply limits to.
 
-### La huella (reutilizar por objetivo)
-Cada agente acumula una **huella**: tareas hechas, etiquetas/áreas tocadas, contexto.
-Al arrancar con un objetivo, Lanchu compara contra las huellas de los agentes `idle` y
-devuelve **candidatos** ordenados por solape. *(Mecanismo de emparejamiento del v0: solape
-de etiquetas/keywords; ver [`OPEN-QUESTIONS.md`](./OPEN-QUESTIONS.md).)*
+### The footprint (reuse by objective)
+Each agent accumulates a **footprint**: tasks done, tags/areas touched, context.
+On startup with an objective, Lanchu compares against the footprints of the `idle` agents and
+returns **candidates** ranked by overlap. *(v0 matching mechanism: tag/keyword
+overlap; see [`OPEN-QUESTIONS.md`](./OPEN-QUESTIONS.md).)*
 
-### Retiro seguro
-Retirar con tareas abiertas **está bloqueado** hasta resolver cada una: `task.reassign` a
-otro agente o `task.release` al pool. Al final, `agent.retired`. Nada huérfano.
-
----
-
-## 4. Roles y gobernanza (decisiones A2, A3)
-
-### Modelo de roles
-- **Rol** = `{ nombre, allowed_tags: [...] }`, definido por la org (custom). Un rol `*`
-  puede tocar todo (coordinador).
-- **Tarea** lleva `tags: [...]`.
-- **Regla de alcance:** un agente con rol *R* puede **reclamar o crear** una tarea *T*
-  si `T.tags ⊆ R.allowed_tags`. Si no, la acción se **rechaza** (error) + evento
-  `scope.violation`.
-
-### Qué puede y qué no puede hacer Lanchu (honestidad)
-Cada tool que **muta** estado pasa por dos pasos:
-1. **Chequeo de alcance** contra el rol y las reglas de la org → si viola, **error**.
-2. **Registro en audit** de la acción (aplicada *o* rechazada), con actor, sujeto,
-   workspace y coste/tokens **si el agente los reporta** (autoreportado; Lanchu no mide).
-
-**Alcance real del enforcement:** el bloqueo es duro **solo sobre acciones mediadas por
-Lanchu** (reclamar/crear tareas, escribir docs). Lanchu **no es un sandbox del SO**: no
-puede impedir que un agente edite archivos o corra comandos por su cuenta. El carril es
-**cooperativo + auditable**; la confianza viene de que **todo queda visible y registrado**.
-Enforcement a nivel de SO es **no-goal**.
+### Safe retirement
+Retiring with open tasks **is blocked** until each one is resolved: `task.reassign` to
+another agent or `task.release` back to the pool. At the end, `agent.retired`. Nothing orphaned.
 
 ---
 
-## 5. Recursos MCP (suscribibles, solo lectura)
+## 4. Roles and governance (decisions A2, A3)
 
-| URI | Contenido | Se actualiza cuando… |
+### Role model
+- **Role** = `{ name, allowed_tags: [...] }`, defined by the org (custom). A `*` role
+  can touch everything (coordinator).
+- **Task** carries `tags: [...]`.
+- **Scope rule:** an agent with role *R* can **claim or create** a task *T*
+  if `T.tags ⊆ R.allowed_tags`. Otherwise, the action is **rejected** (error) + a
+  `scope.violation` event.
+
+### What Lanchu can and can't do (honesty)
+Every tool that **mutates** state goes through two steps:
+1. **Scope check** against the role and the org's rules → if it violates them, **error**.
+2. **Audit logging** of the action (applied *or* rejected), with actor, subject,
+   workspace, and cost/tokens **if the agent reports them** (self-reported; Lanchu doesn't measure).
+
+**Real enforcement scope:** the block is hard **only on actions mediated by
+Lanchu** (claiming/creating tasks, writing docs). Lanchu **is not an OS sandbox**: it
+can't prevent an agent from editing files or running commands on its own. The lane is
+**cooperative + auditable**; the trust comes from the fact that **everything stays visible and logged**.
+OS-level enforcement is a **non-goal**.
+
+---
+
+## 5. MCP resources (subscribable, read-only)
+
+| URI | Content | Updates when… |
 |-----|-----------|----------------------|
-| `lanchu://board` | Agentes (estado), actividad, tareas; incluye señales de tareas **stale** (C4) y de objetivos que cerraron tareas **sin tocar docs** (C5). | cualquier `agent.*` / `task.*`. |
-| `lanchu://agents` | Agentes durables de la org y su estado. | cambia el ciclo de vida. |
-| `lanchu://tasks/mine` | Tareas del agente. | cambia una tarea suya. |
-| `lanchu://tasks/available` | Tareas cuyo `tags ⊆ allowed_tags` del rol. | se crea/libera/reclama una tarea. |
-| `lanchu://task/{id}` | Detalle + dependencias + dueño. | esa tarea cambia. |
-| `lanchu://org/roles` | Roles de la org y sus `allowed_tags`. | el supervisor los edita. |
-| `lanchu://docs/{id}` | Un documento compartido. | ese doc se actualiza. |
-| `lanchu://me` | Identidad, rol, alcance y huella del agente. | cambian. |
-| `lanchu://audit` | Registro inmutable de actividad. | ocurre cualquier evento. |
+| `lanchu://board` | Agents (state), activity, tasks; includes signals for **stale** tasks (C4) and for objectives that closed tasks **without touching docs** (C5). | any `agent.*` / `task.*`. |
+| `lanchu://agents` | The org's durable agents and their state. | the lifecycle changes. |
+| `lanchu://tasks/mine` | The agent's tasks. | one of its tasks changes. |
+| `lanchu://tasks/available` | Tasks whose `tags ⊆ allowed_tags` of the role. | a task is created/released/claimed. |
+| `lanchu://task/{id}` | Detail + dependencies + owner. | that task changes. |
+| `lanchu://org/roles` | The org's roles and their `allowed_tags`. | the supervisor edits them. |
+| `lanchu://docs/{id}` | A shared document. | that doc is updated. |
+| `lanchu://me` | The agent's identity, role, scope, and footprint. | they change. |
+| `lanchu://audit` | Immutable activity log. | any event occurs. |
 
-Notificaciones = MCP nativas (`resources/updated`) con polling (`board.snapshot`) de
-respaldo.
+Notifications = native MCP (`resources/updated`) with polling (`board.snapshot`) as
+backup.
 
 ---
 
-## 6. Tools de los agentes (MCP)
+## 6. Agent tools (MCP)
 
 ### `session.*`
-| Tool | Entradas | Notas |
+| Tool | Inputs | Notes |
 |------|----------|-------|
-| `session.whoami` | — | Identidad + rol + `allowed_tags` + huella. |
-| `session.note` | `text` | Anota actividad (opcional). La presencia **no** depende de esto. |
-| `session.leave` | — | La sesión termina; el agente pasa a **IDLE**. Emite `agent.idle`. |
+| `session.whoami` | — | Identity + role + `allowed_tags` + footprint. |
+| `session.note` | `text` | Annotates activity (optional). Presence does **not** depend on this. |
+| `session.leave` | — | The session ends; the agent goes to **IDLE**. Emits `agent.idle`. |
 
-> No hay `session.register`/`heartbeat`: la identidad la emite el **launcher** (§2) y la
-> presencia se deriva de la conexión viva.
+> There is no `session.register`/`heartbeat`: identity is issued by the **launcher** (§2) and
+> presence is derived from the live connection.
 
-### `task.*` — coordinación + límites
-| Tool | Entradas | Notas |
+### `task.*` — coordination + limits
+| Tool | Inputs | Notes |
 |------|----------|-------|
-| `task.list` | `filter` | Vista *pull*. |
-| `task.get` | `id` | Detalle + dueño. |
-| `task.create` | `title`, `tags`, `deps?` | El agente estructura su plan. Rechazada si `tags ⊄ allowed_tags`. Emite `task.created`. |
+| `task.list` | `filter` | *Pull* view. |
+| `task.get` | `id` | Detail + owner. |
+| `task.create` | `title`, `tags`, `deps?` | The agent structures its plan. Rejected if `tags ⊄ allowed_tags`. Emits `task.created`. |
 | `task.check_scope` | `id` | `yours` / `someone_else` / `out_of_role`. |
-| `task.claim` | `id`, `workspace?` | **Lock atómico** + chequeo de rol. Falla si tomada o fuera de rol. Emite `task.claimed`. |
-| `task.update` | `id`, `status`, `note?` | `done` desbloquea dependientes y **la respuesta incluye un *nudge*** para actualizar el doc relevante (C5). Emite `task.started/blocked/completed`. |
-| `task.release` | `id` | Vuelve al pool. Emite `task.released`. |
-| `task.reassign` | `id`, `to_agent` | Handoff (usado en retiro seguro). Emite `task.reassigned`. |
-| `task.handoff` | `id`, `note` | Handoff explícito con nota, enrutado por Lanchu (logueado). Emite `task.handoff`. |
+| `task.claim` | `id`, `workspace?` | **Atomic lock** + role check. Fails if taken or out of role. Emits `task.claimed`. |
+| `task.update` | `id`, `status`, `note?` | `done` unblocks dependents and **the response includes a *nudge*** to update the relevant doc (C5). Emits `task.started/blocked/completed`. |
+| `task.release` | `id` | Returns to the pool. Emits `task.released`. |
+| `task.reassign` | `id`, `to_agent` | Handoff (used in safe retirement). Emits `task.reassigned`. |
+| `task.handoff` | `id`, `note` | Explicit handoff with a note, routed by Lanchu (logged). Emits `task.handoff`. |
 
-> `workspace` es genérico (una rama de git es un caso; también puede ser una carpeta, un
-> tablero externo, etc.). No atamos Lanchu a git.
+> `workspace` is generic (a git branch is one case; it can also be a folder, an
+> external board, etc.). We don't tie Lanchu to git.
 
-### `doc.*` — documentación viva (mínima en v0)
-| Tool | Entradas | Notas |
+### `doc.*` — living documentation (minimal in v0)
+| Tool | Inputs | Notes |
 |------|----------|-------|
 | `doc.list` / `doc.search` | `query?` | — |
-| `doc.read` | `id` | Las tools empujan a leer antes de actuar. |
-| `doc.update` / `doc.create` | `id?`, `content` | Controlado por rol. Emite `doc.updated`. |
+| `doc.read` | `id` | The tools push you to read before acting. |
+| `doc.update` / `doc.create` | `id?`, `content` | Controlled by role. Emits `doc.updated`. |
 
 ### `org.*` / `board.*`
-| Tool | Notas |
+| Tool | Notes |
 |------|-------|
-| `org.roles` | Roles de la org y sus `allowed_tags`. |
-| `org.context` | Contexto mínimo por rol/tarea (optimiza tokens). |
-| `board.snapshot` | Respaldo *pull* para clientes sin suscripciones. |
+| `org.roles` | The org's roles and their `allowed_tags`. |
+| `org.context` | Minimal context per role/task (optimizes tokens). |
+| `board.snapshot` | *Pull* backup for clients without subscriptions. |
 
 ---
 
-## 7. Eventos
+## 7. Events
 
 ```
 agent.created   agent.reused   agent.active   agent.idle   agent.retired
@@ -171,34 +171,34 @@ doc.created     doc.updated
 scope.violation
 ```
 
-**Forma de un evento:**
+**Shape of an event:**
 ```json
 {
   "type": "task.completed",
   "org": "acme", "project": "landing",
   "actor": { "agent": "arregla-login", "role": "frontend" },
   "subject": { "kind": "task", "id": "task-42" },
-  "data": { "workspace": "feat/login", "note": "Login listo", "tokens": 18240 },
+  "data": { "workspace": "feat/login", "note": "Login done", "tokens": 18240 },
   "timestamp": "2026-07-09T14:30:00Z"
 }
 ```
-`tokens` es opcional/autoreportado. Los eventos alimentan panel, notificaciones MCP y
+`tokens` is optional/self-reported. Events feed the panel, MCP notifications, and the
 audit log.
 
 ---
 
-## 8. Fuera del v0 (roadmap)
+## 8. Out of scope for v0 (roadmap)
 
-- **Webhooks** (salientes con firma HMAC; entrantes para tareas/funciones recurrentes).
-- **Backend remoto**, **funciones recurrentes**, **skills**, **límites avanzados** (§10
-  de la definición). Documentados para no cerrar la puerta; **no** entran en el v0.
+- **Webhooks** (outgoing with HMAC signature; incoming for recurring tasks/functions).
+- **Remote backend**, **recurring functions**, **skills**, **advanced limits** (§10
+  of the definition). Documented so as not to close the door; they do **not** go into v0.
 
 ---
 
-## 9. Cómo se resuelve cada pilar (mapa a la definición)
+## 9. How each pillar is resolved (map to the definition)
 
-| Pilar (DEFINITION.md §3) | Mecanismo aquí |
+| Pillar (DEFINITION.md §3) | Mechanism here |
 |--------------------------|----------------|
-| **1. Onboarding sin fricción** | CLI/launcher (§1) + identidad por token (§2). |
-| **2. Agentes durables** | Ciclo de vida + huella (§3); reutilizar-o-crear; retiro seguro con `task.reassign`/`task.release`. |
-| **3. Carril + visibilidad** | Roles con etiquetas + chequeo de alcance (§4); `task.claim` (lock); `lanchu://audit` + panel; `doc.*` mínimo. |
+| **1. Frictionless onboarding** | CLI/launcher (§1) + token-based identity (§2). |
+| **2. Durable agents** | Lifecycle + footprint (§3); reuse-or-create; safe retirement with `task.reassign`/`task.release`. |
+| **3. Lane + visibility** | Roles with tags + scope check (§4); `task.claim` (lock); `lanchu://audit` + panel; minimal `doc.*`. |
