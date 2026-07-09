@@ -1,8 +1,9 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 /** Single source of truth for the version (keep in sync with package.json). */
-export const VERSION = "0.3.2";
+export const VERSION = "0.3.3";
 
 /**
  * Local server paths and configuration, OS-agnostic.
@@ -51,6 +52,25 @@ export function activeWindowMs(): number {
   const s = process.env.LANCHU_ACTIVE_SECONDS;
   const n = s ? Number.parseInt(s, 10) : 45;
   return (Number.isFinite(n) && n > 0 ? n : 45) * 1000;
+}
+
+// ── local settings (opt-in preferences; never leaves the machine) ──
+export interface Settings {
+  notifyUpdates?: boolean;
+}
+function settingsPath(): string {
+  return path.join(stateDir(), "settings.json");
+}
+export function readSettings(): Settings {
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as Settings;
+  } catch {
+    return {};
+  }
+}
+export function writeSettings(s: Settings): void {
+  fs.mkdirSync(stateDir(), { recursive: true });
+  fs.writeFileSync(settingsPath(), JSON.stringify(s, null, 2) + "\n");
 }
 
 export function baseUrl(): string {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { baseUrl, dbPath, DEFAULT_PORT, mcpUrl, port, stateDir, VERSION } from "../config.js";
+import { baseUrl, dbPath, DEFAULT_PORT, mcpUrl, port, readSettings, stateDir, VERSION, writeSettings } from "../config.js";
 import { startServer } from "../server/server.js";
 
 const args = process.argv.slice(2);
@@ -85,6 +85,7 @@ async function cmdServe(): Promise<void> {
   console.log(`  panel: ${baseUrl()}`);
   console.log(`  mcp:   ${mcpUrl()}`);
   console.log(`  db:    ${dbPath()}`);
+  await maybeNotify();
 }
 
 /** Explicit, user-initiated check against the public npm registry (no user data sent). */
@@ -117,6 +118,26 @@ async function cmdUpgrade(): Promise<void> {
   if (latest === VERSION) return console.log(`You're on the latest version (${VERSION}).`);
   console.log(`A new version is available: ${latest} (you have ${VERSION}).`);
   console.log("Update:  npm i -g lanchu@latest   ·   or just run  npx lanchu@latest");
+}
+
+function cmdNotify(): void {
+  const sub = positional()[1];
+  const s = readSettings();
+  if (sub === "on" || sub === "off") {
+    s.notifyUpdates = sub === "on";
+    writeSettings(s);
+    console.log(`Update notifications: ${sub}`);
+  } else {
+    console.log(`Update notifications: ${s.notifyUpdates ? "on" : "off (default)"}`);
+    console.log("Toggle with: lanchu notify on | off  (opt-in; only checks the public npm registry)");
+  }
+}
+
+/** Opt-in, best-effort update check (off by default). Only reads the public registry. */
+async function maybeNotify(): Promise<void> {
+  if (!readSettings().notifyUpdates) return;
+  const latest = await latestVersion();
+  if (latest && latest !== VERSION) console.log(`(update available: ${latest} — run 'lanchu upgrade')`);
 }
 
 async function cmdBoard(kind: "agents" | "tasks"): Promise<void> {
@@ -341,6 +362,7 @@ async function cmdWork(prefillObjective: string): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log("Lanchu — let's get you set up.");
+    await maybeNotify();
 
     // 1) org / project
     let found = findConfig();
@@ -470,6 +492,7 @@ Usage:
   lanchu webhooks [add <url> --events a,b | rm <id>]   outbound webhooks (HMAC-signed)
   lanchu panel                      open the panel in your browser
   lanchu upgrade                    check npm for a newer version
+  lanchu notify on|off              opt-in update notifications (off by default)
   lanchu help | version
 
 Onboard flags:
@@ -498,6 +521,8 @@ async function main(): Promise<void> {
       return void console.log(VERSION);
     case "upgrade":
       return cmdUpgrade();
+    case "notify":
+      return cmdNotify();
     case "serve":
       return cmdServe();
     case "doctor":
