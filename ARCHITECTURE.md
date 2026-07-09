@@ -196,9 +196,16 @@ audit log.
 - **Inbound** — `POST /hooks/intake` creates an unassigned task from a trusted external
   source (optional `x-lanchu-intake-token` when `LANCHU_INTAKE_SECRET` is set).
 
+## 8b. Recurring functions (shipped)
+
+A local scheduler (steady tick) fires **recurring** schedules: each creates an unassigned
+task in its project every N minutes, then reschedules. Manage via `lanchu recurring` or
+`POST /api/recurring`. Connected agents pick the tasks up like any other — Lanchu
+schedules the work, it doesn't run the agents.
+
 ### Still roadmap
-- **Remote backend**, **recurring functions**, **skills**, **advanced limits** (§10 of the
-  definition). Documented so as not to close the door; they do **not** go into v0.
+- **Remote backend**, **skills**, **advanced limits / token budgets** (need a local LLM
+  proxy to measure cost). Documented so as not to close the door.
 
 ---
 

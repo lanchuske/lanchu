@@ -264,6 +264,32 @@ async function cmdWebhooks(): Promise<void> {
   }
 }
 
+async function cmdRecurring(): Promise<void> {
+  const found = findConfig();
+  if (!found) return console.log("no .lanchu/config.json here — run `lanchu init` first");
+  await ensureServer();
+  const { org, project } = found.config;
+  const sub = positional()[1];
+  if (sub === "add") {
+    const title = positional()[2];
+    const every = Number(flag("every"));
+    if (!title || !every) {
+      return console.log('usage: lanchu recurring add "<title>" --every <minutes> [--tags a,b] [--project p]');
+    }
+    const t = flag("tags");
+    const tags = t ? t.split(",").map((x) => x.trim()).filter(Boolean) : [];
+    console.log(JSON.stringify(await post("/api/recurring", { org, project: flag("project") ?? project, title, everyMinutes: every, tags })));
+  } else if (sub === "rm" || sub === "remove") {
+    const id = positional()[2];
+    if (!id) return console.log("usage: lanchu recurring rm <id>");
+    await post("/api/recurring/delete", { id });
+    console.log("removed", id);
+  } else {
+    const res = await fetch(`${baseUrl()}/api/recurring?org=${encodeURIComponent(org)}`);
+    console.log(JSON.stringify(await res.json(), null, 2));
+  }
+}
+
 async function cmdStats(): Promise<void> {
   const org = await orgOf();
   const res = await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`);
@@ -490,6 +516,7 @@ Usage:
   lanchu task release <id>          supervisor override: release a task
   lanchu task reassign <id> <agent> supervisor override: reassign a task
   lanchu webhooks [add <url> --events a,b | rm <id>]   outbound webhooks (HMAC-signed)
+  lanchu recurring [add "<title>" --every <min> | rm <id>]   scheduled task creation
   lanchu panel                      open the panel in your browser
   lanchu upgrade                    check npm for a newer version
   lanchu notify on|off              opt-in update notifications (off by default)
@@ -538,6 +565,8 @@ async function main(): Promise<void> {
       return positional()[1] === "add" ? cmdRolesAdd() : cmdRoles();
     case "webhooks":
       return cmdWebhooks();
+    case "recurring":
+      return cmdRecurring();
     case "stats":
       return cmdStats();
     case "stop":

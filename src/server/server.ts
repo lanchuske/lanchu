@@ -291,6 +291,35 @@ export function createServer(): http.Server {
         return sendJson(res, 200, { ok: true });
       }
 
+      // ── recurring functions ──
+      if (url.pathname === "/api/recurring" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        return sendJson(res, 200, store.listRecurring(org.id));
+      }
+      if (url.pathname === "/api/recurring" && req.method === "POST") {
+        const b = (await readJson(req)) as { org: string; project: string; title: string; tags?: string[]; everyMinutes?: number };
+        if (!b?.org || !b?.project || !b?.title || !b?.everyMinutes) {
+          return sendJson(res, 400, { error: "org, project, title and everyMinutes required" });
+        }
+        const org = store.getOrCreateOrg(b.org);
+        const project = store.getOrCreateProject(org.id, b.project);
+        const r = store.createRecurring({
+          orgId: org.id,
+          projectId: project.id,
+          title: b.title,
+          tags: b.tags,
+          intervalSeconds: Math.max(60, Math.round(b.everyMinutes * 60)),
+        });
+        return sendJson(res, 200, r);
+      }
+      if (url.pathname === "/api/recurring/delete" && req.method === "POST") {
+        const b = (await readJson(req)) as { id: string };
+        store.deleteRecurring(b.id);
+        return sendJson(res, 200, { ok: true });
+      }
+
       // ── inbound intake: create a task from an external source ──
       if (url.pathname === "/hooks/intake" && req.method === "POST") {
         const secret = process.env.LANCHU_INTAKE_SECRET;
@@ -328,6 +357,16 @@ export function createServer(): http.Server {
 
 export function startServer(): Promise<http.Server> {
   startWebhookDelivery();
+  // Recurring-function scheduler: fire due recurrings on a steady tick.
+  const tick = () => {
+    try {
+      store.runDueRecurring();
+    } catch {
+      /* keep the server alive */
+    }
+  };
+  tick();
+  setInterval(tick, 30_000).unref();
   const server = createServer();
   return new Promise((resolve) => {
     server.listen(port(), HOST, () => resolve(server));

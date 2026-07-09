@@ -125,6 +125,19 @@ CREATE TABLE IF NOT EXISTS webhook (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS recurring (
+  id               TEXT PRIMARY KEY,
+  org_id           TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
+  project_id       TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  tags             TEXT,
+  interval_seconds INTEGER NOT NULL,
+  enabled          INTEGER NOT NULL DEFAULT 1,
+  next_run_at      TEXT NOT NULL,
+  last_run_at      TEXT,
+  created_at       TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);

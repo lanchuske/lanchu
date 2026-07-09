@@ -824,6 +824,77 @@ export function webhooksForEvent(orgId: string, type: string): Webhook[] {
   return listWebhooks(orgId).filter((w) => w.events.includes("*") || w.events.includes(type));
 }
 
+// ───────────────────────── recurring functions ─────────────────────────
+
+export interface Recurring {
+  id: string;
+  org_id: string;
+  project_id: string;
+  title: string;
+  tags: string[];
+  interval_seconds: number;
+  enabled: boolean;
+  next_run_at: string;
+  last_run_at: string | null;
+  created_at: string;
+}
+
+function loadRecurring(row: Record<string, unknown>): Recurring {
+  return {
+    id: row.id as string,
+    org_id: row.org_id as string,
+    project_id: row.project_id as string,
+    title: row.title as string,
+    tags: row.tags ? String(row.tags).split(",").filter(Boolean) : [],
+    interval_seconds: Number(row.interval_seconds),
+    enabled: Number(row.enabled) === 1,
+    next_run_at: row.next_run_at as string,
+    last_run_at: (row.last_run_at as string) ?? null,
+    created_at: row.created_at as string,
+  };
+}
+
+export function createRecurring(input: {
+  orgId: string;
+  projectId: string;
+  title: string;
+  tags?: string[];
+  intervalSeconds: number;
+}): Recurring {
+  const id = uuid();
+  const now = nowIso();
+  db()
+    .prepare(
+      `INSERT INTO recurring(id, org_id, project_id, title, tags, interval_seconds, enabled, next_run_at, created_at)
+       VALUES (?,?,?,?,?,?,1,?,?)`,
+    )
+    .run(id, input.orgId, input.projectId, input.title, (input.tags ?? []).join(","), input.intervalSeconds, now, now); // fires on the next tick, then every interval
+  return loadRecurring(db().prepare("SELECT * FROM recurring WHERE id = ?").get(id) as Record<string, unknown>);
+}
+
+export function listRecurring(orgId: string): Recurring[] {
+  return (db().prepare("SELECT * FROM recurring WHERE org_id = ? ORDER BY created_at").all(orgId) as Record<string, unknown>[]).map(loadRecurring);
+}
+
+export function deleteRecurring(id: string): void {
+  db().prepare("DELETE FROM recurring WHERE id = ?").run(id);
+}
+
+/** Fire every due, enabled recurring: create its task and reschedule. Returns how many fired. */
+export function runDueRecurring(): number {
+  const now = nowIso();
+  const due = db()
+    .prepare("SELECT * FROM recurring WHERE enabled = 1 AND next_run_at <= ?")
+    .all(now) as Record<string, unknown>[];
+  for (const row of due) {
+    const r = loadRecurring(row);
+    createTaskSystem({ orgId: r.org_id, projectId: r.project_id, title: r.title, tags: r.tags });
+    const next = new Date(Date.now() + r.interval_seconds * 1000).toISOString();
+    db().prepare("UPDATE recurring SET last_run_at = ?, next_run_at = ? WHERE id = ?").run(now, next, r.id);
+  }
+  return due.length;
+}
+
 // ───────────────────────── inbound intake ─────────────────────────
 
 /** Create an unassigned task from a trusted external source (no agent, no scope check). */

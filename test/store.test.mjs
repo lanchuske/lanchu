@@ -142,6 +142,22 @@ test("webhooks CRUD and event filtering", () => {
   assert.equal(store.listWebhooks(org.id).length, 0);
 });
 
+test("recurring fires when due, creates a task, then reschedules", () => {
+  const { org, project } = setup("acme13");
+  const before = store.listTasks(project.id).length;
+  const r = store.createRecurring({ orgId: org.id, projectId: project.id, title: "daily report", tags: ["ops"], intervalSeconds: 3600 });
+
+  assert.ok(store.runDueRecurring() >= 1); // due immediately → fires
+  const tasks = store.listTasks(project.id);
+  assert.equal(tasks.length, before + 1);
+  const created = tasks.find((t) => t.title === "daily report");
+  assert.deepEqual(created.tags, ["ops"]);
+  assert.equal(created.owner_agent_id, null); // unassigned
+
+  assert.equal(store.runDueRecurring(), 0); // rescheduled to the future — no re-fire
+  store.deleteRecurring(r.id);
+});
+
 test("intake creates an unassigned task with no scope check", () => {
   const { org, project } = setup("acme10");
   const t = store.createTaskSystem({ orgId: org.id, projectId: project.id, title: "from form", tags: ["backend"] });
