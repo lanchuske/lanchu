@@ -195,6 +195,35 @@ liviano** lo muestra en tiempo real.
   es lo que **hace posible la gobernanza**. Si algún día hiciera falta delegación
   directa entre agentes, ahí se añadiría A2A.
 
+### Restricciones no negociables
+
+1. **100% local, sin servidor central.** Todo —estado, agentes, docs, panel— corre en
+   la máquina del usuario. **Nada sale de ahí.** Esto no es solo técnico: es la historia
+   de confianza que sostiene el posicionamiento (*"tus agentes y tu trabajo nunca salen
+   de tu máquina"*).
+2. **Cero telemetría phone-home.** Lanchu no envía nada a ningún lado. La única
+   observabilidad del proyecto viene de fuentes externas que **ya existen** (ver
+   *Telemetría* abajo).
+3. **OS-agnóstico.** Corre igual en macOS, Linux y Windows. Se garantiza con: (a)
+   `node:sqlite` (sin compilación nativa), (b) transporte `localhost` HTTP/SSE (no
+   stdio, para compartir estado entre sesiones), (c) rutas vía `os`/`path`/`env-paths`,
+   (d) el launcher **conecta** el agente, no gestiona su proceso.
+
+### Telemetría (sin romper "todo local")
+
+Lo que el maintainer necesita saber se obtiene **sin ningún servidor ni código de
+telemetría**, consultando fuentes que ya recogen esos datos:
+
+| Métrica | Fuente | ¿Servidor propio? |
+|---|---|---|
+| Descargas / adopción por versión | API de npm | ❌ no |
+| Stars / forks | API de GitHub | ❌ no |
+| PRs / issues / contributors | API de GitHub | ❌ no |
+
+Las métricas de **uso en runtime** (cuántos agentes crea un usuario, tamaño de su org)
+viven solo en su máquina y **deliberadamente no se recolectan** — serían imposibles sin
+phone-home, que rompería la restricción #1.
+
 ---
 
 ## 8. Modelo de dominio
@@ -233,6 +262,9 @@ El v0 son los **tres pilares** de §3, concretados:
 **Decisiones técnicas del v0:**
 - **Stack:** TypeScript + SDK oficial de MCP. Instalación con `npx lanchu`.
 - **Protocolo:** MCP (§7).
+- **Ejecución:** 100% local, sin servidor central, sin telemetría phone-home (§7).
+- **Portabilidad:** OS-agnóstico (`node:sqlite` + `localhost` HTTP/SSE + rutas
+  abstractas + launcher que conecta, no spawnea) (§7).
 - **Estado:** servidor local + SQLite, con capa de almacenamiento abstracta para migrar
   a remoto más adelante.
 - **Licencia:** MIT (open source).
@@ -262,6 +294,9 @@ El v0 son los **tres pilares** de §3, concretados:
 5. **El supervisor es de primera clase** — aunque no sea técnico, debe *ver y confiar*.
 6. **Nada huérfano, nada en silencio** — reutilizar en vez de duplicar; retirar con
    handoff; todo en el audit.
+7. **Todo local, nada sale de tu máquina** — sin servidor central, sin phone-home. La
+   privacidad *es* parte de la confianza.
+8. **OS-agnóstico** — corre igual en macOS, Linux y Windows.
 
 ---
 

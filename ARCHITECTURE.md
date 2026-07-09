@@ -86,7 +86,11 @@ que alimenta a **tres consumidores**:
 
 **Decisiones fijadas:** coordinación mediada (no peer-to-peer); alcance = **bloqueo
 duro**; protocolo = **MCP** (no A2A, ver [`DEFINITION.md` §7](./DEFINITION.md#7-la-solución));
-notificaciones = MCP nativas (resource subscriptions) con polling de respaldo.
+notificaciones = MCP nativas (resource subscriptions) con polling de respaldo;
+**ejecución 100% local, sin servidor central ni telemetría phone-home**; transporte
+**`localhost` HTTP/SSE** (no stdio) para que varias sesiones compartan un mismo servidor,
+y **OS-agnóstico** vía `node:sqlite` + rutas abstractas (ver `DEFINITION.md` §7,
+*Restricciones no negociables*).
 
 ---
 
