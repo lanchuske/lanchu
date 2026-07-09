@@ -6,12 +6,13 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/lanchu"><img alt="npm version" src="https://img.shields.io/npm/v/lanchu"></a>
+  <a href="https://www.npmjs.com/package/lanchu"><img alt="npm downloads" src="https://img.shields.io/npm/dm/lanchu"></a>
+  <a href="https://github.com/lanchuske/lanchu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/lanchuske/lanchu/actions/workflows/ci.yml/badge.svg"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A522.5-brightgreen">
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
   <img alt="Protocol" src="https://img.shields.io/badge/protocol-MCP-6E56CF">
   <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-0b7285">
-  <img alt="Status" src="https://img.shields.io/badge/status-pre--1.0-orange">
 </p>
 
 ---
