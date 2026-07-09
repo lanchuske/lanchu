@@ -237,8 +237,27 @@ async function cmdStop(): Promise<void> {
   console.log("server stopped");
 }
 
-function cmdPanel(): void {
-  console.log(`Open the panel in your browser: ${baseUrl()}`);
+function openBrowser(url: string): boolean {
+  const [cmd, cmdArgs] =
+    process.platform === "darwin"
+      ? ["open", [url]]
+      : process.platform === "win32"
+        ? ["cmd", ["/c", "start", "", url]]
+        : ["xdg-open", [url]];
+  try {
+    const child = spawn(cmd as string, cmdArgs as string[], { detached: true, stdio: "ignore" });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function cmdPanel(): Promise<void> {
+  await ensureServer();
+  const url = baseUrl();
+  if (openBrowser(url)) console.log(`Opening the panel: ${url}`);
+  else console.log(`Open the panel in your browser: ${url}`);
 }
 
 // ── interactive onboarding wizard ────────────────────────────
