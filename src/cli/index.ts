@@ -441,7 +441,7 @@ async function main(): Promise<void> {
     case "version":
     case "-v":
     case "--version":
-      return void console.log("0.2.1");
+      return void console.log("0.3.0");
     case "serve":
       return cmdServe();
     case "doctor":

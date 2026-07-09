@@ -35,7 +35,7 @@ export interface BuiltServer {
 /** Builds an MCP server bound to a session (a specific agent). */
 export function buildMcpServer(ctx: SessionContext): BuiltServer {
   const server = new McpServer(
-    { name: "lanchu", version: "0.2.1" },
+    { name: "lanchu", version: "0.3.0" },
     {
       instructions: INSTRUCTIONS,
       capabilities: { resources: { subscribe: true, listChanged: true } },
