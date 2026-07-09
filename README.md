@@ -73,12 +73,12 @@ flowchart TB
 ## Quick start
 
 ```bash
-npx lanchu
+npx lanchu "fix the login"
 ```
 
-> **Note:** The project is in the definition phase. The command above is the installation
-> goal; it isn't published yet. See [`DEFINITION.md`](./DEFINITION.md) to
-> understand where it's headed.
+> **Note:** Early release (`0.1.0`). Requires Node >= 22.5. See
+> [`DEFINITION.md`](./DEFINITION.md) for the full picture and [`CLI.md`](./CLI.md) for the
+> command surface.
 
 ## What the first version includes
 
