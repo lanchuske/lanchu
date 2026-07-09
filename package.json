@@ -1,0 +1,47 @@
+{
+  "name": "lanchu",
+  "version": "0.0.1",
+  "description": "Capa de control y confianza para coordinar múltiples agentes de IA. MCP, 100% local, open source.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/lanchuske/lanchu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lanchuske/lanchu.git"
+  },
+  "bin": {
+    "lanchu": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "start": "node dist/cli/index.js serve",
+    "lanchu": "node dist/cli/index.js",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "multi-agent",
+    "agent-orchestration",
+    "governance",
+    "local-first"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

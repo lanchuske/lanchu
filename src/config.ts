@@ -1,0 +1,52 @@
+import os from "node:os";
+import path from "node:path";
+
+/**
+ * Local server paths and configuration, OS-agnostic.
+ * See DEFINITION.md §7 (non-negotiable constraints) and CLI.md §7.
+ */
+
+/** Per-OS state directory (equivalent to env-paths, without an external dependency). */
+export function stateDir(): string {
+  const override = process.env.LANCHU_STATE_DIR;
+  if (override) return override;
+
+  const home = os.homedir();
+  switch (process.platform) {
+    case "darwin":
+      return path.join(home, "Library", "Application Support", "lanchu");
+    case "win32":
+      return path.join(process.env.APPDATA ?? path.join(home, "AppData", "Roaming"), "lanchu");
+    default: // linux y otros unix
+      return path.join(process.env.XDG_DATA_HOME ?? path.join(home, ".local", "share"), "lanchu");
+  }
+}
+
+export function dbPath(): string {
+  return path.join(stateDir(), "lanchu.db");
+}
+
+export const DEFAULT_PORT = 4319;
+
+export function port(): number {
+  const p = process.env.LANCHU_PORT;
+  const n = p ? Number.parseInt(p, 10) : DEFAULT_PORT;
+  return Number.isFinite(n) ? n : DEFAULT_PORT;
+}
+
+export const HOST = "127.0.0.1";
+
+/** After how many hours a task of an idle agent is marked "stale" (C4). */
+export function staleHours(): number {
+  const h = process.env.LANCHU_STALE_HOURS;
+  const n = h ? Number.parseInt(h, 10) : 24;
+  return Number.isFinite(n) && n > 0 ? n : 24;
+}
+
+export function baseUrl(): string {
+  return `http://${HOST}:${port()}`;
+}
+
+export function mcpUrl(): string {
+  return `${baseUrl()}/mcp`;
+}
