@@ -12,7 +12,8 @@ build/
 *.db
 *.db-journal
 *.db-wal
-.lanchu/
+.lanchu/*
+!.lanchu/config.json
 
 # Logs
 *.log
