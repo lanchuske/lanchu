@@ -1,0 +1,38 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schemas/draft/2025/server-card.json",
+  "serverInfo": {
+    "name": "lanchu",
+    "title": "Lanchu",
+    "version": "0.2.0"
+  },
+  "description": "Control and trust layer for coordinating multiple AI agents. A local-first, open-source MCP server: durable agents, mediated coordination, scope limits (cooperative + auditable), and a real-time supervisor panel.",
+  "websiteUrl": "https://lanchuske.github.io/lanchu/",
+  "documentationUrl": "https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md",
+  "repositoryUrl": "https://github.com/lanchuske/lanchu",
+  "license": "MIT",
+  "installation": {
+    "type": "npx",
+    "command": "npx lanchu",
+    "requires": "Node.js >= 22.5"
+  },
+  "transport": {
+    "type": "streamable-http",
+    "scope": "local",
+    "note": "Lanchu runs on the user's machine. The MCP endpoint is served at http://127.0.0.1:4319/mcp and requires a per-session bearer token issued by the launcher. There is no public endpoint by design (100% local, no phone-home)."
+  },
+  "capabilities": {
+    "tools": { "listChanged": true },
+    "resources": { "subscribe": true, "listChanged": true }
+  },
+  "resources": [
+    "lanchu://me",
+    "lanchu://board",
+    "lanchu://tasks/mine",
+    "lanchu://tasks/available"
+  ],
+  "tools": [
+    "session_whoami", "session_leave",
+    "task_list", "task_create", "task_check_scope", "task_claim", "task_update", "task_release",
+    "doc_list", "doc_read", "doc_update"
+  ]
+}

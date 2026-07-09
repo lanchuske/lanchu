@@ -1,0 +1,10 @@
+# Lanchu — https://lanchuske.github.io/lanchu/
+User-agent: *
+Allow: /
+
+# Content Signals (contentsignals.org) — usage preferences for AI systems.
+# This is an open-source MIT project; content may be indexed, trained on, and
+# used as AI input. Edit to taste.
+Content-Signal: ai-train=yes, search=yes, ai-input=yes
+
+Sitemap: https://lanchuske.github.io/lanchu/sitemap.xml
