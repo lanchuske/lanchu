@@ -1,17 +1,74 @@
 # Lanchu — Arquitectura
 
-> Diseño concreto de la superficie MCP: **tools**, **recursos**, **eventos**,
-> **gobernanza** y **webhooks**. Complementa [`DEFINITION.md`](./DEFINITION.md), que
-> cubre el problema, el posicionamiento y el porqué. Este documento responde:
-> *¿cómo se coordinan y se gobiernan los agentes, exactamente?*
+> Diseño concreto: **superficies**, **ciclo de vida de agentes**, **tools MCP**,
+> **recursos**, **eventos**, **gobernanza** y **webhooks**. Complementa
+> [`DEFINITION.md`](./DEFINITION.md), que cubre el problema, el foco y el porqué. Este
+> documento responde: *¿cómo funciona, exactamente?*
 
 ---
 
-## 1. Modelo: coordinación mediada + gobernanza
+## 1. Las tres superficies
+
+Lanchu se toca por tres lados. Distinguirlos importa —sobre todo para saber **dónde vive
+el "¿reutilizar?"**:
+
+| Superficie | Qué es | Responsabilidad |
+|-----------|--------|-----------------|
+| **CLI / launcher** (`npx lanchu`) | Lo que corres en la terminal. | Onboarding: empareja el objetivo, hace la pregunta **reutilizar-o-crear** al humano, y arranca el agente conectado a Lanchu con una identidad durable. |
+| **Servidor MCP** | El servicio compartido al que el agente se conecta. | Las tools que el agente usa mientras trabaja; estado, gobernanza, event bus. |
+| **Panel web** | Dashboard del supervisor. | Ver agentes, actividad y audit en tiempo real; retirar agentes con handoff. |
+
+> **Clave:** la pregunta *"¿reutilizar el agente que ya tocó login?"* ocurre en la **CLI**
+> (interacción con el humano), **no** es una tool MCP. Un agente no interrumpe al humano;
+> el launcher sí. El launcher consulta a Lanchu los candidatos y decide a qué identidad
+> durable conectar la sesión.
+
+---
+
+## 2. Ciclo de vida y agentes durables
+
+### Sesión ≠ Agente
+- **Agente** = identidad durable (rol, alcance, tareas, *huella*, historial). Vive en la
+  org.
+- **Sesión** = una conexión viva (una ventana de terminal) atada a un agente. Efímera.
+
+### Estados del agente
+```
+   crear/reutilizar
+        │
+        ▼
+   ACTIVO ──(cierras la ventana)──▶ IDLE ──(reabres/reutilizas)──▶ ACTIVO
+        │                             │
+        └──────── retirar ───────────┘
+                     │
+                     ▼
+   ¿tareas abiertas? ── SÍ ─▶ handoff obligatorio (reasignar / soltar) por tarea
+                     └─ NO ─▶ RETIRADO (archivado; permanece en audit)
+```
+
+- **ACTIVO**: sesión viva, trabajando. Emite `agent.heartbeat`.
+- **IDLE**: sin sesión, pero vivo; conserva rol, tareas reservadas y contexto. Emite
+  `agent.idle`.
+- **RETIRADO**: archivado tras resolver sus tareas. Emite `agent.retired`.
+
+### La huella (para reutilizar por objetivo)
+Cada agente acumula una **huella**: tareas que hizo, áreas/etiquetas que tocó, contexto.
+Cuando el launcher arranca con un objetivo, Lanchu compara ese objetivo contra las
+huellas de los agentes `idle` y devuelve **candidatos a reutilizar** (ordenados por
+solape). Reutilizar = recuperar contexto (menos tokens) y no duplicar.
+
+### Retiro seguro
+Retirar un agente con tareas abiertas **está bloqueado** hasta resolver cada una:
+reasignar a otro agente (`task.reassign`) o soltar al pool (`task.release`). Emite
+`task.reassigned` / `task.released` y, al final, `agent.retired`. Nada huérfano.
+
+---
+
+## 3. Modelo de coordinación (mediada + gobernada)
 
 Todo pasa por Lanchu. Los agentes **no se hablan entre sí**; se coordinan a través del
-**estado compartido** (patrón *blackboard*). Cada acción muta el estado y **emite un
-evento**. Ese mismo stream alimenta a **tres consumidores**:
+**estado compartido** (*blackboard*). Cada acción muta el estado y **emite un evento**,
+que alimenta a **tres consumidores**:
 
 ```
                           ┌─────────────────────────┐
@@ -21,203 +78,138 @@ evento**. Ese mismo stream alimenta a **tres consumidores**:
                           │  + audit log            │
                           │  + event bus            │
                           └───────────┬─────────────┘
-                                      │  cada acción emite un evento
                     ┌─────────────────┼──────────────────────┐
                     ▼                 ▼                      ▼
-            1) Panel/Dashboard   2) Notificaciones MCP    3) Webhooks
-             (SSE al navegador)   (resource.updated →     (POST → sistemas
-              el supervisor ve)    el agente re-lee)        externos)
+            1) Panel (SSE)      2) Notificaciones MCP    3) Webhooks (roadmap)
+                                 (resource.updated)       (POST → externos)
 ```
 
-- **Empujar cambios:** el agente llama tools (`task.claim`, `task.update`, `doc.update`…).
-- **Recibir coordinación:** el agente se **suscribe a recursos MCP**; cuando algo
-  relevante cambia (p.ej. su dependencia terminó), Lanchu envía
-  `notifications/resources/updated` y el cliente re-lee. Polling (`board.snapshot`) es el
-  respaldo para clientes sin suscripciones.
-- **Gobernar:** como toda acción pasa por Lanchu, cada una se **valida contra las
-  reglas/alcance** antes de aplicarse y se **registra en el audit log**. No hay canal
-  lateral entre agentes.
-- **Coordinar con el exterior:** los **webhooks** conectan el event bus con sistemas
-  externos en ambas direcciones.
-
-### Decisiones de diseño fijadas
-
-- **Coordinación mediada, no directa.** Los agentes no intercambian mensajes
-  peer-to-peer; todo va por el estado compartido de Lanchu. Esto es lo que hace posible
-  la gobernanza.
-- **Control de alcance = bloqueo duro.** Si un agente intenta reclamar algo tomado o
-  fuera de su rol, la tool **falla con error**; no puede continuar.
-- **Protocolo = MCP.** Lanchu es un servicio compartido que cada agente consulta; MCP es
-  la capa correcta. A2A (agente↔agente) queda fuera porque sería orquestación/mensajería
-  directa. Ver [`DEFINITION.md` §6](./DEFINITION.md#decisión-de-protocolo-mcp-no-a2a).
-- **Notificaciones = MCP nativas** (resource subscriptions); polling como respaldo.
+**Decisiones fijadas:** coordinación mediada (no peer-to-peer); alcance = **bloqueo
+duro**; protocolo = **MCP** (no A2A, ver [`DEFINITION.md` §7](./DEFINITION.md#7-la-solución));
+notificaciones = MCP nativas (resource subscriptions) con polling de respaldo.
 
 ---
 
-## 2. Recursos MCP (lo que agentes y supervisor observan)
+## 4. Recursos MCP (lo que agentes y supervisor observan)
 
-Recursos de **solo lectura** y **suscribibles**. Representan la verdad compartida.
+Solo lectura y **suscribibles**.
 
-| URI del recurso | Contenido | Se actualiza cuando… |
-|-----------------|-----------|----------------------|
-| `lanchu://board` | Tablero: agentes activos, actividad, tareas. | cualquier `agent.*` / `task.*`. |
+| URI | Contenido | Se actualiza cuando… |
+|-----|-----------|----------------------|
+| `lanchu://board` | Agentes (estado), actividad, tareas. | cualquier `agent.*` / `task.*`. |
+| `lanchu://agents` | Agentes durables de la org y su estado. | cambia el ciclo de vida de un agente. |
 | `lanchu://tasks/mine` | Tareas del agente. | cambia una tarea suya. |
 | `lanchu://tasks/available` | Tareas disponibles para su rol. | se crea/libera/reclama una tarea. |
 | `lanchu://task/{id}` | Detalle + dependencias + dueño. | esa tarea cambia. |
-| `lanchu://org/rules` | Reglas/políticas (los límites). | el supervisor actualiza reglas. |
+| `lanchu://org/rules` | Reglas/políticas (los límites). | el supervisor las actualiza. |
 | `lanchu://docs/{id}` | Un documento compartido. | ese doc se actualiza. |
-| `lanchu://me` | Identidad, rol y alcance del agente. | cambia su rol/alcance. |
+| `lanchu://me` | Identidad, rol, alcance y huella del agente. | cambian. |
 | `lanchu://audit` | Registro inmutable de actividad. | ocurre cualquier evento. |
 
-**Flujo de coordinación mediada:** el agente A se suscribe a `lanchu://tasks/mine`.
-El agente B termina su tarea → Lanchu emite `task.completed`, desbloquea la tarea de A y
-envía `resources/updated` para `lanchu://tasks/mine`. A re-lee y actúa. **A y B nunca se
-hablaron**: se coordinaron a través de Lanchu.
-
 ---
 
-## 3. Tools de los agentes
+## 5. Tools de los agentes (MCP)
 
 ### `session.*` — identidad y presencia
-| Tool | Entradas clave | Devuelve | Notas |
-|------|----------------|----------|-------|
-| `session.register` | `org`, `project`, `role` | identidad, alcance, contexto mínimo | Emite `agent.registered`. |
-| `session.whoami` | — | identidad + rol + alcance | El agente recuerda quién es y qué puede tocar. |
-| `session.heartbeat` | `branch?`, `activity` | ok | Alimenta el panel. Emite `agent.heartbeat`. |
-| `session.leave` | — | ok | Libera tareas reclamadas. Emite `agent.left`. |
+| Tool | Entradas | Devuelve | Notas |
+|------|----------|----------|-------|
+| `session.whoami` | — | identidad + rol + alcance + huella | El agente recuerda quién es. |
+| `session.heartbeat` | `activity`, `branch?` | ok | Alimenta el panel. Emite `agent.heartbeat`. |
+| `session.leave` | — | ok | La sesión termina; el agente pasa a **IDLE** (no se borra). Emite `agent.idle`. |
+
+> El registro/reutilización lo maneja el **launcher** antes de que arranquen las tools
+> (ver §1), así que no hay un `session.register` que el agente decida por su cuenta.
 
 ### `task.*` — coordinación mediada + límites
-| Tool | Entradas clave | Devuelve | Notas |
-|------|----------------|----------|-------|
-| `task.list` | `filter` (`mine`/`available`/`status`) | lista | Vista *pull*. |
-| `task.get` | `id` | detalle + dependencias + dueño | — |
-| `task.check_scope` | `id` | `yours` / `someone_else` / `out_of_role` | Consulta antes de actuar. |
-| `task.claim` | `id`, `branch?` | tarea reclamada **o ERROR** | **Bloqueo duro** + lock atómico. Evita duplicar. Emite `task.claimed`. |
-| `task.update` | `id`, `status`, `note?`, `branch?` | tarea actualizada | `done` **desbloquea dependientes**. Emite `task.started/blocked/completed`. |
-| `task.release` | `id` | ok | Otro agente puede tomarla. Emite `task.released`. |
-| `task.create` | `title`, `role?`, `deps?` | tarea creada | Según permisos del rol. |
-| `task.handoff` | `id`, `note` | ok | Handoff explícito **enrutado por Lanchu** (logueado, no peer-to-peer). Emite `task.handoff`. |
+| Tool | Entradas | Devuelve | Notas |
+|------|----------|----------|-------|
+| `task.list` | `filter` | lista | Vista *pull*. |
+| `task.get` | `id` | detalle + dueño | — |
+| `task.check_scope` | `id` | `yours`/`someone_else`/`out_of_role` | Consulta antes de actuar. |
+| `task.claim` | `id`, `branch?` | tarea **o ERROR** | **Bloqueo duro** + lock atómico. Emite `task.claimed`. |
+| `task.update` | `id`, `status`, `note?` | tarea | `done` desbloquea dependientes. Emite `task.started/blocked/completed`. |
+| `task.release` | `id` | ok | Vuelve al pool. Emite `task.released`. |
+| `task.reassign` | `id`, `to_agent` | ok | Handoff (usado también en retiro seguro). Emite `task.reassigned`. |
+| `task.create` | `title`, `role?`, `deps?` | tarea | Según permisos del rol. |
+| `task.handoff` | `id`, `note` | ok | Handoff explícito con nota, enrutado por Lanchu (logueado). Emite `task.handoff`. |
 
-> Nota: **no** hay una tool de "decidir el plan" (tipo decomposición automática o
-> `task.next` como cerebro). Lanchu es desopinado sobre el plan; el plan lo pone un
-> humano, los agentes o un orquestador externo. Lanchu solo coordina y acota.
+> **No** hay tool de "decidir el plan" (decomposición automática, "siguiente tarea" como
+> cerebro). Lanchu es desopinado sobre el plan.
 
-### `doc.*` — documentación viva
-| Tool | Entradas clave | Devuelve | Notas |
-|------|----------------|----------|-------|
-| `doc.list` / `doc.search` | `query?` | docs | — |
-| `doc.read` | `id` | contenido | Las tools empujan a leer antes de actuar. |
-| `doc.update` / `doc.create` | `id?`, `content` | doc | Controlado por rol. Emite `doc.updated`. |
-
-### `org.*` — reglas y contexto
-| Tool | Devuelve | Notas |
+### `doc.*` — documentación viva (mínima en v0)
+| Tool | Entradas | Notas |
 |------|----------|-------|
-| `org.rules` | reglas/políticas a cumplir (los límites) | — |
-| `org.context` | contexto mínimo para rol/tarea | Optimiza tokens. |
+| `doc.list` / `doc.search` | `query?` | — |
+| `doc.read` | `id` | Las tools empujan a leer antes de actuar. |
+| `doc.update` / `doc.create` | `id?`, `content` | Controlado por rol. Emite `doc.updated`. |
 
-### `board.*` — respaldo *pull*
-| Tool | Devuelve | Notas |
-|------|----------|-------|
-| `board.snapshot` | estado completo del tablero | Fallback para clientes sin suscripciones. |
+### `org.*` / `board.*`
+| Tool | Notas |
+|------|-------|
+| `org.rules` | Reglas/políticas a cumplir. |
+| `org.context` | Contexto mínimo por rol/tarea (optimiza tokens). |
+| `board.snapshot` | Respaldo *pull* para clientes sin suscripciones. |
 
 ---
 
-## 4. Gobernanza (cómo se aplican los límites)
+## 6. Gobernanza (cómo se aplican los límites)
 
 Cada tool que **muta** estado pasa por dos pasos antes de aplicarse:
 
-1. **Chequeo de alcance/reglas.** Se evalúa la acción contra el `role` del agente y las
-   `rules` de la org. Si viola el alcance → **error** (bloqueo duro) + evento
-   `scope.violation`.
-2. **Registro en audit log.** Toda acción aplicada (y todo intento bloqueado) queda en
-   `lanchu://audit`, con actor, acción, sujeto, rama y coste/tokens si están disponibles.
+1. **Chequeo de alcance/reglas.** Se evalúa contra el `role` del agente y las `rules` de
+   la org. Si viola el alcance → **error** (bloqueo duro) + evento `scope.violation`.
+2. **Registro en audit.** Toda acción aplicada (y todo intento bloqueado) queda en
+   `lanchu://audit` con actor, acción, sujeto, rama y coste/tokens si están disponibles.
 
-**Qué define un rol (el alcance):**
-- Qué tareas puede reclamar (por proyecto, etiqueta, tipo).
-- Qué recursos/docs puede leer y escribir.
-- Qué tools puede usar.
-- (Roadmap) Presupuesto de tokens/coste y cuotas.
+**Qué define un rol (el alcance):** qué tareas puede reclamar, qué docs puede leer/escribir,
+qué tools puede usar. (Roadmap: presupuesto de tokens/coste y cuotas.)
 
-El supervisor ve todo esto en el panel y en `lanchu://audit`. **Confiar = poder ver +
-poder acotar.**
+El supervisor ve todo en el panel y en `lanchu://audit`. **Confiar = ver + poder acotar.**
 
 ---
 
-## 5. Eventos
-
-Vocabulario común que produce el event bus:
+## 7. Eventos
 
 ```
-agent.registered   agent.heartbeat    agent.left
-task.created       task.claimed       task.released     task.started
-task.completed     task.blocked       task.handoff
-doc.created        doc.updated
-scope.violation    branch.changed
+agent.registered   agent.heartbeat   agent.idle   agent.reused   agent.retired
+task.created   task.claimed   task.released   task.started
+task.completed   task.blocked   task.reassigned   task.handoff
+doc.created   doc.updated
+scope.violation   branch.changed
 ```
 
 **Forma de un evento:**
 ```json
 {
   "type": "task.completed",
-  "org": "acme",
-  "project": "landing",
-  "actor": { "agent": "agent-7", "role": "frontend" },
+  "org": "acme", "project": "landing",
+  "actor": { "agent": "arregla-login", "role": "frontend" },
   "subject": { "kind": "task", "id": "task-42" },
-  "data": { "branch": "feat/hero", "note": "Hero listo", "tokens": 18240 },
+  "data": { "branch": "feat/login", "note": "Login listo", "tokens": 18240 },
   "timestamp": "2026-07-09T14:30:00Z"
 }
 ```
 
-Los eventos alimentan: (1) el panel, (2) las notificaciones MCP `resources/updated`, y
-(3) los webhooks salientes. También son la materia prima del audit log.
+Los eventos alimentan el panel, las notificaciones MCP y el audit log. (Los webhooks
+consumen este mismo stream, pero son roadmap.)
 
 ---
 
-## 6. Webhooks
+## 8. Webhooks (roadmap — fuera del v0)
 
-### 6.1 Salientes (Lanchu → exterior)
-Registras una URL y Lanchu hace `POST` cuando ocurren eventos que te interesan.
+Se documentan aquí para no cerrar la puerta, pero **no entran en el v0**.
 
-**Config:**
-```json
-{
-  "url": "https://hooks.example.com/lanchu",
-  "events": ["task.completed", "scope.violation"],
-  "org": "acme",
-  "project": "landing",
-  "secret": "whsec_..."
-}
-```
-- `events`: filtro (o `*` para todos).
-- `secret`: el body se firma con **HMAC-SHA256** en `X-Lanchu-Signature` para verificar
-  autenticidad.
-- Entrega **at-least-once** con reintentos y backoff.
-
-**Casos de uso:** avisar a Slack/Discord al completar una tarea; **alertar al supervisor
-ante un `scope.violation`**; disparar CI/CD; volcar el audit a un dashboard externo.
-
-### 6.2 Entrantes (exterior → Lanchu)
-Una URL de Lanchu que otros sistemas llaman para disparar acciones.
-
-- `POST /hooks/github` — un `push` crea/avanza una tarea.
-- `POST /hooks/schedule` — un scheduler dispara una **función recurrente** (roadmap).
-- `POST /hooks/intake` — un formulario o email entrante crea una tarea.
-
-Los webhooks entrantes se autentican por firma/token y **respetan las reglas de la org**
-(pasan por el mismo chequeo de gobernanza).
+- **Salientes** (Lanchu → exterior): `POST` firmado con **HMAC-SHA256** ante eventos
+  filtrados. Casos: alertar al supervisor ante `scope.violation`, avisar a Slack, CI/CD.
+- **Entrantes** (exterior → Lanchu): `POST /hooks/…` para crear/avanzar tareas o disparar
+  funciones recurrentes; pasan por el mismo chequeo de gobernanza.
 
 ---
 
-## 7. Cómo se resuelve cada desafío (mapa a la definición)
+## 9. Cómo se resuelve cada pilar (mapa a la definición)
 
-| Desafío (DEFINITION.md §4) | Mecanismo aquí |
-|----------------------------|----------------|
-| Identidad y registro | `session.register` + recurso `lanchu://me` |
-| Límites de alcance | Chequeo de gobernanza + bloqueo duro en `task.claim` + `task.check_scope` |
-| Coordinación mediada | Estado compartido + `task.*` con lock atómico + eventos |
-| Estado compartido en vivo | Recursos MCP + `resources/updated` + panel |
-| Documentación viva | `doc.*` + evento `doc.updated` |
-| Confianza y trazabilidad | Event bus → `lanchu://audit` → panel |
-| Foco y eficiencia | `org.context` (contexto mínimo por rol/tarea) |
-| Recurrencia | Webhook entrante `POST /hooks/schedule` (roadmap) |
-| Simplicidad | Un proceso local; `npx lanchu` levanta todo |
+| Pilar (DEFINITION.md §3) | Mecanismo aquí |
+|--------------------------|----------------|
+| **1. Onboarding sin fricción** | CLI/launcher (§1): un comando empareja objetivo y conecta al agente. |
+| **2. Agentes durables** | Ciclo de vida + huella (§2); reutilizar-o-crear en el launcher; retiro seguro con `task.reassign`/`task.release`. |
+| **3. Carril + visibilidad** | Coordinación mediada + `task.claim` (lock); gobernanza + bloqueo duro (§6); `lanchu://audit` + panel; `doc.*` mínimo. |
