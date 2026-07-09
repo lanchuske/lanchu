@@ -9,6 +9,7 @@
   <a href="https://www.npmjs.com/package/lanchu"><img alt="npm version" src="https://img.shields.io/npm/v/lanchu"></a>
   <a href="https://www.npmjs.com/package/lanchu"><img alt="npm downloads" src="https://img.shields.io/npm/dm/lanchu"></a>
   <a href="https://github.com/lanchuske/lanchu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/lanchuske/lanchu/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://lanchuske.github.io/lanchu/"><img alt="Website" src="https://img.shields.io/badge/website-lanchuske.github.io-0b7285"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue"></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A522.5-brightgreen">
   <img alt="Protocol" src="https://img.shields.io/badge/protocol-MCP-6E56CF">
