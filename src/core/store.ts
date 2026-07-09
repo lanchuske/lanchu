@@ -604,6 +604,9 @@ function unblockDependents(projectId: string): void {
     .prepare(
       `UPDATE task SET status = 'available', updated_at = ?
        WHERE project_id = ? AND status = 'blocked'
+         -- only auto-unblock tasks that were blocked BY a dependency, not ones
+         -- an agent blocked manually (which have no dependency rows)
+         AND EXISTS (SELECT 1 FROM task_dep d WHERE d.task_id = task.id)
          AND NOT EXISTS (
            SELECT 1 FROM task_dep d JOIN task p ON p.id = d.depends_on_task_id
            WHERE d.task_id = task.id AND p.status <> 'done'

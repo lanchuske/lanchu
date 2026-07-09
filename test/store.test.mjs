@@ -108,6 +108,27 @@ test("audit log records events with resolved actor names", () => {
   assert.ok(audit.some((e) => e.type === "task.claimed" && e.actor_name === agent.name));
 });
 
+test("manual blocked stays blocked; dependency-blocked auto-unblocks", () => {
+  const { org, project, agent } = setup("acme12");
+  const mk = (title, deps) =>
+    store.createTask({ projectId: project.id, orgId: org.id, agentId: agent.id, title, tags: ["ui"], deps });
+
+  const manual = mk("stuck", []);
+  store.claimTask({ agentId: agent.id, taskId: manual.id });
+  store.updateTaskStatus({ agentId: agent.id, taskId: manual.id, status: "blocked" });
+
+  const dep = mk("dependency", []);
+  const dependent = mk("needs dep", [dep.id]);
+  store.claimTask({ agentId: agent.id, taskId: dependent.id });
+  store.updateTaskStatus({ agentId: agent.id, taskId: dependent.id, status: "blocked" });
+
+  store.claimTask({ agentId: agent.id, taskId: dep.id });
+  store.updateTaskStatus({ agentId: agent.id, taskId: dep.id, status: "done" });
+
+  assert.equal(store.getTask(manual.id).status, "blocked"); // no deps → stays blocked
+  assert.equal(store.getTask(dependent.id).status, "available"); // dep done → unblocked
+});
+
 test("webhooks CRUD and event filtering", () => {
   const { org } = setup("acme9");
   const w = store.createWebhook(org.id, "http://example.test/hook", ["task.created"], "s3cret");
