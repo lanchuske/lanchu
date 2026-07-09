@@ -203,6 +203,48 @@ export function buildMcpServer(ctx: SessionContext): McpServer {
   );
 
   server.registerTool(
+    "doc_list",
+    {
+      title: "List docs",
+      description: "Lists the org's shared documents (title + metadata).",
+      inputSchema: { query: z.string().optional() },
+    },
+    async ({ query }) => {
+      const docs = query ? store.searchDocs(ctx.orgId, query) : store.listDocs(ctx.orgId);
+      return text(docs.map((d) => ({ id: d.id, title: d.title, updated_at: d.updated_at })));
+    },
+  );
+
+  server.registerTool(
+    "doc_read",
+    {
+      title: "Read doc",
+      description: "Reads a shared document. Read before acting on its area.",
+      inputSchema: { id: z.string() },
+    },
+    async ({ id }) => {
+      const doc = store.getDoc(id);
+      return doc ? text(doc) : fail(new Error("doc not found"));
+    },
+  );
+
+  server.registerTool(
+    "doc_update",
+    {
+      title: "Create or update doc",
+      description: "Creates or updates a shared doc (upsert by id or title). Keeps knowledge current.",
+      inputSchema: { id: z.string().optional(), title: z.string(), content: z.string() },
+    },
+    async ({ id, title, content }) => {
+      try {
+        return text(store.upsertDoc({ orgId: ctx.orgId, agentId: ctx.agentId, id, title, content }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "session_leave",
     {
       title: "End session",

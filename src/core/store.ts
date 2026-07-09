@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
@@ -668,6 +669,85 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
   return { retired: true, blockedBy: [] };
 }
 
+// ───────────────────────── docs (minimal, C5) ─────────────────────────
+
+export interface Doc {
+  id: string;
+  org_id: string;
+  title: string;
+  content: string;
+  updated_at: string;
+  updated_by_agent_id: string | null;
+  created_at: string;
+}
+
+export function listDocs(orgId: string): Doc[] {
+  return db()
+    .prepare("SELECT * FROM doc WHERE org_id = ? ORDER BY updated_at DESC")
+    .all(orgId) as unknown as Doc[];
+}
+
+export function searchDocs(orgId: string, query: string): Doc[] {
+  const like = `%${query}%`;
+  return db()
+    .prepare(
+      "SELECT * FROM doc WHERE org_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updated_at DESC",
+    )
+    .all(orgId, like, like) as unknown as Doc[];
+}
+
+export function getDoc(docId: string): Doc | null {
+  return (db().prepare("SELECT * FROM doc WHERE id = ?").get(docId) as unknown as Doc | undefined) ?? null;
+}
+
+/** Create or update a doc (upsert by id or title within the org). Emits doc.created/updated. */
+export function upsertDoc(input: {
+  orgId: string;
+  agentId: string;
+  id?: string;
+  title: string;
+  content: string;
+}): Doc {
+  const now = nowIso();
+  const existing =
+    (input.id ? getDoc(input.id) : null) ??
+    ((db()
+      .prepare("SELECT * FROM doc WHERE org_id = ? AND title = ?")
+      .get(input.orgId, input.title) as unknown as Doc | undefined) ??
+      null);
+
+  if (existing) {
+    db()
+      .prepare("UPDATE doc SET content = ?, title = ?, updated_at = ?, updated_by_agent_id = ? WHERE id = ?")
+      .run(input.content, input.title, now, input.agentId, existing.id);
+    recordEvent({
+      org_id: input.orgId,
+      type: "doc.updated",
+      actor_agent_id: input.agentId,
+      subject_kind: "doc",
+      subject_id: existing.id,
+      data: { title: input.title },
+    });
+    return getDoc(existing.id)!;
+  }
+
+  const id = input.id ?? uuid();
+  db()
+    .prepare(
+      "INSERT INTO doc(id, org_id, title, content, updated_at, updated_by_agent_id, created_at) VALUES (?,?,?,?,?,?,?)",
+    )
+    .run(id, input.orgId, input.title, input.content, now, input.agentId, now);
+  recordEvent({
+    org_id: input.orgId,
+    type: "doc.created",
+    actor_agent_id: input.agentId,
+    subject_kind: "doc",
+    subject_id: id,
+    data: { title: input.title },
+  });
+  return getDoc(id)!;
+}
+
 // ───────────────────────── helpers ─────────────────────────
 
 export function orgIdForProject(projectId: string): string {
@@ -678,16 +758,40 @@ export function orgIdForProject(projectId: string): string {
   return row.org_id;
 }
 
+/** Task plus derived governance signals for the panel (C4). */
+export type BoardTask = Task & {
+  reserved: boolean;
+  stale: boolean;
+  owner_state: AgentState | null;
+};
+
 export interface BoardSnapshot {
   agents: Agent[];
-  tasks: Task[];
+  tasks: BoardTask[];
+}
+
+function ageHours(iso: string | null): number {
+  if (!iso) return 0;
+  return (Date.now() - new Date(iso).getTime()) / 3_600_000;
 }
 
 export function boardSnapshot(orgId: string): BoardSnapshot {
   const agents = listAgents(orgId).filter((a) => a.state !== "retired");
+  const stateById = new Map(agents.map((a) => [a.id, a.state] as const));
   const projects = db()
     .prepare("SELECT id FROM project WHERE org_id = ?")
     .all(orgId) as { id: string }[];
-  const tasks = projects.flatMap((p) => listTasks(p.id));
+  const threshold = staleHours();
+
+  const tasks: BoardTask[] = projects
+    .flatMap((p) => listTasks(p.id))
+    .map((t) => {
+      const ownerState = t.owner_agent_id ? (stateById.get(t.owner_agent_id) ?? "retired") : null;
+      const open = t.status === "claimed" || t.status === "in_progress" || t.status === "blocked";
+      const reserved = open && ownerState === "idle";
+      const stale = reserved && ageHours(t.updated_at) >= threshold;
+      return { ...t, owner_state: ownerState, reserved, stale };
+    });
+
   return { agents, tasks };
 }

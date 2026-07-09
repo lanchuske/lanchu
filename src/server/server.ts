@@ -176,6 +176,36 @@ export function createServer(): http.Server {
         return handleSession(body, res);
       }
 
+      if (url.pathname === "/api/roles" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        return sendJson(res, 200, store.listRoles(org.id));
+      }
+
+      // ── supervisor actions ──
+      if (url.pathname === "/agent/retire" && req.method === "POST") {
+        const body = (await readJson(req)) as { agentId: string };
+        return sendJson(res, 200, store.retireAgent(body.agentId));
+      }
+      if (url.pathname === "/task/release" && req.method === "POST") {
+        const body = (await readJson(req)) as { taskId: string };
+        return sendJson(res, 200, store.releaseTask({ agentId: null, taskId: body.taskId, override: true }));
+      }
+      if (url.pathname === "/task/reassign" && req.method === "POST") {
+        const body = (await readJson(req)) as { taskId: string; toAgentId: string };
+        return sendJson(
+          res,
+          200,
+          store.reassignTask({ taskId: body.taskId, toAgentId: body.toAgentId, override: true }),
+        );
+      }
+      if (url.pathname === "/shutdown" && req.method === "POST") {
+        sendJson(res, 200, { ok: true });
+        setTimeout(() => process.exit(0), 50);
+        return;
+      }
+
       if (url.pathname === "/mcp") {
         return await handleMcp(req, res);
       }

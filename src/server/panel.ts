@@ -22,6 +22,7 @@ export function panelHtml(): string {
   .name { font-weight: 600; }
   .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); opacity: .8; margin-right: 4px; }
   .state-active { color: #16a34a; } .state-idle { color: #d97706; }
+  .stale { color: #dc2626; font-weight: 600; font-size: 12px; }
   .muted { opacity: .55; font-size: 12px; }
   input { padding: 6px 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); background: transparent; color: inherit; }
 </style>
@@ -50,7 +51,9 @@ async function tick() {
     ).join('') || '<div class="muted">no agents</div>';
     document.getElementById('tasks').innerHTML = (b.tasks||[]).map(t =>
       '<div class="card"><span class="name">' + t.title + '</span> '
-      + '<span class="muted">[' + t.status + ']</span><br>'
+      + '<span class="muted">[' + t.status + ']</span> '
+      + (t.stale ? '<span class="stale">⚠ stale</span>' : (t.reserved ? '<span class="muted">reserved (idle)</span>' : ''))
+      + '<br>'
       + (t.tags||[]).map(x => '<span class="tag">' + x + '</span>').join('')
       + '<span class="muted"> ' + (t.owner_agent_id ? '· owner set' : '· unassigned') + '</span></div>'
     ).join('') || '<div class="muted">no tasks</div>';

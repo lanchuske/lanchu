@@ -166,15 +166,95 @@ async function cmdOnboard(objective: string): Promise<void> {
   console.log(`Panel: ${baseUrl()}`);
 }
 
+async function orgOf(): Promise<string> {
+  const found = findConfig();
+  if (!found) {
+    console.log("no .lanchu/config.json here — run `lanchu init` first");
+    process.exit(1);
+  }
+  await ensureServer();
+  return found.config.org;
+}
+
+async function post(path: string, body: unknown): Promise<unknown> {
+  const res = await fetch(`${baseUrl()}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+async function cmdRoles(): Promise<void> {
+  const org = await orgOf();
+  const res = await fetch(`${baseUrl()}/api/roles?org=${encodeURIComponent(org)}`);
+  console.log(JSON.stringify(await res.json(), null, 2));
+}
+
+async function cmdStats(): Promise<void> {
+  const org = await orgOf();
+  const res = await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`);
+  const b = (await res.json()) as { agents: unknown[]; tasks: { status: string; stale?: boolean }[] };
+  const byStatus: Record<string, number> = {};
+  for (const t of b.tasks) byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
+  const stale = b.tasks.filter((t) => t.stale).length;
+  console.log(`org: ${org}`);
+  console.log(`agents: ${b.agents.length}`);
+  console.log(`tasks:  ${b.tasks.length}  ${JSON.stringify(byStatus)}`);
+  console.log(`stale:  ${stale}`);
+}
+
+async function cmdRetire(agentId: string): Promise<void> {
+  if (!agentId) return console.log("usage: lanchu retire <agentId>");
+  await orgOf();
+  const r = (await post("/agent/retire", { agentId })) as {
+    retired: boolean;
+    blockedBy: { id: string; title: string }[];
+  };
+  if (r.retired) return console.log(`Retired ${agentId}.`);
+  console.log("Blocked — open tasks must be handed off first:");
+  for (const t of r.blockedBy) console.log(`  • ${t.id}  ${t.title}`);
+  console.log("\nUse `lanchu task reassign <id> <agent>` or `lanchu task release <id>`.");
+}
+
+async function cmdTask(sub: string, id: string, toAgent?: string): Promise<void> {
+  await orgOf();
+  if (sub === "release") {
+    if (!id) return console.log("usage: lanchu task release <id>");
+    console.log(JSON.stringify(await post("/task/release", { taskId: id }), null, 2));
+  } else if (sub === "reassign") {
+    if (!id || !toAgent) return console.log("usage: lanchu task reassign <id> <agentId>");
+    console.log(JSON.stringify(await post("/task/reassign", { taskId: id, toAgentId: toAgent }), null, 2));
+  } else {
+    console.log("usage: lanchu task <release|reassign> ...");
+  }
+}
+
+async function cmdStop(): Promise<void> {
+  if (!(await serverUp())) return console.log("server not running");
+  await post("/shutdown", {});
+  console.log("server stopped");
+}
+
+function cmdPanel(): void {
+  console.log(`Open the panel in your browser: ${baseUrl()}`);
+}
+
 function cmdHelp(): void {
   console.log(`lanchu — control & trust layer for your AI agents
 
 Usage:
-  lanchu "<objective>"          onboard/resume an agent for an objective
-  lanchu init                   set org/project for this directory
-  lanchu serve                  run the local server (foreground)
-  lanchu doctor                 environment checks
-  lanchu agents | tasks         list agents / tasks (JSON)
+  lanchu "<objective>"              onboard/resume an agent for an objective
+  lanchu init                       set org/project for this directory
+  lanchu serve                      run the local server (foreground)
+  lanchu stop                       stop the background server
+  lanchu doctor                     environment checks
+  lanchu agents | tasks             list agents / tasks (JSON)
+  lanchu roles | stats              list roles / local stats
+  lanchu retire <agentId>           safe retirement (handoff enforced)
+  lanchu task release <id>          supervisor override: release a task
+  lanchu task reassign <id> <agent> supervisor override: reassign a task
+  lanchu panel                      print the panel URL
   lanchu help | version
 
 Onboard flags:
@@ -201,9 +281,25 @@ async function main(): Promise<void> {
     case "init":
       return cmdInit();
     case "agents":
+    case "ls":
       return cmdBoard("agents");
     case "tasks":
       return cmdBoard("tasks");
+    case "roles":
+      return cmdRoles();
+    case "stats":
+      return cmdStats();
+    case "stop":
+      return cmdStop();
+    case "panel":
+    case "open":
+      return cmdPanel();
+    case "retire":
+      return cmdRetire(positional()[1] ?? "");
+    case "task": {
+      const p = positional();
+      return cmdTask(p[1] ?? "", p[2] ?? "", p[3]);
+    }
     default:
       // Anything else is treated as an objective.
       return cmdOnboard(positional().join(" "));
