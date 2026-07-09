@@ -26,6 +26,16 @@ Estado: 🔴 bloqueante · 🟡 importante · 🟢 menor / se puede fijar por de
 - **B3 ✅** — `tokens`/coste marcado como **autoreportado** (Lanchu no mide).
 - **D1 ✅** — Explícito: *operador* semi-técnico monta; *supervisor* no-técnico observa.
 - **D2 ✅** — Copy ajustado; "empresa entera" queda como roadmap (backend remoto).
+- **C1 ✅** — Esquema SQLite completo en [`SCHEMA.md`](./SCHEMA.md).
+- **C2 ✅** — Comandos CLI + selección de org/proyecto (`.lanchu/config.json`, estilo
+  git) y rol (flag/interactivo/comodín) en [`CLI.md`](./CLI.md).
+- **C3 ✅** — El launcher cablea el cliente MCP (token en `Authorization`); el agente lee
+  su objetivo/rol/tareas de `lanchu://me`. En [`CLI.md`](./CLI.md).
+- **C6 ✅** — Panel/servidor: puerto 4319, auto-arranque, rutas `env-paths`, seguridad
+  local (token en MCP, panel local sin auth). En [`CLI.md`](./CLI.md) §7.
+
+**Quedan abiertas:** **C4** (umbral/UX de tareas *stale*) y **C5** (nudge de docs) — ambas
+son de comportamiento, no bloquean el scaffold.
 
 ---
 
