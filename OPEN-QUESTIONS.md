@@ -34,8 +34,13 @@ Estado: 🔴 bloqueante · 🟡 importante · 🟢 menor / se puede fijar por de
 - **C6 ✅** — Panel/servidor: puerto 4319, auto-arranque, rutas `env-paths`, seguridad
   local (token en MCP, panel local sin auth). En [`CLI.md`](./CLI.md) §7.
 
-**Quedan abiertas:** **C4** (umbral/UX de tareas *stale*) y **C5** (nudge de docs) — ambas
-son de comportamiento, no bloquean el scaffold.
+- **C4 ✅** — Tareas *stale*: señales *reservada*/*stale* (umbral `LANCHU_STALE_HOURS`,
+  def. 24h), sin auto-liberar; override del supervisor `task release`/`task reassign`
+  (auditado). En [`CLI.md`](./CLI.md) §8 y [`SCHEMA.md`](./SCHEMA.md) §5.
+- **C5 ✅** — Docs: *nudge* al cerrar tarea + observabilidad en el panel (objetivos sin
+  docs tocadas). Promesa honesta "viva y trazable". En [`CLI.md`](./CLI.md) §8.
+
+**Todo cerrado.** No quedan preguntas abiertas bloqueantes. Listo para el scaffold del v0.
 
 ---
 

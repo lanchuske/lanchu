@@ -246,9 +246,13 @@ UPDATE session SET ended_at=:now WHERE agent_id=:agent_id AND ended_at IS NULL;
 
 ## 5. Detalles que este esquema deja listos (o señala)
 
-- **Idle "zombie" (C4):** `claimed_at` + `updated_at` permiten marcar una tarea como
-  *stale* (dueño idle y sin cambios desde hace X). **v0: no auto-liberar**; el panel la
-  marca y el supervisor decide. (Política, no columna nueva.)
+- **Idle "zombie" (C4):** dos señales **derivadas** (no columnas nuevas):
+  - *reservada* = `owner_agent_id` no nulo y su `agent.state='idle'`.
+  - *stale* = reservada **y** `updated_at` más viejo que `LANCHU_STALE_HOURS` (def. 24h).
+
+  **v0: no auto-liberar.** El panel/`lanchu tasks` las marcan; el supervisor usa
+  `task release`/`task reassign` (override). Esos overrides se auditan con
+  `event.data.override = true` (actor = supervisor, no el dueño).
 - **Multi-org/proyecto:** el esquema soporta varias orgs y proyectos. **Cómo elige el
   launcher la org/proyecto y el rol de un agente nuevo** sigue abierto (C2/C3).
 - **Docs siempre al día (C5):** hay `doc` + trazabilidad vía `event`. El *mecanismo* de

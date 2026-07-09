@@ -102,7 +102,7 @@ Enforcement a nivel de SO es **no-goal**.
 
 | URI | Contenido | Se actualiza cuando… |
 |-----|-----------|----------------------|
-| `lanchu://board` | Agentes (estado), actividad, tareas. | cualquier `agent.*` / `task.*`. |
+| `lanchu://board` | Agentes (estado), actividad, tareas; incluye señales de tareas **stale** (C4) y de objetivos que cerraron tareas **sin tocar docs** (C5). | cualquier `agent.*` / `task.*`. |
 | `lanchu://agents` | Agentes durables de la org y su estado. | cambia el ciclo de vida. |
 | `lanchu://tasks/mine` | Tareas del agente. | cambia una tarea suya. |
 | `lanchu://tasks/available` | Tareas cuyo `tags ⊆ allowed_tags` del rol. | se crea/libera/reclama una tarea. |
@@ -137,7 +137,7 @@ respaldo.
 | `task.create` | `title`, `tags`, `deps?` | El agente estructura su plan. Rechazada si `tags ⊄ allowed_tags`. Emite `task.created`. |
 | `task.check_scope` | `id` | `yours` / `someone_else` / `out_of_role`. |
 | `task.claim` | `id`, `workspace?` | **Lock atómico** + chequeo de rol. Falla si tomada o fuera de rol. Emite `task.claimed`. |
-| `task.update` | `id`, `status`, `note?` | `done` desbloquea dependientes. Emite `task.started/blocked/completed`. |
+| `task.update` | `id`, `status`, `note?` | `done` desbloquea dependientes y **la respuesta incluye un *nudge*** para actualizar el doc relevante (C5). Emite `task.started/blocked/completed`. |
 | `task.release` | `id` | Vuelve al pool. Emite `task.released`. |
 | `task.reassign` | `id`, `to_agent` | Handoff (usado en retiro seguro). Emite `task.reassigned`. |
 | `task.handoff` | `id`, `note` | Handoff explícito con nota, enrutado por Lanchu (logueado). Emite `task.handoff`. |

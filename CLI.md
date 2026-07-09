@@ -143,7 +143,9 @@ las tareas viven en `lanchu://me`, no en el prompt.
 |---------|----------|
 | `lanchu init` | Inicializa org/proyecto para este directorio (escribe `.lanchu/config.json`). |
 | `lanchu agents` (alias `ls`) | Lista agentes: estado, rol, nº de tareas, última actividad. |
-| `lanchu tasks` | Lista tareas: estado, dueño, etiquetas, workspace. |
+| `lanchu tasks` | Lista tareas: estado, dueño, etiquetas, workspace. Marca ⚠ las **stale** (dueño idle sin cambios ≥ umbral). |
+| `lanchu task release <id>` | **Override del supervisor**: suelta una tarea al pool aunque tenga dueño. Auditado. Escape para *stale* sin retirar al agente. |
+| `lanchu task reassign <id> <agente>` | **Override del supervisor**: reasigna una tarea a otro agente. Auditado. |
 | `lanchu retire <agente>` | **Retiro seguro**: si tiene tareas abiertas, exige por cada una reasignar o soltar; luego archiva. |
 | `lanchu roles` | Lista roles y sus etiquetas. |
 | `lanchu roles add <nombre> --tags ui,css` \| `--wildcard` | Crea un rol. |
@@ -169,11 +171,24 @@ las tareas viven en `lanchu://me`, no en el prompt.
 - **Seguridad (v0):** solo `127.0.0.1`. El **MCP exige token** (por sesión) → ningún
   proceso local suplanta a un agente. El **panel es de lectura, sin auth** (local,
   monousuario). Nada escucha fuera de localhost; nada sale de la máquina.
+- **`LANCHU_STALE_HOURS`** (por defecto `24`): a partir de cuántas horas una tarea de un
+  agente idle se marca **stale**.
 
 ---
 
-## 8. Pendientes ligados a la CLI (ver OPEN-QUESTIONS.md)
+## 8. Tareas *stale* y documentación (C4, C5)
 
-- **C4** — umbral y UX de tareas *stale* (idle zombie): cómo se ve en `lanchu tasks`/panel.
-- **C5** — *nudge* de documentación (recordar actualizar el doc al cerrar una tarea).
-- Detalle: retirar/limpiar automáticamente la entrada MCP *scoped* al terminar la sesión.
+- **Stale (C4):** dos señales derivadas — *reservada* (dueño idle, cualquier antigüedad)
+  y *stale* (dueño idle **y** sin cambios ≥ `LANCHU_STALE_HOURS`). Se ven en
+  `lanchu tasks` y en el panel. **No hay auto-liberación**; el supervisor decide con
+  `lanchu task release/reassign` (override, auditado).
+- **Docs (C5):** *nudge + observabilidad*, sin obligar. Al cerrar una tarea (`task.update`
+  → `done`), el resultado **recuerda actualizar el doc relevante**; y el panel muestra si
+  un objetivo cerró tareas **sin tocar documentación** (⚠), para que el supervisor lo
+  vea. La promesa honesta es *documentación viva y trazable*, no garantizada.
+
+---
+
+## 9. Detalle menor pendiente
+
+- Retirar/limpiar automáticamente la entrada MCP *scoped* al terminar la sesión.
