@@ -1,14 +1,17 @@
 import http from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { HOST, mcpUrl, port } from "../config.js";
+import { bus } from "../core/events.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
-import { dropContext, getContext, putContext } from "./context.js";
+import { getContext, putContext } from "./context.js";
 import { buildMcpServer } from "./mcp.js";
 import { panelHtml } from "./panel.js";
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
+/** Maps an MCP session id to its agent, so we can refresh presence on each request. */
+const sessionAgent = new Map<string, string>();
 
 function bearer(header: string | undefined): string | null {
   if (!header) return null;
@@ -100,9 +103,11 @@ function handleSession(body: SessionRequest, res: http.ServerResponse): void {
 async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const sid = req.headers["mcp-session-id"] as string | undefined;
 
-  // Existing session: route to its transport.
+  // Existing session: route to its transport and refresh presence.
   if (sid && transports.has(sid)) {
     const transport = transports.get(sid)!;
+    const agentId = sessionAgent.get(sid);
+    if (agentId) store.touchSeen(agentId);
     const body = req.method === "POST" ? await readJson(req) : undefined;
     await transport.handleRequest(req, res, body);
     return;
@@ -122,21 +127,48 @@ async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): P
     sessionIdGenerator: () => uuid(),
     onsessioninitialized: (id) => {
       transports.set(id, transport);
+      sessionAgent.set(id, ctx.agentId);
     },
     onsessionclosed: (id) => {
       transports.delete(id);
+      sessionAgent.delete(id);
     },
   });
   const { server, dispose } = buildMcpServer(ctx);
   transport.onclose = () => {
     dispose();
-    if (transport.sessionId) transports.delete(transport.sessionId);
+    if (transport.sessionId) {
+      transports.delete(transport.sessionId);
+      sessionAgent.delete(transport.sessionId);
+    }
   };
 
   await server.connect(transport);
+  store.touchSeen(ctx.agentId); // presence heartbeat on connect
 
   const body = await readJson(req);
   await transport.handleRequest(req, res, body);
+}
+
+/** Server-Sent Events: push a tick to the panel whenever an org event fires. */
+function handleEvents(orgId: string, res: http.ServerResponse): void {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+  res.write(": connected\n\n");
+  const unsub = bus.onEvent((ev) => {
+    if (ev.org_id !== orgId) return;
+    res.write(`data: ${JSON.stringify({ type: ev.type, at: ev.created_at })}\n\n`);
+  });
+  const keepalive = setInterval(() => res.write(": ping\n\n"), 25_000);
+  const close = () => {
+    clearInterval(keepalive);
+    unsub();
+  };
+  res.on("close", close);
+  res.on("error", close);
 }
 
 export function createServer(): http.Server {
@@ -182,6 +214,35 @@ export function createServer(): http.Server {
         if (!orgName) return sendJson(res, 400, { error: "org required" });
         const org = store.getOrCreateOrg(orgName);
         return sendJson(res, 200, store.listRoles(org.id));
+      }
+
+      if (url.pathname === "/api/audit" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const limit = Number.parseInt(url.searchParams.get("limit") ?? "60", 10) || 60;
+        const org = store.getOrCreateOrg(orgName);
+        return sendJson(res, 200, store.listAuditEvents(org.id, limit));
+      }
+
+      if (url.pathname === "/api/docs" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        const docs = store.listDocs(org.id).map((d) => ({
+          id: d.id,
+          title: d.title,
+          updated_at: d.updated_at,
+          updated_by: d.updated_by_agent_id ? (store.getAgent(d.updated_by_agent_id)?.name ?? null) : null,
+          chars: d.content.length,
+        }));
+        return sendJson(res, 200, docs);
+      }
+
+      if (url.pathname === "/events" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        return handleEvents(org.id, res);
       }
 
       // ── supervisor actions ──

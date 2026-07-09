@@ -103,7 +103,7 @@ OS-level enforcement is a **non-goal**.
 
 | URI | Content | Updates when… |
 |-----|-----------|----------------------|
-| `lanchu://board` | Agents (state), activity, tasks; includes signals for **stale** tasks (C4) and for objectives that closed tasks **without touching docs** (C5). | any `agent.*` / `task.*`. |
+| `lanchu://board` | Agents (state, role, objective, open count, workspace) and tasks, with derived **stale**/**reserved** signals (C4). Doc activity is visible in the audit log and docs view. | any `agent.*` / `task.*`. |
 | `lanchu://agents` | The org's durable agents and their state. | the lifecycle changes. |
 | `lanchu://tasks/mine` | The agent's tasks. | one of its tasks changes. |
 | `lanchu://tasks/available` | Tasks whose `tags ⊆ allowed_tags` of the role. | a task is created/released/claimed. |

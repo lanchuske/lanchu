@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { staleHours } from "../config.js";
+import { activeWindowMs, staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
@@ -246,6 +246,17 @@ export function setAgentState(agentId: string, state: AgentState): void {
     .run(state, retiredAt, agentId);
 }
 
+/** Update only the last-seen timestamp (presence heartbeat), keeping the summary. */
+export function touchSeen(agentId: string): void {
+  db().prepare("UPDATE agent SET last_activity_at = ? WHERE id = ?").run(nowIso(), agentId);
+}
+
+/** Presence: an agent is active if it was seen within the active window. */
+export function isRecentlyActive(agent: Agent): boolean {
+  if (!agent.last_activity_at) return false;
+  return Date.now() - new Date(agent.last_activity_at).getTime() < activeWindowMs();
+}
+
 export function touchActivity(agentId: string, summary: string): void {
   db()
     .prepare("UPDATE agent SET last_activity = ?, last_activity_at = ? WHERE id = ?")
@@ -271,7 +282,7 @@ export function findReuseCandidates(
   const wanted = new Set(keywords(objective));
   if (wanted.size === 0) return [];
 
-  const idle = listAgents(orgId).filter((a) => a.state === "idle");
+  const idle = listAgents(orgId).filter((a) => a.state !== "retired" && !isRecentlyActive(a));
   const scored = idle.map((agent) => {
     const footprint = new Set<string>(keywords(agent.objective ?? ""));
     const tasks = db()
@@ -307,6 +318,7 @@ export function openSession(agentId: string, client?: string): { id: string; tok
     .prepare("INSERT INTO session(id, agent_id, token, client, started_at) VALUES (?,?,?,?,?)")
     .run(id, agentId, token, client ?? null, nowIso());
   setAgentState(agentId, "active");
+  touchSeen(agentId); // fresh presence on registration
   const agent = getAgent(agentId);
   if (agent) {
     recordEvent({
@@ -728,6 +740,7 @@ export function upsertDoc(input: {
       subject_id: existing.id,
       data: { title: input.title },
     });
+    touchActivity(input.agentId, `updated doc: ${input.title}`);
     return getDoc(existing.id)!;
   }
 
@@ -745,6 +758,7 @@ export function upsertDoc(input: {
     subject_id: id,
     data: { title: input.title },
   });
+  touchActivity(input.agentId, `created doc: ${input.title}`);
   return getDoc(id)!;
 }
 
@@ -763,11 +777,56 @@ export type BoardTask = Task & {
   reserved: boolean;
   stale: boolean;
   owner_state: AgentState | null;
+  owner_name: string | null;
+};
+
+/** Agent plus derived details for the panel. */
+export type BoardAgent = Agent & {
+  role_name: string | null;
+  open_tasks: number;
+  workspace: string | null;
 };
 
 export interface BoardSnapshot {
-  agents: Agent[];
+  agents: BoardAgent[];
   tasks: BoardTask[];
+}
+
+export interface AuditEvent {
+  id: number;
+  type: string;
+  actor_name: string | null;
+  subject_kind: string | null;
+  subject_id: string | null;
+  workspace: string | null;
+  tokens: number | null;
+  outcome: string;
+  data: Record<string, unknown> | null;
+  created_at: string;
+}
+
+/** Recent audit/event log for an org, newest first (with actor names resolved). */
+export function listAuditEvents(orgId: string, limit = 60): AuditEvent[] {
+  const rows = db()
+    .prepare(
+      `SELECT e.id, e.type, a.name AS actor_name, e.subject_kind, e.subject_id,
+              e.workspace, e.tokens, e.outcome, e.data, e.created_at
+       FROM event e LEFT JOIN agent a ON a.id = e.actor_agent_id
+       WHERE e.org_id = ? ORDER BY e.id DESC LIMIT ?`,
+    )
+    .all(orgId, limit) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: Number(r.id),
+    type: r.type as string,
+    actor_name: (r.actor_name as string) ?? null,
+    subject_kind: (r.subject_kind as string) ?? null,
+    subject_id: (r.subject_id as string) ?? null,
+    workspace: (r.workspace as string) ?? null,
+    tokens: (r.tokens as number) ?? null,
+    outcome: r.outcome as string,
+    data: r.data ? (JSON.parse(r.data as string) as Record<string, unknown>) : null,
+    created_at: r.created_at as string,
+  }));
 }
 
 function ageHours(iso: string | null): number {
@@ -776,22 +835,42 @@ function ageHours(iso: string | null): number {
 }
 
 export function boardSnapshot(orgId: string): BoardSnapshot {
-  const agents = listAgents(orgId).filter((a) => a.state !== "retired");
-  const stateById = new Map(agents.map((a) => [a.id, a.state] as const));
+  // Presence is derived from recency of activity (robust; no reliance on
+  // detecting transport disconnects). Retired agents stay retired.
+  const rawAgents = listAgents(orgId)
+    .filter((a) => a.state !== "retired")
+    .map((a) => ({ ...a, state: (isRecentlyActive(a) ? "active" : "idle") as AgentState }));
+  const stateById = new Map(rawAgents.map((a) => [a.id, a.state] as const));
+  const nameById = new Map(rawAgents.map((a) => [a.id, a.name] as const));
+  const roleName = new Map<string, string | null>();
   const projects = db()
     .prepare("SELECT id FROM project WHERE org_id = ?")
     .all(orgId) as { id: string }[];
   const threshold = staleHours();
+  const isOpen = (s: TaskStatus) => s === "claimed" || s === "in_progress" || s === "blocked";
 
   const tasks: BoardTask[] = projects
     .flatMap((p) => listTasks(p.id))
     .map((t) => {
       const ownerState = t.owner_agent_id ? (stateById.get(t.owner_agent_id) ?? "retired") : null;
-      const open = t.status === "claimed" || t.status === "in_progress" || t.status === "blocked";
-      const reserved = open && ownerState === "idle";
+      const reserved = isOpen(t.status) && ownerState === "idle";
       const stale = reserved && ageHours(t.updated_at) >= threshold;
-      return { ...t, owner_state: ownerState, reserved, stale };
+      const owner_name = t.owner_agent_id ? (nameById.get(t.owner_agent_id) ?? null) : null;
+      return { ...t, owner_state: ownerState, reserved, stale, owner_name };
     });
+
+  const agents: BoardAgent[] = rawAgents.map((a) => {
+    if (!roleName.has(a.role_id)) roleName.set(a.role_id, getRole(a.role_id)?.name ?? null);
+    const owned = tasks.filter((t) => t.owner_agent_id === a.id);
+    const openOwned = owned.filter((t) => isOpen(t.status));
+    const wsTask = openOwned.find((t) => t.workspace) ?? owned.find((t) => t.workspace);
+    return {
+      ...a,
+      role_name: roleName.get(a.role_id) ?? null,
+      open_tasks: openOwned.length,
+      workspace: wsTask?.workspace ?? null,
+    };
+  });
 
   return { agents, tasks };
 }

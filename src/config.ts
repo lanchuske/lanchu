@@ -43,6 +43,13 @@ export function staleHours(): number {
   return Number.isFinite(n) && n > 0 ? n : 24;
 }
 
+/** An agent counts as "active" if it was seen within this window (presence). */
+export function activeWindowMs(): number {
+  const s = process.env.LANCHU_ACTIVE_SECONDS;
+  const n = s ? Number.parseInt(s, 10) : 45;
+  return (Number.isFinite(n) && n > 0 ? n : 45) * 1000;
+}
+
 export function baseUrl(): string {
   return `http://${HOST}:${port()}`;
 }

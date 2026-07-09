@@ -98,3 +98,25 @@ test("doc upsert creates then updates", () => {
   assert.equal(created.id, updated.id);
   assert.equal(updated.content, "b");
 });
+
+test("audit log records events with resolved actor names", () => {
+  const { org, project, agent } = setup("acme7");
+  const t = store.createTask({ projectId: project.id, orgId: org.id, agentId: agent.id, title: "audit me", tags: ["ui"] });
+  store.claimTask({ agentId: agent.id, taskId: t.id });
+  const audit = store.listAuditEvents(org.id, 50);
+  assert.ok(audit.length >= 2);
+  assert.ok(audit.some((e) => e.type === "task.claimed" && e.actor_name === agent.name));
+});
+
+test("board enriches agents (role, open count, workspace) and task owner name", () => {
+  const { org, project, agent } = setup("acme8");
+  const t = store.createTask({ projectId: project.id, orgId: org.id, agentId: agent.id, title: "enrich", tags: ["ui"] });
+  store.claimTask({ agentId: agent.id, taskId: t.id, workspace: "feat/x" });
+  const b = store.boardSnapshot(org.id);
+  const ba = b.agents.find((a) => a.id === agent.id);
+  assert.equal(ba.role_name, "frontend");
+  assert.equal(ba.open_tasks, 1);
+  assert.equal(ba.workspace, "feat/x");
+  const bt = b.tasks.find((x) => x.id === t.id);
+  assert.equal(bt.owner_name, agent.name);
+});
