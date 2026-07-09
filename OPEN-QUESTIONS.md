@@ -6,12 +6,32 @@
 > *implementación*. Se resuelve y se cierra antes del v0.
 
 Estado: 🔴 bloqueante · 🟡 importante · 🟢 menor / se puede fijar por defecto.
+✅ = resuelto e integrado en DEFINITION/ARCHITECTURE.
 
 ---
 
-## A. Huecos de fondo (bloquean la construcción)
+## RESUELTAS (integradas en los documentos)
 
-### A1. 🔴 ¿Cómo se relacionan *objetivo*, *tarea* y *rol*?
+- **A1 ✅** — El agente descompone su objetivo en tareas con `task.create` (Lanchu no
+  descompone; sigue desopinado). El objetivo deja de tener el `t=0` vacío.
+- **A2 ✅** — Roles *custom* con etiquetas: `rol = {nombre, allowed_tags}`; tareas con
+  `tags`; regla de alcance `T.tags ⊆ R.allowed_tags`. Rol `*` = comodín.
+- **A3 ✅** — Enmarcado honesto: **límites cooperativos + auditables**. Bloqueo duro solo
+  sobre acciones mediadas por Lanchu; sandbox del SO = **no-goal**.
+- **A4 ✅** — Identidad por **token de sesión** del launcher; presencia = launcher vivo;
+  actividad derivada de **tool-calls recientes** (no heartbeat del agente).
+- **B1 ✅** — Eventos del ciclo de vida renombrados y alineados (`agent.created/reused/
+  active/idle/retired`).
+- **B2 ✅** — `branch` → `workspace` (genérico; git es un caso).
+- **B3 ✅** — `tokens`/coste marcado como **autoreportado** (Lanchu no mide).
+- **D1 ✅** — Explícito: *operador* semi-técnico monta; *supervisor* no-técnico observa.
+- **D2 ✅** — Copy ajustado; "empresa entera" queda como roadmap (backend remoto).
+
+---
+
+## A. Huecos de fondo (RESUELTOS — ver arriba)
+
+### A1. ✅ ¿Cómo se relacionan *objetivo*, *tarea* y *rol*?
 El flujo es `npx lanchu 'arregla el login'`. Pero:
 - Las **tareas** son la unidad de coordinación (claim, no-duplicar) y de alcance. Al
   escribir un objetivo, **todavía no hay ninguna tarea**. ¿El objetivo *se convierte* en
