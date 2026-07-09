@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { bus } from "../core/events.js";
 import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
 import type { SessionContext } from "./context.js";
@@ -26,12 +27,33 @@ function fail(err: unknown) {
   };
 }
 
+export interface BuiltServer {
+  server: McpServer;
+  dispose: () => void;
+}
+
 /** Builds an MCP server bound to a session (a specific agent). */
-export function buildMcpServer(ctx: SessionContext): McpServer {
+export function buildMcpServer(ctx: SessionContext): BuiltServer {
   const server = new McpServer(
     { name: "lanchu", version: "0.0.1" },
-    { instructions: INSTRUCTIONS },
+    {
+      instructions: INSTRUCTIONS,
+      capabilities: { resources: { subscribe: true, listChanged: true } },
+    },
   );
+
+  // Live MCP notifications: turn org events into resources/updated pushes.
+  const unsubscribe = bus.onEvent((ev) => {
+    if (ev.org_id !== ctx.orgId) return;
+    const uris = ["lanchu://board"];
+    if (ev.actor_agent_id === ctx.agentId) uris.push("lanchu://me");
+    if (ev.type.startsWith("task.")) uris.push("lanchu://tasks/mine", "lanchu://tasks/available");
+    for (const uri of uris) {
+      server.server.sendResourceUpdated({ uri }).catch(() => {
+        /* transport may be closing */
+      });
+    }
+  });
 
   // ── Resources ───────────────────────────────────────────────
   server.registerResource(
@@ -64,6 +86,44 @@ export function buildMcpServer(ctx: SessionContext): McpServer {
           uri: "lanchu://board",
           mimeType: "application/json",
           text: JSON.stringify(store.boardSnapshot(ctx.orgId), null, 2),
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    "tasks-mine",
+    "lanchu://tasks/mine",
+    { title: "My tasks", mimeType: "application/json" },
+    async () => ({
+      contents: [
+        {
+          uri: "lanchu://tasks/mine",
+          mimeType: "application/json",
+          text: JSON.stringify(
+            store.listTasks(ctx.projectId).filter((t) => t.owner_agent_id === ctx.agentId),
+            null,
+            2,
+          ),
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    "tasks-available",
+    "lanchu://tasks/available",
+    { title: "Available tasks", mimeType: "application/json" },
+    async () => ({
+      contents: [
+        {
+          uri: "lanchu://tasks/available",
+          mimeType: "application/json",
+          text: JSON.stringify(
+            store.listTasks(ctx.projectId, "available"),
+            null,
+            2,
+          ),
         },
       ],
     }),
@@ -257,5 +317,5 @@ export function buildMcpServer(ctx: SessionContext): McpServer {
     },
   );
 
-  return server;
+  return { server, dispose: unsubscribe };
 }

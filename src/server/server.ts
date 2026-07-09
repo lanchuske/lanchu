@@ -127,11 +127,12 @@ async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): P
       transports.delete(id);
     },
   });
+  const { server, dispose } = buildMcpServer(ctx);
   transport.onclose = () => {
+    dispose();
     if (transport.sessionId) transports.delete(transport.sessionId);
   };
 
-  const server = buildMcpServer(ctx);
   await server.connect(transport);
 
   const body = await readJson(req);
