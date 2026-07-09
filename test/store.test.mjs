@@ -108,6 +108,27 @@ test("audit log records events with resolved actor names", () => {
   assert.ok(audit.some((e) => e.type === "task.claimed" && e.actor_name === agent.name));
 });
 
+test("webhooks CRUD and event filtering", () => {
+  const { org } = setup("acme9");
+  const w = store.createWebhook(org.id, "http://example.test/hook", ["task.created"], "s3cret");
+  assert.equal(store.listWebhooks(org.id).length, 1);
+  assert.equal(store.webhooksForEvent(org.id, "task.created").length, 1);
+  assert.equal(store.webhooksForEvent(org.id, "doc.updated").length, 0);
+  const wild = store.createWebhook(org.id, "http://example.test/all", ["*"]);
+  assert.equal(store.webhooksForEvent(org.id, "doc.updated").length, 1);
+  store.deleteWebhook(w.id);
+  store.deleteWebhook(wild.id);
+  assert.equal(store.listWebhooks(org.id).length, 0);
+});
+
+test("intake creates an unassigned task with no scope check", () => {
+  const { org, project } = setup("acme10");
+  const t = store.createTaskSystem({ orgId: org.id, projectId: project.id, title: "from form", tags: ["backend"] });
+  assert.equal(t.status, "available");
+  assert.equal(t.owner_agent_id, null);
+  assert.deepEqual(t.tags, ["backend"]);
+});
+
 test("board enriches agents (role, open count, workspace) and task owner name", () => {
   const { org, project, agent } = setup("acme8");
   const t = store.createTask({ projectId: project.id, orgId: org.id, agentId: agent.id, title: "enrich", tags: ["ui"] });

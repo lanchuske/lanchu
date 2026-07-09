@@ -116,6 +116,15 @@ CREATE TABLE IF NOT EXISTS event (
   created_at     TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS webhook (
+  id         TEXT PRIMARY KEY,
+  org_id     TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  events     TEXT NOT NULL,
+  secret     TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);

@@ -1,7 +1,7 @@
 {
   "name": "lanchu",
-  "version": "0.3.1",
-  "description": "Capa de control y confianza para coordinar múltiples agentes de IA. MCP, 100% local, open source.",
+  "version": "0.3.2",
+  "description": "Control and trust layer for coordinating multiple AI agents. MCP, 100% local, open source.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/lanchuske/lanchu",

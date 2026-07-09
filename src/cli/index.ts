@@ -223,6 +223,26 @@ async function cmdRolesAdd(): Promise<void> {
   console.log("role:", JSON.stringify(r));
 }
 
+async function cmdWebhooks(): Promise<void> {
+  const org = await orgOf();
+  const sub = positional()[1];
+  if (sub === "add") {
+    const target = positional()[2];
+    if (!target) return console.log("usage: lanchu webhooks add <url> --events a,b [--secret s]");
+    const evs = flag("events");
+    const events = evs ? evs.split(",").map((x) => x.trim()).filter(Boolean) : ["*"];
+    console.log(JSON.stringify(await post("/api/webhooks", { org, url: target, events, secret: flag("secret") })));
+  } else if (sub === "rm" || sub === "remove") {
+    const id = positional()[2];
+    if (!id) return console.log("usage: lanchu webhooks rm <id>");
+    await post("/api/webhooks/delete", { id });
+    console.log("removed", id);
+  } else {
+    const res = await fetch(`${baseUrl()}/api/webhooks?org=${encodeURIComponent(org)}`);
+    console.log(JSON.stringify(await res.json(), null, 2));
+  }
+}
+
 async function cmdStats(): Promise<void> {
   const org = await orgOf();
   const res = await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`);
@@ -447,6 +467,7 @@ Usage:
   lanchu retire <agentId>           safe retirement (handoff enforced)
   lanchu task release <id>          supervisor override: release a task
   lanchu task reassign <id> <agent> supervisor override: reassign a task
+  lanchu webhooks [add <url> --events a,b | rm <id>]   outbound webhooks (HMAC-signed)
   lanchu panel                      open the panel in your browser
   lanchu upgrade                    check npm for a newer version
   lanchu help | version
@@ -490,6 +511,8 @@ async function main(): Promise<void> {
       return cmdBoard("tasks");
     case "roles":
       return positional()[1] === "add" ? cmdRolesAdd() : cmdRoles();
+    case "webhooks":
+      return cmdWebhooks();
     case "stats":
       return cmdStats();
     case "stop":

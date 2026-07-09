@@ -778,6 +778,75 @@ export function upsertDoc(input: {
   return getDoc(id)!;
 }
 
+// ───────────────────────── webhooks (outbound) ─────────────────────────
+
+export interface Webhook {
+  id: string;
+  org_id: string;
+  url: string;
+  events: string[]; // event types, or ["*"]
+  secret: string | null;
+  created_at: string;
+}
+
+function loadWebhook(row: Record<string, unknown>): Webhook {
+  return {
+    id: row.id as string,
+    org_id: row.org_id as string,
+    url: row.url as string,
+    events: String(row.events).split(",").filter(Boolean),
+    secret: (row.secret as string) ?? null,
+    created_at: row.created_at as string,
+  };
+}
+
+export function createWebhook(orgId: string, url: string, events: string[], secret?: string): Webhook {
+  const id = uuid();
+  db()
+    .prepare("INSERT INTO webhook(id, org_id, url, events, secret, created_at) VALUES (?,?,?,?,?,?)")
+    .run(id, orgId, url, (events.length ? events : ["*"]).join(","), secret ?? null, nowIso());
+  return loadWebhook(db().prepare("SELECT * FROM webhook WHERE id = ?").get(id) as Record<string, unknown>);
+}
+
+export function listWebhooks(orgId: string): Webhook[] {
+  return (db().prepare("SELECT * FROM webhook WHERE org_id = ? ORDER BY created_at").all(orgId) as Record<string, unknown>[]).map(loadWebhook);
+}
+
+export function deleteWebhook(id: string): void {
+  db().prepare("DELETE FROM webhook WHERE id = ?").run(id);
+}
+
+/** Webhooks in this org subscribed to the given event type (or to '*'). */
+export function webhooksForEvent(orgId: string, type: string): Webhook[] {
+  return listWebhooks(orgId).filter((w) => w.events.includes("*") || w.events.includes(type));
+}
+
+// ───────────────────────── inbound intake ─────────────────────────
+
+/** Create an unassigned task from a trusted external source (no agent, no scope check). */
+export function createTaskSystem(input: { orgId: string; projectId: string; title: string; tags?: string[] }): Task {
+  const id = nextTaskId();
+  const now = nowIso();
+  db()
+    .prepare(
+      "INSERT INTO task(id, project_id, title, status, created_at, updated_at) VALUES (?,?,?, 'available', ?, ?)",
+    )
+    .run(id, input.projectId, input.title, now, now);
+  for (const tag of input.tags ?? []) {
+    db().prepare("INSERT OR IGNORE INTO task_tag(task_id, tag) VALUES (?,?)").run(id, tag);
+  }
+  recordEvent({
+    org_id: input.orgId,
+    project_id: input.projectId,
+    type: "task.created",
+    actor_agent_id: null,
+    subject_kind: "task",
+    subject_id: id,
+    data: { title: input.title, source: "intake" },
+  });
+  return getTask(id)!;
+}
+
 // ───────────────────────── helpers ─────────────────────────
 
 export function orgIdForProject(projectId: string): string {

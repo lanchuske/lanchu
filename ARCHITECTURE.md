@@ -188,11 +188,17 @@ audit log.
 
 ---
 
-## 8. Out of scope for v0 (roadmap)
+## 8. Webhooks (shipped)
 
-- **Webhooks** (outgoing with HMAC signature; incoming for recurring tasks/functions).
-- **Remote backend**, **recurring functions**, **skills**, **advanced limits** (§10
-  of the definition). Documented so as not to close the door; they do **not** go into v0.
+- **Outbound** — `POST /api/webhooks` registers a URL + event filter (or `*`) + optional
+  secret. Every matching event is `POST`ed to the URL, signed with **HMAC-SHA256** in
+  `x-lanchu-signature`, at-least-once with backoff. Manage via `lanchu webhooks`.
+- **Inbound** — `POST /hooks/intake` creates an unassigned task from a trusted external
+  source (optional `x-lanchu-intake-token` when `LANCHU_INTAKE_SECRET` is set).
+
+### Still roadmap
+- **Remote backend**, **recurring functions**, **skills**, **advanced limits** (§10 of the
+  definition). Documented so as not to close the door; they do **not** go into v0.
 
 ---
 

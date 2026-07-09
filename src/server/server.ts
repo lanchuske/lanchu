@@ -8,6 +8,7 @@ import { ScopeError } from "../core/types.js";
 import { getContext, putContext } from "./context.js";
 import { buildMcpServer } from "./mcp.js";
 import { panelHtml } from "./panel.js";
+import { startWebhookDelivery } from "./webhooks.js";
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
 /** Maps an MCP session id to its agent, so we can refresh presence on each request. */
@@ -269,6 +270,42 @@ export function createServer(): http.Server {
           store.reassignTask({ taskId: body.taskId, toAgentId: body.toAgentId, override: true }),
         );
       }
+      // ── webhooks (outbound) ──
+      if (url.pathname === "/api/webhooks" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        const hooks = store.listWebhooks(org.id).map((w) => ({ ...w, secret: w.secret ? "set" : null }));
+        return sendJson(res, 200, hooks);
+      }
+      if (url.pathname === "/api/webhooks" && req.method === "POST") {
+        const b = (await readJson(req)) as { org: string; url: string; events?: string[]; secret?: string };
+        if (!b?.org || !b?.url) return sendJson(res, 400, { error: "org and url required" });
+        const org = store.getOrCreateOrg(b.org);
+        const hook = store.createWebhook(org.id, b.url, b.events ?? ["*"], b.secret);
+        return sendJson(res, 200, { ...hook, secret: hook.secret ? "set" : null });
+      }
+      if (url.pathname === "/api/webhooks/delete" && req.method === "POST") {
+        const b = (await readJson(req)) as { id: string };
+        store.deleteWebhook(b.id);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // ── inbound intake: create a task from an external source ──
+      if (url.pathname === "/hooks/intake" && req.method === "POST") {
+        const secret = process.env.LANCHU_INTAKE_SECRET;
+        if (secret && req.headers["x-lanchu-intake-token"] !== secret) {
+          return sendJson(res, 401, { error: "invalid intake token" });
+        }
+        const b = (await readJson(req)) as { org: string; project: string; title: string; tags?: string[] };
+        if (!b?.org || !b?.project || !b?.title) {
+          return sendJson(res, 400, { error: "org, project and title required" });
+        }
+        const org = store.getOrCreateOrg(b.org);
+        const project = store.getOrCreateProject(org.id, b.project);
+        return sendJson(res, 200, store.createTaskSystem({ orgId: org.id, projectId: project.id, title: b.title, tags: b.tags }));
+      }
+
       if (url.pathname === "/shutdown" && req.method === "POST") {
         sendJson(res, 200, { ok: true });
         setTimeout(() => process.exit(0), 50);
@@ -290,6 +327,7 @@ export function createServer(): http.Server {
 }
 
 export function startServer(): Promise<http.Server> {
+  startWebhookDelivery();
   const server = createServer();
   return new Promise((resolve) => {
     server.listen(port(), HOST, () => resolve(server));
