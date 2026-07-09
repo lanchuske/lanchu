@@ -31,16 +31,16 @@ technical— you can *see and trust* what they do.
 When you put several AI agents to work together, two families of pain appear:
 
 **Coordination** — keeping them out of each other's way:
-- 🔁 **Duplicated work.** Two agents solve the same task.
-- 💥 **Conflicts.** Two agents touch the same resource at once.
-- 🤷 **Blind work.** Agent B doesn't know what A did or when it finished.
+- **Duplicated work.** Two agents solve the same task.
+- **Conflicts.** Two agents touch the same resource at once.
+- **Blind work.** Agent B doesn't know what A did or when it finished.
 
 **Governance** — keeping them in their lane so you can trust them:
-- 🚧 **No scope limits.** An agent starts something belonging to another, or outside its role.
-- 🗑️ **Throwaway agents.** Every window creates a new agent from scratch; the
+- **No scope limits.** An agent starts something belonging to another, or outside its role.
+- **Throwaway agents.** Every window creates a new agent from scratch; the
   context is lost and duplicates pile up.
-- 📄 **Documentation that rots.** No one guarantees it reflects what was done.
-- 👀 **Zero visibility and zero trust.** You don't see who did what or what it spent.
+- **Documentation that rots.** No one guarantees it reflects what was done.
+- **Zero visibility and zero trust.** You don't see who did what or what it spent.
 
 Most tools today tackle only **coordination**, and for
 developers. Almost no one treats agents as **durable members of a team**
@@ -94,26 +94,29 @@ You write an **objective** (`npx lanchu 'fix the login'`). From there:
 > Lanchu's.
 
 ### Lifecycle
-```
-   npx lanchu 'fix the login'
-        │
-        ▼
-   is there an agent whose footprint matches this objective?
-        ├── YES → "an agent already touched login (idle, 2 tasks). Reuse?"
-        └── NO  → create agent, choose role, break objective down into tasks
-        │
-        ▼
-   ACTIVE  ◀──── launcher live and connected, working
-        │
-   you close the window (the launcher ends)
-        ▼
-   IDLE   ◀──── still alive; keeps role + reserved tasks + context
-        │
-   you retire it (delete)
-        ▼
-   does it have open tasks?
-        ├── YES → BLOCKS. For each task: reassign to another agent or release to the pool.
-        └── NO → RETIRED (archived; remains in the audit)
+
+On `npx lanchu 'fix the login'`, Lanchu either reuses an idle agent whose footprint
+matches the objective, or creates a new one (choose role, break the objective into tasks).
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE: create / reuse
+    ACTIVE --> IDLE: close window (launcher ends)
+    IDLE --> ACTIVE: reopen / reuse
+    ACTIVE --> Retiring: retire
+    IDLE --> Retiring: retire
+    Retiring --> Blocked: has open tasks
+    Blocked --> ACTIVE: reassign or release each task
+    Retiring --> RETIRED: no open tasks
+    RETIRED --> [*]
+
+    note right of IDLE
+        still alive; keeps role,
+        reserved tasks and context
+    end note
+    note right of RETIRED
+        archived; remains in the audit
+    end note
 ```
 
 ### Reuse-or-create (by objective)
@@ -144,11 +147,15 @@ visible, and scoped**.
 Agents coordinate **through Lanchu's shared state** (tasks, claims,
 docs, events), **not by talking to each other directly**. It's the *blackboard* pattern.
 
-```
-  ❌ Direct (peer-to-peer)           ✅ Mediated (through Lanchu)
-   agentA ──message──▶ agentB         agentA ──▶ [ Lanchu ] ◀── agentB
-   → Lanchu does NOT see it           agentA writes → agentB reads
-   → NOT governable                   Lanchu SEES and CAN limit everything
+```mermaid
+flowchart LR
+    subgraph direct["Direct (peer-to-peer) — not governable"]
+        dA["Agent A"] -->|message| dB["Agent B"]
+    end
+    subgraph mediated["Mediated (through Lanchu) — Lanchu sees and can limit everything"]
+        mA["Agent A"] -->|writes| L["Lanchu"]
+        L -->|reads| mB["Agent B"]
+    end
 ```
 
 If agents coordinated directly there would be a side channel that Lanchu doesn't see or
@@ -232,8 +239,8 @@ panel** shows it in real time.
 ### Telemetry (without breaking "all local")
 | Metric | Source | Own server? |
 |---|---|---|
-| Downloads / adoption by version | npm API | ❌ no |
-| Stars / forks / PRs / issues | GitHub API | ❌ no |
+| Downloads / adoption by version | npm API | No |
+| Stars / forks / PRs / issues | GitHub API | No |
 
 The **runtime usage** metrics (agents created, org size) live only on the
 user's machine and are **deliberately not collected** (they'd break constraint #1).

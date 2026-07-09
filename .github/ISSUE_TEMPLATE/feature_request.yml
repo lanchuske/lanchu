@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a change or addition to Lanchu
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Lanchu does few things well (see DEFINITION.md §3). Proposals that add surface
+        area need a clear case. For larger changes, please open a discussion first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem does this solve? Who is it for (operator, supervisor, agent)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope fit
+      description: How does this fit "few things, done well"? Is it v0 or roadmap?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

@@ -43,17 +43,18 @@
 - **Session** = a live connection tied to an agent via a token. Ephemeral.
 
 ### States
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVE: create / reuse
+    ACTIVE --> IDLE: launcher ends
+    IDLE --> ACTIVE: reopen / reuse
+    ACTIVE --> RETIRED: retire (no open tasks)
+    IDLE --> RETIRED: retire (no open tasks)
+    ACTIVE --> ACTIVE: retire blocked → handoff per task
+    RETIRED --> [*]
 ```
-   create / reuse
-        │
-        ▼
-   ACTIVE ──(launcher ends)──▶ IDLE ──(reopen/reuse)──▶ ACTIVE
-        │                           │
-        └──────── retire ───────────┘
-                     │
-        open tasks? ── YES ─▶ mandatory handoff (reassign/release) per task
-                     └─ NO ─▶ RETIRED (archived; remains in audit)
-```
+
 Events: `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
 `agent.retired`.
 

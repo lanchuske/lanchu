@@ -143,7 +143,7 @@ tasks live in `lanchu://me`, not in the prompt.
 |---------|----------|
 | `lanchu init` | Initializes org/project for this directory (writes `.lanchu/config.json`). |
 | `lanchu agents` (alias `ls`) | Lists agents: status, role, task count, last activity. |
-| `lanchu tasks` | Lists tasks: status, owner, tags, workspace. Flags ⚠ the **stale** ones (idle owner with no changes ≥ threshold). |
+| `lanchu tasks` | Lists tasks: status, owner, tags, workspace. Flags the **stale** ones (idle owner with no changes ≥ threshold). |
 | `lanchu task release <id>` | **Supervisor override**: releases a task back to the pool even if it has an owner. Audited. Escape hatch for *stale* tasks without retiring the agent. |
 | `lanchu task reassign <id> <agent>` | **Supervisor override**: reassigns a task to another agent. Audited. |
 | `lanchu retire <agent>` | **Safe retirement**: if it has open tasks, requires reassigning or releasing each one; then archives. |
@@ -184,7 +184,7 @@ tasks live in `lanchu://me`, not in the prompt.
   `lanchu task release/reassign` (override, audited).
 - **Docs (C5):** *nudge + observability*, without forcing anything. When you close a task (`task.update`
   → `done`), the result **reminds you to update the relevant doc**; and the panel shows whether
-  an objective closed tasks **without touching documentation** (⚠), so the supervisor can
+  an objective closed tasks **without touching documentation**, so the supervisor can
   see it. The honest promise is *living, traceable documentation*, not guaranteed.
 
 ---

@@ -5,6 +5,15 @@
   Coordinate them without collisions. Watch them in real time. Trust what they do.
 </p>
 
+<p align="center">
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue"></a>
+  <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A522.5-brightgreen">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
+  <img alt="Protocol" src="https://img.shields.io/badge/protocol-MCP-6E56CF">
+  <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-0b7285">
+  <img alt="Status" src="https://img.shields.io/badge/status-pre--1.0-orange">
+</p>
+
 ---
 
 ## What problem does it solve?
@@ -14,13 +23,13 @@ apps or automate their company. But when you put **several agents to work at onc
 two pains show up:
 
 **They don't coordinate** — and they get in each other's way:
-- 🔁 **They step on each other's work** — two agents do the same thing.
-- 🤷 **They work blind** — one doesn't know what the other did.
+- **They step on each other's work** — two agents do the same thing.
+- **They work blind** — one doesn't know what the other did.
 
 **You can't control them** — or trust them:
-- 🚧 **They stray out of their lane** — an agent touches something it shouldn't.
-- 📄 **The documentation goes stale** — nobody keeps the knowledge up to date.
-- 👀 **You can't see anything** — you don't know who did what, or what they spent.
+- **They stray out of their lane** — an agent touches something it shouldn't.
+- **The documentation goes stale** — nobody keeps the knowledge up to date.
+- **You can't see anything** — you don't know who did what, or what they spent.
 
 Most tools only tackle coordination, and they're built for programmers.
 **Lanchu adds what's missing: control and trust for whoever supervises.**
@@ -44,13 +53,30 @@ they do — even if you're not technical.
 > Lanchu sets **cooperative, auditable limits**: it blocks what passes through it and leaves
 > **everything in plain sight**. It's not a system cage — the trust comes from *seeing it all*.
 
+## How it fits
+
+Agents coordinate *through* Lanchu (a shared blackboard), never directly with each other —
+so every action is visible and can be bounded.
+
+```mermaid
+flowchart TB
+    A1["Agent A"] -->|MCP| L
+    A2["Agent B"] -->|MCP| L
+    subgraph L["Lanchu — local server"]
+        S["Shared state · roles · audit log"]
+    end
+    L --> P["Supervisor panel<br/>(real-time + history)"]
+    L -. resource updates .-> A1
+    L -. resource updates .-> A2
+```
+
 ## Quick start
 
 ```bash
 npx lanchu
 ```
 
-> ⚠️ The project is in the definition phase. The command above is the installation
+> **Note:** The project is in the definition phase. The command above is the installation
 > goal; it isn't published yet. See [`DEFINITION.md`](./DEFINITION.md) to
 > understand where it's headed.
 
@@ -79,9 +105,13 @@ watches and trusts from the panel, **without needing to be a programmer**.
 
 ## Contributing
 
-Lanchu is open source and contributions are welcome in a controlled way.
-Start by reading the [project definition](./DEFINITION.md). (Detailed contribution
-guide coming soon.)
+Lanchu is open source and contributions are welcome in a controlled way. Start with the
+[project definition](./DEFINITION.md), then the [contributing guide](./CONTRIBUTING.md).
+Have an idea? Open a [feature request](https://github.com/lanchuske/lanchu/issues/new?template=feature_request.yml)
+or start a thread in [Discussions › Ideas](https://github.com/lanchuske/lanchu/discussions).
+
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
+- [Security policy](./SECURITY.md)
 
 ## License
 
