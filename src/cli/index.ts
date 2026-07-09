@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { baseUrl, dbPath, DEFAULT_PORT, mcpUrl, port, stateDir } from "../config.js";
+import { baseUrl, dbPath, DEFAULT_PORT, mcpUrl, port, stateDir, VERSION } from "../config.js";
 import { startServer } from "../server/server.js";
 
 const args = process.argv.slice(2);
@@ -87,15 +87,36 @@ async function cmdServe(): Promise<void> {
   console.log(`  db:    ${dbPath()}`);
 }
 
+/** Explicit, user-initiated check against the public npm registry (no user data sent). */
+async function latestVersion(): Promise<string | null> {
+  try {
+    const r = await fetch("https://registry.npmjs.org/lanchu/latest", { signal: AbortSignal.timeout(3000) });
+    const j = (await r.json()) as { version?: string };
+    return j.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function cmdDoctor(): Promise<void> {
   const node = process.versions.node;
   const [major, minor] = node.split(".").map(Number) as [number, number];
   const nodeOk = major > 22 || (major === 22 && minor >= 5);
+  const latest = await latestVersion();
+  console.log(`version     ${VERSION}${latest ? (latest === VERSION ? "  (latest)" : "  (latest: " + latest + ")") : ""}`);
   console.log(`node        ${node}   ${nodeOk ? "OK" : "needs >= 22.5.0"}`);
   console.log(`state dir   ${stateDir()}`);
   console.log(`db          ${dbPath()}`);
   console.log(`port        ${port()}${port() === DEFAULT_PORT ? " (default)" : ""}`);
   console.log(`server      ${(await serverUp()) ? "running" : "stopped"}`);
+}
+
+async function cmdUpgrade(): Promise<void> {
+  const latest = await latestVersion();
+  if (!latest) return console.log("Could not reach the npm registry. Try: npm i -g lanchu@latest");
+  if (latest === VERSION) return console.log(`You're on the latest version (${VERSION}).`);
+  console.log(`A new version is available: ${latest} (you have ${VERSION}).`);
+  console.log("Update:  npm i -g lanchu@latest   ·   or just run  npx lanchu@latest");
 }
 
 async function cmdBoard(kind: "agents" | "tasks"): Promise<void> {
@@ -190,6 +211,16 @@ async function cmdRoles(): Promise<void> {
   const org = await orgOf();
   const res = await fetch(`${baseUrl()}/api/roles?org=${encodeURIComponent(org)}`);
   console.log(JSON.stringify(await res.json(), null, 2));
+}
+
+async function cmdRolesAdd(): Promise<void> {
+  const name = positional()[2];
+  if (!name) return console.log("usage: lanchu roles add <name> --tags a,b | --wildcard");
+  const org = await orgOf();
+  const t = flag("tags");
+  const tags = t ? t.split(",").map((x) => x.trim()).filter(Boolean) : [];
+  const r = await post("/api/roles", { org, name, wildcard: hasFlag("wildcard"), tags });
+  console.log("role:", JSON.stringify(r));
 }
 
 async function cmdStats(): Promise<void> {
@@ -412,10 +443,12 @@ Usage:
   lanchu doctor                     environment checks
   lanchu agents | tasks             list agents / tasks (JSON)
   lanchu roles | stats              list roles / local stats
+  lanchu roles add <name> --tags a,b   create a role (or --wildcard)
   lanchu retire <agentId>           safe retirement (handoff enforced)
   lanchu task release <id>          supervisor override: release a task
   lanchu task reassign <id> <agent> supervisor override: reassign a task
-  lanchu panel                      print the panel URL
+  lanchu panel                      open the panel in your browser
+  lanchu upgrade                    check npm for a newer version
   lanchu help | version
 
 Onboard flags:
@@ -441,7 +474,9 @@ async function main(): Promise<void> {
     case "version":
     case "-v":
     case "--version":
-      return void console.log("0.3.0");
+      return void console.log(VERSION);
+    case "upgrade":
+      return cmdUpgrade();
     case "serve":
       return cmdServe();
     case "doctor":
@@ -454,7 +489,7 @@ async function main(): Promise<void> {
     case "tasks":
       return cmdBoard("tasks");
     case "roles":
-      return cmdRoles();
+      return positional()[1] === "add" ? cmdRolesAdd() : cmdRoles();
     case "stats":
       return cmdStats();
     case "stop":

@@ -29,6 +29,7 @@
     "start": "node dist/cli/index.js serve",
     "lanchu": "node dist/cli/index.js",
     "test": "npm run build && node --test \"test/*.test.mjs\"",
+    "demo": "npm run build && node examples/demo-agent.mjs",
     "prepublishOnly": "npm run clean && npm run build",
     "clean": "rm -rf dist"
   },

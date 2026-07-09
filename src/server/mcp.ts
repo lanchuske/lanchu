@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
@@ -35,7 +36,7 @@ export interface BuiltServer {
 /** Builds an MCP server bound to a session (a specific agent). */
 export function buildMcpServer(ctx: SessionContext): BuiltServer {
   const server = new McpServer(
-    { name: "lanchu", version: "0.3.0" },
+    { name: "lanchu", version: VERSION },
     {
       instructions: INSTRUCTIONS,
       capabilities: { resources: { subscribe: true, listChanged: true } },

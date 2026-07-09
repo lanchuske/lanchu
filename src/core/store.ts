@@ -141,6 +141,22 @@ export function getOrCreateRole(
   return getOrCreateRole(orgId, name);
 }
 
+/** Create a role, or add tags / update wildcard on an existing one. */
+export function defineRole(
+  orgId: string,
+  name: string,
+  opts: { wildcard?: boolean; tags?: string[] } = {},
+): Role {
+  const role = getOrCreateRole(orgId, name, opts);
+  if (opts.wildcard !== undefined) {
+    db().prepare("UPDATE role SET is_wildcard = ? WHERE id = ?").run(opts.wildcard ? 1 : 0, role.id);
+  }
+  for (const tag of opts.tags ?? []) {
+    db().prepare("INSERT OR IGNORE INTO role_tag(role_id, tag) VALUES (?,?)").run(role.id, tag);
+  }
+  return getRole(role.id)!;
+}
+
 export function getRole(roleId: string): Role | null {
   const row = db()
     .prepare("SELECT id, org_id, name, is_wildcard, created_at FROM role WHERE id = ?")

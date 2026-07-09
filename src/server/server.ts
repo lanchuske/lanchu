@@ -216,6 +216,13 @@ export function createServer(): http.Server {
         return sendJson(res, 200, store.listRoles(org.id));
       }
 
+      if (url.pathname === "/api/roles" && req.method === "POST") {
+        const body = (await readJson(req)) as { org: string; name: string; tags?: string[]; wildcard?: boolean };
+        if (!body?.org || !body?.name) return sendJson(res, 400, { error: "org and name required" });
+        const org = store.getOrCreateOrg(body.org);
+        return sendJson(res, 200, store.defineRole(org.id, body.name, { wildcard: body.wildcard, tags: body.tags }));
+      }
+
       if (url.pathname === "/api/audit" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });

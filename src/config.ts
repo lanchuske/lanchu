@@ -1,6 +1,9 @@
 import os from "node:os";
 import path from "node:path";
 
+/** Single source of truth for the version (keep in sync with package.json). */
+export const VERSION = "0.3.0";
+
 /**
  * Local server paths and configuration, OS-agnostic.
  * See DEFINITION.md §7 (non-negotiable constraints) and CLI.md §7.
