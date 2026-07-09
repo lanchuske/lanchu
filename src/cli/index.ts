@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { baseUrl, dbPath, DEFAULT_PORT, mcpUrl, port, stateDir } from "../config.js";
 import { startServer } from "../server/server.js";
@@ -240,11 +241,145 @@ function cmdPanel(): void {
   console.log(`Open the panel in your browser: ${baseUrl()}`);
 }
 
+// ── interactive onboarding wizard ────────────────────────────
+const claudeCmd = process.platform === "win32" ? "claude.cmd" : "claude";
+function hasClaude(): boolean {
+  try {
+    return spawnSync(claudeCmd, ["--version"], { encoding: "utf8" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function pick(
+  rl: readline.Interface,
+  label: string,
+  choices: string[],
+  defaultIndex = 0,
+): Promise<number> {
+  console.log(`\n${label}`);
+  choices.forEach((c, i) => console.log(`  ${i + 1}) ${c}${i === defaultIndex ? "  (default)" : ""}`));
+  const ans = (await rl.question(`Choose [1-${choices.length}]: `)).trim();
+  if (!ans) return defaultIndex;
+  const n = Number.parseInt(ans, 10);
+  return Number.isInteger(n) && n >= 1 && n <= choices.length ? n - 1 : defaultIndex;
+}
+
+async function cmdWork(prefillObjective: string): Promise<void> {
+  if (!process.stdin.isTTY) return cmdOnboard(prefillObjective); // non-interactive fallback
+  await ensureServer();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log("Lanchu — let's get you set up.");
+
+    // 1) org / project
+    let found = findConfig();
+    let org: string;
+    let project: string;
+    if (found) {
+      org = found.config.org;
+      project = found.config.project;
+      console.log(`\nOrg: ${org} · Project: ${project}  (from .lanchu/config.json)`);
+    } else {
+      org = (await rl.question(`\nOrganization [acme]: `)).trim() || "acme";
+      project = (await rl.question(`Project [${path.basename(process.cwd())}]: `)).trim() || path.basename(process.cwd());
+      writeConfig({ org, project });
+      console.log(`Wrote .lanchu/config.json`);
+    }
+
+    // 2) objective
+    let objective = prefillObjective.trim();
+    while (!objective) objective = (await rl.question(`\nWhat do you want to work on? `)).trim();
+
+    // 3) reuse-or-create
+    const cands = (await (
+      await fetch(`${baseUrl()}/api/reuse?org=${encodeURIComponent(org)}&objective=${encodeURIComponent(objective)}`)
+    ).json()) as { agent: { id: string; name: string }; score: number }[];
+
+    const sessionReq: Record<string, unknown> = { org, project, objective, client: "claude" };
+    if (cands.length > 0) {
+      const choices = [...cands.map((c) => `reuse "${c.agent.name}" (idle, overlap ${c.score})`), "create a new agent"];
+      const idx = await pick(rl, "An existing agent may fit this:", choices, choices.length - 1);
+      if (idx < cands.length) sessionReq.reuseAgentId = cands[idx]!.agent.id;
+    }
+
+    // 4) role (only when creating)
+    if (!sessionReq.reuseAgentId) {
+      const roles = (await (await fetch(`${baseUrl()}/api/roles?org=${encodeURIComponent(org)}`)).json()) as {
+        name: string;
+        is_wildcard: boolean;
+        allowed_tags: string[];
+      }[];
+      const choices = [
+        ...roles.map((r) => `${r.name}  [${r.is_wildcard ? "*" : r.allowed_tags.join(", ")}]`),
+        "create a new role",
+      ];
+      const idx = await pick(rl, "Role for this agent:", choices, 0);
+      if (idx < roles.length) {
+        sessionReq.role = roles[idx]!.name;
+      } else {
+        const name = (await rl.question(`New role name: `)).trim() || "general";
+        const tags = (await rl.question(`Allowed tags (comma-separated, empty = wildcard): `)).trim();
+        sessionReq.role = name;
+        if (tags) sessionReq.roleTags = tags.split(",").map((t) => t.trim()).filter(Boolean);
+        else sessionReq.wildcard = true;
+      }
+    }
+
+    // 5) register
+    const s = (await (
+      await fetch(`${baseUrl()}/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(sessionReq),
+      })
+    ).json()) as { token: string; agentName: string; mcpUrl: string };
+    console.log(`\n✓ Agent "${s.agentName}" ready · session token issued`);
+
+    // 6) wire the MCP client
+    let launchHint = `claude mcp add lanchu --transport http ${s.mcpUrl} --header "Authorization: Bearer ${s.token}"`;
+    if (hasClaude()) {
+      spawnSync(claudeCmd, ["mcp", "remove", "lanchu"], { encoding: "utf8" }); // ignore if absent
+      const add = spawnSync(
+        claudeCmd,
+        ["mcp", "add", "lanchu", "--transport", "http", s.mcpUrl, "--header", `Authorization: Bearer ${s.token}`],
+        { encoding: "utf8" },
+      );
+      console.log(add.status === 0 ? `✓ Wired Claude Code to Lanchu` : `! Could not auto-wire; run:\n  ${launchHint}`);
+    } else {
+      console.log(`! 'claude' not found. Wire your MCP client manually:\n  ${launchHint}`);
+    }
+
+    // 7) final confirmation
+    const go = (await rl.question(`\nLaunch Claude now? [Y/n] `)).trim().toLowerCase();
+    rl.close();
+    if (go === "" || go === "y" || go === "yes") {
+      const instruction =
+        "You are connected to Lanchu. Read the lanchu://me resource for your objective, role and tasks, " +
+        "then claim (task_claim) and work the tasks in your scope, reporting progress with task_update.";
+      spawn(claudeCmd, [instruction], { stdio: "inherit" });
+    } else {
+      console.log(`\nWhen ready:  claude\nPanel:       ${baseUrl()}`);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/readline was closed|abort/i.test(msg)) {
+      console.log("\nOnboarding cancelled.");
+      return;
+    }
+    throw err;
+  } finally {
+    rl.close(); // idempotent
+  }
+}
+
 function cmdHelp(): void {
   console.log(`lanchu — control & trust layer for your AI agents
 
 Usage:
-  lanchu "<objective>"              onboard/resume an agent for an objective
+  lanchu                            guided onboarding wizard (org, agent, role) + launch Claude
+  lanchu work ["<objective>"]       same wizard, optionally pre-filling the objective
+  lanchu "<objective>" --role r     non-interactive onboard (for scripting)
   lanchu init                       set org/project for this directory
   lanchu serve                      run the local server (foreground)
   lanchu stop                       stop the background server
@@ -262,10 +397,17 @@ Onboard flags:
 `);
 }
 
+function hasOnboardFlags(): boolean {
+  return !!(flag("role") || flag("reuse") || hasFlag("new") || flag("tags") || flag("as"));
+}
+
 async function main(): Promise<void> {
   const cmd = args[0];
   switch (cmd) {
     case undefined:
+      return process.stdin.isTTY ? cmdWork("") : cmdHelp();
+    case "work":
+      return cmdWork(positional().slice(1).join(" "));
     case "help":
     case "-h":
     case "--help":
@@ -300,9 +442,11 @@ async function main(): Promise<void> {
       const p = positional();
       return cmdTask(p[1] ?? "", p[2] ?? "", p[3]);
     }
-    default:
-      // Anything else is treated as an objective.
-      return cmdOnboard(positional().join(" "));
+    default: {
+      // Anything else is treated as an objective. Guided wizard unless flags/non-TTY.
+      const obj = positional().join(" ");
+      return hasOnboardFlags() || !process.stdin.isTTY ? cmdOnboard(obj) : cmdWork(obj);
+    }
   }
 }
 
