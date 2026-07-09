@@ -1,38 +1,47 @@
 <h1 align="center">Lanchu</h1>
 
 <p align="center">
-  <b>Coordina varios agentes de IA como si fueran un equipo.</b><br>
-  Un solo comando. Sin ser técnico.
+  <b>El panel de control y los límites para los agentes de IA que ya tienes corriendo.</b><br>
+  Coordínalos sin que se pisen. Míralos en tiempo real. Confía en lo que hacen.
 </p>
 
 ---
 
 ## ¿Qué problema resuelve?
 
-Cada vez más personas usan agentes de IA (como Claude, Cursor o asistentes de terminal)
-para construir aplicaciones o automatizar su empresa. Pero cuando quieres usar **varios
-agentes a la vez**, empiezan los problemas:
+Cada vez más personas usan varios agentes de IA (como Claude o Cursor) para construir
+aplicaciones o automatizar su empresa. Pero cuando pones **varios agentes a la vez**,
+aparecen dos dolores:
 
-- 🔁 **Se pisan el trabajo** — dos agentes hacen lo mismo o se estorban.
-- 🤷 **Nadie sabe qué hace el otro** — cada agente trabaja a ciegas.
-- 🚧 **Se salen de su rol** — un agente toca algo que no le corresponde.
+**No se coordinan** — y se estorban:
+- 🔁 **Se pisan el trabajo** — dos agentes hacen lo mismo.
+- 🤷 **Trabajan a ciegas** — el uno no sabe qué hizo el otro.
+
+**No los puedes controlar** — ni confiar:
+- 🚧 **Se salen de su carril** — un agente toca algo que no le corresponde.
 - 📄 **La documentación queda vieja** — nadie mantiene el conocimiento al día.
-- 👀 **No ves nada** — no sabes quién hizo qué, ni en qué está cada uno.
+- 👀 **No ves nada** — no sabes quién hizo qué, ni en qué gastó.
 
-**Lanchu** resuelve esto. Es como darle a tus agentes un **lugar de trabajo común**:
-una organización con roles, tareas claras, documentación compartida y un **tablero donde
-ves en tiempo real qué está haciendo cada uno**.
+La mayoría de las herramientas solo atacan la coordinación, y son para programadores.
+**Lanchu añade lo que falta: control y confianza para quien supervisa.**
+
+Lanchu **no orquesta** tus agentes (no decide su plan). Les da un **lugar de trabajo
+común** para que se coordinen sin chocar, les pone **límites de alcance**, mantiene la
+**documentación al día**, y te da un **panel + historial** para *ver y confiar* en lo
+que hacen — aunque no seas técnico.
 
 ## Cómo funciona (la idea)
 
-1. **Abres una sesión** con tu agente (por ejemplo, una terminal).
-2. El agente **se registra en tu organización y asume un rol** automáticamente.
-3. A partir de ahí, solo trabaja en **lo que le corresponde**: toma tareas asignadas,
-   lee la documentación compartida y avisa si algo se sale de su alcance.
-4. Tú miras el **tablero en tiempo real**: quién está activo, en qué está trabajando y
-   qué documentación va creando o actualizando.
+1. Lanzas tus agentes como siempre (con la herramienta que ya uses).
+2. Cada agente **se registra en tu organización y asume un rol**.
+3. A partir de ahí, solo trabaja en **lo que le corresponde**: toma tareas, lee la
+   documentación compartida, y **Lanchu lo bloquea** si intenta salirse de su alcance.
+   Los agentes se coordinan **a través de Lanchu**, no hablándose entre ellos — por eso
+   tú lo ves y lo puedes limitar todo.
+4. Tú miras el **panel en tiempo real**: quién está activo, en qué trabaja, qué
+   documentación crea, y un **historial** de todo lo que hicieron.
 
-Todo esto sin que tengas que programar nada.
+Sin programar nada.
 
 ## Inicio rápido
 
@@ -48,18 +57,21 @@ npx lanchu
 
 - **Organizaciones y proyectos** — agrupa a tus agentes y su trabajo.
 - **Registro y roles** — cada agente sabe quién es y qué puede tocar.
-- **Tareas con control de alcance** — nadie hace el trabajo de otro.
-- **Tablero en tiempo real** — ves qué hace cada agente, en qué rama.
+- **Coordinación con control de alcance** — nadie duplica ni se pisa; bloqueo duro si un
+  agente se sale de su rol.
+- **Panel en tiempo real** — ves qué hace cada agente y en qué está.
+- **Historial (audit log)** — todo lo que hicieron queda registrado, para que confíes.
 - **Documentación compartida y trazable** — el conocimiento siempre al día.
 
 Lo que viene después (funciones recurrentes, skills, organizaciones en la nube…) está en
-el [roadmap](./DEFINITION.md#7-roadmap-fuera-del-v0).
+el [roadmap](./DEFINITION.md#9-roadmap-fuera-del-v0).
 
 ## Para quién es
 
-Para cualquiera que quiera **poner varios agentes a trabajar juntos** de forma ordenada:
+Para cualquiera que **supervise a varios agentes** trabajando sobre un objetivo común:
 para construir una app, automatizar procesos o coordinar el trabajo de una empresa.
-**No necesitas ser programador.**
+Lanchu se pone **encima o al lado** de las herramientas que ya uses para lanzar agentes.
+**No necesitas ser programador para supervisar.**
 
 ## Contribuir
 
