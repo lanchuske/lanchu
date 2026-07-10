@@ -414,10 +414,30 @@ export function createServer(): http.Server {
         return sendJson(res, 200, store.listSkills(org.id));
       }
       if (url.pathname === "/api/skills" && req.method === "POST") {
-        const b = (await readJson(req)) as { org: string; name: string; tags?: string[]; instructions?: string; skillUrl?: string };
-        if (!b?.org || !b?.name) return sendJson(res, 400, { error: "org and name required" });
+        const b = (await readJson(req)) as { org: string; name?: string; tags?: string[]; instructions?: string; skillUrl?: string };
+        if (!b?.org) return sendJson(res, 400, { error: "org required" });
         const org = store.getOrCreateOrg(b.org);
+        // With a source URL and no inline instructions, load the skill from it
+        // (its frontmatter can supply the name/tags); otherwise upsert inline.
+        if (b.skillUrl && !b.instructions) {
+          try {
+            const skill = await store.loadSkillFromUrl(org.id, b.skillUrl, { name: b.name, tags: b.tags });
+            return sendJson(res, 200, skill);
+          } catch (err) {
+            return sendJson(res, 400, { error: (err as Error).message });
+          }
+        }
+        if (!b.name) return sendJson(res, 400, { error: "name required (or pass a skillUrl to load)" });
         return sendJson(res, 200, store.createSkill(org.id, { name: b.name, tags: b.tags ?? [], instructions: b.instructions, skillUrl: b.skillUrl }));
+      }
+      if (url.pathname === "/api/skills/reload" && req.method === "POST") {
+        const b = (await readJson(req)) as { id: string };
+        if (!b?.id) return sendJson(res, 400, { error: "id required" });
+        try {
+          return sendJson(res, 200, await store.reloadSkill(b.id));
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
       }
       if (url.pathname === "/api/skills/delete" && req.method === "POST") {
         const b = (await readJson(req)) as { id: string };

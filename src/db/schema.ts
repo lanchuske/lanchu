@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -139,7 +139,9 @@ CREATE TABLE IF NOT EXISTS skill (
   name         TEXT NOT NULL,
   tags         TEXT NOT NULL,
   instructions TEXT NOT NULL DEFAULT '',
+  description  TEXT NOT NULL DEFAULT '',
   skill_url    TEXT,
+  loaded_at    TEXT,
   created_at   TEXT NOT NULL,
   UNIQUE (org_id, name)
 );

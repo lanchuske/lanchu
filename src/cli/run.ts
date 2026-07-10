@@ -304,12 +304,25 @@ async function cmdRules(): Promise<void> {
 async function cmdSkills(): Promise<void> {
   const org = await orgOf();
   const sub = positional()[1];
+  const tagsFlag = (): string[] => {
+    const t = flag("tags");
+    return t ? t.split(",").map((x) => x.trim()).filter(Boolean) : [];
+  };
   if (sub === "add") {
     const name = positional()[2];
     if (!name) return console.log('usage: lanchu skills add <name> --tags a,b --instructions "..."');
-    const t = flag("tags");
-    const tags = t ? t.split(",").map((x) => x.trim()).filter(Boolean) : [];
-    console.log(JSON.stringify(await post("/api/skills", { org, name, tags, instructions: flag("instructions"), skillUrl: flag("url") })));
+    console.log(JSON.stringify(await post("/api/skills", { org, name, tags: tagsFlag(), instructions: flag("instructions"), skillUrl: flag("url") })));
+  } else if (sub === "load") {
+    // Load a reusable skill from a SKILL.md URL or local file; frontmatter supplies
+    // the name/tags unless overridden with --name / --tags.
+    const source = positional()[2];
+    if (!source) return console.log("usage: lanchu skills load <url|file> [--name n] [--tags a,b]");
+    const tags = tagsFlag();
+    console.log(JSON.stringify(await post("/api/skills", { org, name: flag("name"), tags: tags.length ? tags : undefined, skillUrl: source })));
+  } else if (sub === "reload") {
+    const id = positional()[2];
+    if (!id) return console.log("usage: lanchu skills reload <id>");
+    console.log(JSON.stringify(await post("/api/skills/reload", { id })));
   } else if (sub === "rm" || sub === "remove") {
     const id = positional()[2];
     if (!id) return console.log("usage: lanchu skills rm <id>");
@@ -439,7 +452,8 @@ async function cmdTile(): Promise<void> {
 }
 
 const LANCHU_SLASH_COMMAND = `---
-description: Lanchu control — run a user command (panel, status, spawn "<objective>", tile, doctor, agents, tasks, retire <agent>, rules, skills)
+description: Lanchu control — supervisor commands (panel, status, spawn, tile, orgs, projects, agents, tasks…)
+argument-hint: [panel | status | spawn "<objective>" | tile | orgs | projects | agents | tasks | doctor | retire <id> | rules | skills]
 allowed-tools: Bash(npx lanchu:*), Bash(lanchu:*)
 ---
 The user ran a Lanchu control command. Below is its output — report the result to

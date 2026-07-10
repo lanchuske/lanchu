@@ -143,6 +143,40 @@ test("skills: built-ins seeded, upsert, and tag matching", () => {
   assert.equal(store.listSkills(org.id).find((s) => s.name === "custom").instructions, "b");
 });
 
+test("skills: loadable from a SKILL.md file, with frontmatter and reload", async () => {
+  const { org } = setup("acme16");
+  const file = path.join(dir, "code-review.md");
+  fs.writeFileSync(
+    file,
+    ["---", "name: code-review", "description: Review diffs for bugs", "tags: code, review", "---", "Look for edge cases and missing tests."].join("\n"),
+  );
+
+  const loaded = await store.loadSkillFromUrl(org.id, file);
+  assert.equal(loaded.name, "code-review");
+  assert.equal(loaded.description, "Review diffs for bugs");
+  assert.deepEqual(loaded.tags, ["code", "review"]);
+  assert.match(loaded.instructions, /edge cases/);
+  assert.equal(loaded.skill_url, file);
+  assert.ok(loaded.loaded_at, "records when it was loaded");
+  assert.ok(store.skillsForTags(org.id, ["review"]).some((s) => s.name === "code-review"));
+
+  // Editing the source and reloading updates the same row in place.
+  fs.writeFileSync(file, ["---", "name: code-review", "tags: code", "---", "Now also check for security issues."].join("\n"));
+  const reloaded = await store.reloadSkill(loaded.id);
+  assert.equal(reloaded.id, loaded.id);
+  assert.match(reloaded.instructions, /security issues/);
+  assert.deepEqual(reloaded.tags, ["code"]);
+
+  // A source with no frontmatter name requires an explicit name override.
+  const plain = path.join(dir, "plain.md");
+  fs.writeFileSync(plain, "Just some instructions, no frontmatter.");
+  await assert.rejects(() => store.loadSkillFromUrl(org.id, plain));
+  const named = await store.loadSkillFromUrl(org.id, plain, { name: "plain", tags: ["misc"] });
+  assert.equal(named.name, "plain");
+  assert.equal(named.description, "");
+  assert.deepEqual(named.tags, ["misc"]);
+});
+
 test("handoff reassigns to a peer (role-checked) and org rules persist", () => {
   const { org, project, agent } = setup("acme14");
   const peer = store.createAgent({ orgId: org.id, roleId: agent.role_id, objective: "peer" });

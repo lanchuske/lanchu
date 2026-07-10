@@ -393,7 +393,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "skills_list",
     {
       title: "List skills",
-      description: "The org's skills (capability packs) and the task tags each one applies to.",
+      description: "The org's skills (capability packs, some loaded from an external SKILL.md) and the task tags each one applies to.",
       inputSchema: {},
     },
     async () => text(store.listSkills(ctx.orgId)),

@@ -4,6 +4,7 @@ import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
 import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
+import { loadSkillDefinition } from "./skills_loader.js";
 import {
   ScopeError,
   type Agent,
@@ -866,7 +867,9 @@ export interface Skill {
   name: string;
   tags: string[];
   instructions: string;
+  description: string;
   skill_url: string | null;
+  loaded_at: string | null;
   created_at: string;
 }
 
@@ -877,7 +880,9 @@ function loadSkill(row: Record<string, unknown>): Skill {
     name: row.name as string,
     tags: String(row.tags).split(",").filter(Boolean),
     instructions: (row.instructions as string) ?? "",
+    description: (row.description as string) ?? "",
     skill_url: (row.skill_url as string) ?? null,
+    loaded_at: (row.loaded_at as string) ?? null,
     created_at: row.created_at as string,
   };
 }
@@ -885,20 +890,83 @@ function loadSkill(row: Record<string, unknown>): Skill {
 /** Create or update a skill (upsert by name within the org). */
 export function createSkill(
   orgId: string,
-  input: { name: string; tags: string[]; instructions?: string; skillUrl?: string },
+  input: {
+    name: string;
+    tags: string[];
+    instructions?: string;
+    description?: string;
+    skillUrl?: string;
+    loadedAt?: string;
+  },
 ): Skill {
   const now = nowIso();
   db()
     .prepare(
-      `INSERT INTO skill(id, org_id, name, tags, instructions, skill_url, created_at)
-       VALUES (?,?,?,?,?,?,?)
+      `INSERT INTO skill(id, org_id, name, tags, instructions, description, skill_url, loaded_at, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)
        ON CONFLICT(org_id, name) DO UPDATE SET tags = excluded.tags,
-         instructions = excluded.instructions, skill_url = excluded.skill_url`,
+         instructions = excluded.instructions, description = excluded.description,
+         skill_url = excluded.skill_url, loaded_at = excluded.loaded_at`,
     )
-    .run(uuid(), orgId, input.name, input.tags.join(","), input.instructions ?? "", input.skillUrl ?? null, now);
+    .run(
+      uuid(),
+      orgId,
+      input.name,
+      input.tags.join(","),
+      input.instructions ?? "",
+      input.description ?? "",
+      input.skillUrl ?? null,
+      input.loadedAt ?? null,
+      now,
+    );
   return loadSkill(
     db().prepare("SELECT * FROM skill WHERE org_id = ? AND name = ?").get(orgId, input.name) as Record<string, unknown>,
   );
+}
+
+/**
+ * Load a reusable skill from an external SKILL.md (http(s) URL or local file) and
+ * upsert it into the org. The source's frontmatter supplies name/description/tags;
+ * the caller can override name and tags (handy when the source omits them). The
+ * fetched body becomes the instructions and the source is recorded so it can be
+ * reloaded later.
+ */
+export async function loadSkillFromUrl(
+  orgId: string,
+  source: string,
+  overrides: { name?: string; tags?: string[] } = {},
+): Promise<Skill> {
+  const def = await loadSkillDefinition(source);
+  const name = overrides.name ?? def.name;
+  if (!name) throw new Error("skill has no name — pass a name or add one to the source's frontmatter");
+  const tags = overrides.tags && overrides.tags.length > 0 ? overrides.tags : (def.tags ?? []);
+  return createSkill(orgId, {
+    name,
+    tags,
+    instructions: def.instructions,
+    description: def.description ?? "",
+    skillUrl: source,
+    loadedAt: nowIso(),
+  });
+}
+
+/** Re-fetch a previously loaded skill from its recorded source. */
+export async function reloadSkill(id: string): Promise<Skill> {
+  const row = db().prepare("SELECT * FROM skill WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  if (!row) throw new Error("skill not found");
+  const skill = loadSkill(row);
+  if (!skill.skill_url) throw new Error(`skill "${skill.name}" has no source URL to reload from`);
+  const def = await loadSkillDefinition(skill.skill_url);
+  // Keep the current name so the upsert targets the same row even if the source
+  // renamed itself, and keep the existing tags when the source omits them.
+  return createSkill(skill.org_id, {
+    name: skill.name,
+    tags: def.tags && def.tags.length > 0 ? def.tags : skill.tags,
+    instructions: def.instructions,
+    description: def.description ?? "",
+    skillUrl: skill.skill_url,
+    loadedAt: nowIso(),
+  });
 }
 
 export function listSkills(orgId: string): Skill[] {
@@ -916,34 +984,39 @@ export function skillsForTags(orgId: string, tags: string[]): Skill[] {
   return listSkills(orgId).filter((s) => s.tags.some((t) => set.has(t)));
 }
 
-const DEFAULT_SKILLS: { name: string; tags: string[]; instructions: string }[] = [
+const DEFAULT_SKILLS: { name: string; tags: string[]; description: string; instructions: string }[] = [
   {
     name: "documentation",
     tags: ["docs", "documentation"],
+    description: "Clear, accurate docs for non-technical readers.",
     instructions:
       "Write clear, accurate documentation in plain language for non-technical readers. Prefer short sections, concrete examples, and a getting-started flow. When you finish related work, update the relevant doc with doc_update so knowledge stays current.",
   },
   {
     name: "design",
     tags: ["design", "ui", "ux"],
+    description: "User-focused UI/UX with accessible, consistent layouts.",
     instructions:
       "Focus on user experience: clean layout, consistent spacing and states, light/dark support, and accessibility. Produce mockups or specs, and briefly explain each design decision.",
   },
   {
     name: "development",
     tags: ["dev", "code", "backend", "frontend"],
+    description: "Clean, tested code that matches the surrounding style.",
     instructions:
       "Write clean, tested code that matches the surrounding style. Keep changes focused; add or update tests; verify the change works before marking the task done.",
   },
   {
     name: "research",
     tags: ["research"],
+    description: "Multi-source research with verified, cited claims.",
     instructions:
       "Gather multiple sources, verify claims, and synthesize. Cite your sources and separate facts from assumptions.",
   },
   {
     name: "ops",
     tags: ["ops", "devops"],
+    description: "Reversible, well-documented operational changes.",
     instructions:
       "Prefer reversible, well-documented steps. Confirm before any destructive action and record a short runbook of what you did.",
   },

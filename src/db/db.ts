@@ -55,6 +55,8 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "agent", "terminal_ref", "TEXT");
   addColumn(db, "task", "stage", "TEXT");
   addColumn(db, "task", "pr_url", "TEXT");
+  addColumn(db, "skill", "description", "TEXT NOT NULL DEFAULT ''");
+  addColumn(db, "skill", "loaded_at", "TEXT");
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }
