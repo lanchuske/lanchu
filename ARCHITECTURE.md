@@ -102,72 +102,56 @@ OS-level enforcement is a **non-goal**.
 ## 5. MCP resources (subscribable, read-only)
 
 | URI | Content | Updates when… |
-|-----|-----------|----------------------|
-| `lanchu://board` | Agents (state, role, objective, open count, workspace) and tasks, with derived **stale**/**reserved** signals (C4). Doc activity is visible in the audit log and docs view. | any `agent.*` / `task.*`. |
-| `lanchu://agents` | The org's durable agents and their state. | the lifecycle changes. |
-| `lanchu://tasks/mine` | The agent's tasks. | one of its tasks changes. |
-| `lanchu://tasks/available` | Tasks whose `tags ⊆ allowed_tags` of the role. | a task is created/released/claimed. |
-| `lanchu://task/{id}` | Detail + dependencies + owner. | that task changes. |
-| `lanchu://org/roles` | The org's roles and their `allowed_tags`. | the supervisor edits them. |
-| `lanchu://docs/{id}` | A shared document. | that doc is updated. |
-| `lanchu://me` | The agent's identity, role, scope, and footprint. | they change. |
-| `lanchu://audit` | Immutable activity log. | any event occurs. |
+|-----|---------|---------------|
+| `lanchu://me` | The agent's identity, role, `allowed_tags`, and open tasks. | any `agent.*` in the org. |
+| `lanchu://board` | Agents (state, role, objective, open count, workspace) and tasks, with derived **stale**/**reserved** signals (C4). | any `agent.*` / `task.*`. |
+| `lanchu://tasks/mine` | The agent's tasks. | any `task.*`. |
+| `lanchu://tasks/available` | The project's available tasks. | any `task.*`. |
 
-Notifications = native MCP (`resources/updated`) with polling (`board.snapshot`) as
-backup.
+The server advertises `resources.subscribe`; it pushes `notifications/resources/updated`
+when a relevant org event fires. Broader reads (audit, docs, roles) are available over
+HTTP (`/api/*`) and shown in the panel.
 
 ---
 
 ## 6. Agent tools (MCP)
 
-### `session.*`
+Eleven tools, each bound to the calling agent's session (names are the MCP tool ids).
+
 | Tool | Inputs | Notes |
-|------|----------|-------|
-| `session.whoami` | — | Identity + role + `allowed_tags` + footprint. |
-| `session.note` | `text` | Annotates activity (optional). Presence does **not** depend on this. |
-| `session.leave` | — | The session ends; the agent goes to **IDLE**. Emits `agent.idle`. |
+|------|--------|-------|
+| `session_whoami` | — | Identity + role + `allowed_tags` + open tasks. |
+| `session_leave` | — | Ends the session; the agent goes to **IDLE**. |
+| `task_list` | `filter` (`mine`/`available`/`all`) | *Pull* view of the project's tasks. |
+| `task_create` | `title`, `tags?`, `deps?` | The agent structures its plan. Rejected if `tags ⊄ allowed_tags`. Emits `task.created`. |
+| `task_check_scope` | `taskId` | `yours` / `someone_else` / `out_of_role` / `available`. |
+| `task_claim` | `taskId`, `workspace?` | **Atomic lock** + role check. Fails if taken or out of role. Emits `task.claimed`. |
+| `task_update` | `taskId`, `status`, `note?`, `tokens?` | `done` unblocks dependents; the response includes a doc *nudge* (C5). Emits `task.started/blocked/completed`. |
+| `task_release` | `taskId` | Returns the task to the pool. Emits `task.released`. |
+| `doc_list` | `query?` | List/search shared docs. |
+| `doc_read` | `id` | Read a doc (agents are pushed to read before acting). |
+| `doc_update` | `id?`, `title`, `content` | Create or update a doc (upsert). Emits `doc.created/updated`. |
 
-> There is no `session.register`/`heartbeat`: identity is issued by the **launcher** (§2) and
-> presence is derived from the live connection.
+> There is no `session_register`/`heartbeat`: identity is issued by the **launcher** (§2)
+> and presence is derived from recency of activity. `workspace` is generic (a git branch
+> is one case). `tokens` is **self-reported** — an MCP server cannot measure model usage.
 
-### `task.*` — coordination + limits
-| Tool | Inputs | Notes |
-|------|----------|-------|
-| `task.list` | `filter` | *Pull* view. |
-| `task.get` | `id` | Detail + owner. |
-| `task.create` | `title`, `tags`, `deps?` | The agent structures its plan. Rejected if `tags ⊄ allowed_tags`. Emits `task.created`. |
-| `task.check_scope` | `id` | `yours` / `someone_else` / `out_of_role`. |
-| `task.claim` | `id`, `workspace?` | **Atomic lock** + role check. Fails if taken or out of role. Emits `task.claimed`. |
-| `task.update` | `id`, `status`, `note?` | `done` unblocks dependents and **the response includes a *nudge*** to update the relevant doc (C5). Emits `task.started/blocked/completed`. |
-| `task.release` | `id` | Returns to the pool. Emits `task.released`. |
-| `task.reassign` | `id`, `to_agent` | Handoff (used in safe retirement). Emits `task.reassigned`. |
-| `task.handoff` | `id`, `note` | Explicit handoff with a note, routed by Lanchu (logged). Emits `task.handoff`. |
-
-> `workspace` is generic (a git branch is one case; it can also be a folder, an
-> external board, etc.). We don't tie Lanchu to git.
-
-### `doc.*` — living documentation (minimal in v0)
-| Tool | Inputs | Notes |
-|------|----------|-------|
-| `doc.list` / `doc.search` | `query?` | — |
-| `doc.read` | `id` | The tools push you to read before acting. |
-| `doc.update` / `doc.create` | `id?`, `content` | Controlled by role. Emits `doc.updated`. |
-
-### `org.*` / `board.*`
-| Tool | Notes |
-|------|-------|
-| `org.roles` | The org's roles and their `allowed_tags`. |
-| `org.context` | Minimal context per role/task (optimizes tokens). |
-| `board.snapshot` | *Pull* backup for clients without subscriptions. |
+### Supervisor & pull surfaces (HTTP, not agent tools)
+Used by the panel and CLI, not by the agent:
+- **Actions:** `POST /agent/retire` (safe — blocks on open tasks), `POST /task/release`,
+  `POST /task/reassign` (override; role-checked).
+- **Reads:** `/api/board`, `/api/audit`, `/api/docs`, `/api/roles` (+ `POST` to add roles),
+  `/api/webhooks`, `/api/recurring`; live event stream at `/events` (SSE).
+- **Inbound:** `POST /hooks/intake` creates an unassigned task from an external source.
 
 ---
 
 ## 7. Events
 
 ```
-agent.created   agent.reused   agent.active   agent.idle   agent.retired
+agent.created   agent.active   agent.idle   agent.retired
 task.created    task.claimed   task.released  task.started
-task.completed  task.blocked   task.reassigned  task.handoff
+task.completed  task.blocked   task.reassigned
 doc.created     doc.updated
 scope.violation
 ```
