@@ -82,6 +82,7 @@ export function getOrCreateOrg(name: string): { id: string; name: string } {
   if (existing) return existing;
   const id = uuid();
   db().prepare("INSERT INTO org(id, name, created_at) VALUES (?,?,?)").run(id, name, nowIso());
+  seedDefaultSkills(id); // built-in skills, out of the box
   return { id, name };
 }
 
@@ -697,6 +698,105 @@ export function setOrgRules(orgId: string, rules: string): void {
        ON CONFLICT(org_id) DO UPDATE SET rules = excluded.rules, updated_at = excluded.updated_at`,
     )
     .run(orgId, rules, now);
+}
+
+// ───────────────────────── skills (per task type) ─────────────────────────
+
+export interface Skill {
+  id: string;
+  org_id: string;
+  name: string;
+  tags: string[];
+  instructions: string;
+  skill_url: string | null;
+  created_at: string;
+}
+
+function loadSkill(row: Record<string, unknown>): Skill {
+  return {
+    id: row.id as string,
+    org_id: row.org_id as string,
+    name: row.name as string,
+    tags: String(row.tags).split(",").filter(Boolean),
+    instructions: (row.instructions as string) ?? "",
+    skill_url: (row.skill_url as string) ?? null,
+    created_at: row.created_at as string,
+  };
+}
+
+/** Create or update a skill (upsert by name within the org). */
+export function createSkill(
+  orgId: string,
+  input: { name: string; tags: string[]; instructions?: string; skillUrl?: string },
+): Skill {
+  const now = nowIso();
+  db()
+    .prepare(
+      `INSERT INTO skill(id, org_id, name, tags, instructions, skill_url, created_at)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(org_id, name) DO UPDATE SET tags = excluded.tags,
+         instructions = excluded.instructions, skill_url = excluded.skill_url`,
+    )
+    .run(uuid(), orgId, input.name, input.tags.join(","), input.instructions ?? "", input.skillUrl ?? null, now);
+  return loadSkill(
+    db().prepare("SELECT * FROM skill WHERE org_id = ? AND name = ?").get(orgId, input.name) as Record<string, unknown>,
+  );
+}
+
+export function listSkills(orgId: string): Skill[] {
+  return (db().prepare("SELECT * FROM skill WHERE org_id = ? ORDER BY name").all(orgId) as Record<string, unknown>[]).map(loadSkill);
+}
+
+export function deleteSkill(id: string): void {
+  db().prepare("DELETE FROM skill WHERE id = ?").run(id);
+}
+
+/** Skills whose tags intersect the given task tags (which "hat" fits this work). */
+export function skillsForTags(orgId: string, tags: string[]): Skill[] {
+  if (tags.length === 0) return [];
+  const set = new Set(tags);
+  return listSkills(orgId).filter((s) => s.tags.some((t) => set.has(t)));
+}
+
+const DEFAULT_SKILLS: { name: string; tags: string[]; instructions: string }[] = [
+  {
+    name: "documentation",
+    tags: ["docs", "documentation"],
+    instructions:
+      "Write clear, accurate documentation in plain language for non-technical readers. Prefer short sections, concrete examples, and a getting-started flow. When you finish related work, update the relevant doc with doc_update so knowledge stays current.",
+  },
+  {
+    name: "design",
+    tags: ["design", "ui", "ux"],
+    instructions:
+      "Focus on user experience: clean layout, consistent spacing and states, light/dark support, and accessibility. Produce mockups or specs, and briefly explain each design decision.",
+  },
+  {
+    name: "development",
+    tags: ["dev", "code", "backend", "frontend"],
+    instructions:
+      "Write clean, tested code that matches the surrounding style. Keep changes focused; add or update tests; verify the change works before marking the task done.",
+  },
+  {
+    name: "research",
+    tags: ["research"],
+    instructions:
+      "Gather multiple sources, verify claims, and synthesize. Cite your sources and separate facts from assumptions.",
+  },
+  {
+    name: "ops",
+    tags: ["ops", "devops"],
+    instructions:
+      "Prefer reversible, well-documented steps. Confirm before any destructive action and record a short runbook of what you did.",
+  },
+];
+
+/** Seed the built-in skills for a new org (only names not already present). */
+export function seedDefaultSkills(orgId: string): void {
+  for (const s of DEFAULT_SKILLS) {
+    const exists = db().prepare("SELECT 1 FROM skill WHERE org_id = ? AND name = ?").get(orgId, s.name);
+    if (!exists) createSkill(orgId, s);
+  }
 }
 
 export function openTasksForAgent(agentId: string): Task[] {

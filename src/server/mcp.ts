@@ -1,6 +1,7 @@
+import { spawn } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { VERSION } from "../config.js";
+import { baseUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
@@ -216,7 +217,9 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ taskId, workspace }) => {
       try {
-        return text(store.claimTask({ agentId: ctx.agentId, taskId, workspace }));
+        const task = store.claimTask({ agentId: ctx.agentId, taskId, workspace });
+        // Deliver the right "hat": skills matching this task's type (tags).
+        return text({ ...task, applicable_skills: store.skillsForTags(ctx.orgId, task.tags) });
       } catch (err) {
         return fail(err);
       }
@@ -274,7 +277,9 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ taskId }) => {
       const task = store.getTask(taskId);
-      return task ? text(task) : fail(new Error("task not found"));
+      return task
+        ? text({ ...task, applicable_skills: store.skillsForTags(ctx.orgId, task.tags) })
+        : fail(new Error("task not found"));
     },
   );
 
@@ -363,13 +368,64 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     async () => {
       const agent = store.getAgent(ctx.agentId);
       const role = agent ? store.getRole(agent.role_id) : null;
+      const openTasks = store.openTasksForAgent(ctx.agentId);
+      const tags = [...new Set(openTasks.flatMap((t) => t.tags))];
       return text({
         agent: agent ? { name: agent.name, objective: agent.objective } : null,
         role: role ? { name: role.name, allowed_tags: role.allowed_tags } : null,
         rules: store.getOrgRules(ctx.orgId),
-        open_tasks: store.openTasksForAgent(ctx.agentId),
+        open_tasks: openTasks,
+        skills: store.skillsForTags(ctx.orgId, tags),
         docs: store.listDocs(ctx.orgId).map((d) => ({ id: d.id, title: d.title })),
       });
+    },
+  );
+
+  server.registerTool(
+    "skills_list",
+    {
+      title: "List skills",
+      description: "The org's skills (capability packs) and the task tags each one applies to.",
+      inputSchema: {},
+    },
+    async () => text(store.listSkills(ctx.orgId)),
+  );
+
+  server.registerTool(
+    "skills_for",
+    {
+      title: "Skill for a task",
+      description: "Returns the skill(s) that apply to a task's type — the 'hat' to wear for it.",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      const task = store.getTask(taskId);
+      if (!task) return fail(new Error("task not found"));
+      return text(store.skillsForTags(ctx.orgId, task.tags));
+    },
+  );
+
+  server.registerTool(
+    "open_panel",
+    {
+      title: "Open the dashboard",
+      description: "Opens the Lanchu supervisor panel in the user's browser (Lanchu runs on their machine). Use when the user asks to see the dashboard/panel.",
+      inputSchema: {},
+    },
+    async () => {
+      const url = baseUrl();
+      try {
+        const [cmd, cmdArgs] =
+          process.platform === "darwin"
+            ? ["open", [url]]
+            : process.platform === "win32"
+              ? ["cmd", ["/c", "start", "", url]]
+              : ["xdg-open", [url]];
+        spawn(cmd as string, cmdArgs as string[], { detached: true, stdio: "ignore" }).unref();
+      } catch {
+        /* headless — just return the URL */
+      }
+      return text({ opened: true, url });
     },
   );
 

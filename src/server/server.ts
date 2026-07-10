@@ -284,6 +284,25 @@ export function createServer(): http.Server {
           store.reassignTask({ taskId: body.taskId, toAgentId: body.toAgentId, override: true }),
         );
       }
+      // ── skills (per task type) ──
+      if (url.pathname === "/api/skills" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        return sendJson(res, 200, store.listSkills(org.id));
+      }
+      if (url.pathname === "/api/skills" && req.method === "POST") {
+        const b = (await readJson(req)) as { org: string; name: string; tags?: string[]; instructions?: string; skillUrl?: string };
+        if (!b?.org || !b?.name) return sendJson(res, 400, { error: "org and name required" });
+        const org = store.getOrCreateOrg(b.org);
+        return sendJson(res, 200, store.createSkill(org.id, { name: b.name, tags: b.tags ?? [], instructions: b.instructions, skillUrl: b.skillUrl }));
+      }
+      if (url.pathname === "/api/skills/delete" && req.method === "POST") {
+        const b = (await readJson(req)) as { id: string };
+        store.deleteSkill(b.id);
+        return sendJson(res, 200, { ok: true });
+      }
+
       // ── webhooks (outbound) ──
       if (url.pathname === "/api/webhooks" && req.method === "GET") {
         const orgName = url.searchParams.get("org");

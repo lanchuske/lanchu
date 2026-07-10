@@ -125,6 +125,17 @@ CREATE TABLE IF NOT EXISTS webhook (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS skill (
+  id           TEXT PRIMARY KEY,
+  org_id       TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL,
+  tags         TEXT NOT NULL,
+  instructions TEXT NOT NULL DEFAULT '',
+  skill_url    TEXT,
+  created_at   TEXT NOT NULL,
+  UNIQUE (org_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS org_rules (
   org_id     TEXT PRIMARY KEY REFERENCES org(id) ON DELETE CASCADE,
   rules      TEXT NOT NULL DEFAULT '',

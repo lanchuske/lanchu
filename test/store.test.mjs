@@ -129,6 +129,19 @@ test("manual blocked stays blocked; dependency-blocked auto-unblocks", () => {
   assert.equal(store.getTask(dependent.id).status, "available"); // dep done → unblocked
 });
 
+test("skills: built-ins seeded, upsert, and tag matching", () => {
+  const { org } = setup("acme15");
+  const skills = store.listSkills(org.id);
+  assert.ok(skills.length >= 5, "built-in skills seeded");
+  assert.ok(skills.some((s) => s.name === "documentation" && s.tags.includes("docs")));
+  assert.ok(store.skillsForTags(org.id, ["docs"]).some((s) => s.name === "documentation"));
+  assert.equal(store.skillsForTags(org.id, ["nope"]).length, 0);
+  const c1 = store.createSkill(org.id, { name: "custom", tags: ["x"], instructions: "a" });
+  const c2 = store.createSkill(org.id, { name: "custom", tags: ["x", "y"], instructions: "b" });
+  assert.equal(c1.id, c2.id); // upsert keeps the same row
+  assert.equal(store.listSkills(org.id).find((s) => s.name === "custom").instructions, "b");
+});
+
 test("handoff reassigns to a peer (role-checked) and org rules persist", () => {
   const { org, project, agent } = setup("acme14");
   const peer = store.createAgent({ orgId: org.id, roleId: agent.role_id, objective: "peer" });

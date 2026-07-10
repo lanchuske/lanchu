@@ -256,6 +256,26 @@ async function cmdRules(): Promise<void> {
   }
 }
 
+async function cmdSkills(): Promise<void> {
+  const org = await orgOf();
+  const sub = positional()[1];
+  if (sub === "add") {
+    const name = positional()[2];
+    if (!name) return console.log('usage: lanchu skills add <name> --tags a,b --instructions "..."');
+    const t = flag("tags");
+    const tags = t ? t.split(",").map((x) => x.trim()).filter(Boolean) : [];
+    console.log(JSON.stringify(await post("/api/skills", { org, name, tags, instructions: flag("instructions"), skillUrl: flag("url") })));
+  } else if (sub === "rm" || sub === "remove") {
+    const id = positional()[2];
+    if (!id) return console.log("usage: lanchu skills rm <id>");
+    await post("/api/skills/delete", { id });
+    console.log("removed", id);
+  } else {
+    const res = await fetch(`${baseUrl()}/api/skills?org=${encodeURIComponent(org)}`);
+    console.log(JSON.stringify(await res.json(), null, 2));
+  }
+}
+
 async function cmdWebhooks(): Promise<void> {
   const org = await orgOf();
   const sub = positional()[1];
@@ -575,6 +595,7 @@ Usage:
   lanchu roles | stats              list roles / local stats
   lanchu roles add <name> --tags a,b   create a role (or --wildcard)
   lanchu rules [set "<text>"]       view / set the org's rules
+  lanchu skills [add <name> --tags a,b --instructions "…" | rm <id>]   skills per task type
   lanchu retire <agentId>           safe retirement (handoff enforced)
   lanchu task release <id>          supervisor override: release a task
   lanchu task reassign <id> <agent> supervisor override: reassign a task
@@ -630,6 +651,8 @@ async function main(): Promise<void> {
       return positional()[1] === "add" ? cmdRolesAdd() : cmdRoles();
     case "rules":
       return cmdRules();
+    case "skills":
+      return cmdSkills();
     case "webhooks":
       return cmdWebhooks();
     case "recurring":
