@@ -1062,11 +1062,24 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
 
 // ───────────────────────── docs (minimal, C5) ─────────────────────────
 
+/**
+ * Standard documentation categories — the shared taxonomy shown, grouped, in the
+ * panel. Keep this ordered: the panel renders sections in this order. "general"
+ * is the fallback bucket for uncategorized docs.
+ */
+export const DOC_CATEGORIES = ["design", "technical", "product", "backlog", "bug", "general"] as const;
+export type DocCategory = (typeof DOC_CATEGORIES)[number];
+
+export function normalizeDocCategory(value: string | null | undefined): DocCategory {
+  return (DOC_CATEGORIES as readonly string[]).includes(value ?? "") ? (value as DocCategory) : "general";
+}
+
 export interface Doc {
   id: string;
   org_id: string;
   title: string;
   content: string;
+  category: DocCategory;
   updated_at: string;
   updated_by_agent_id: string | null;
   created_at: string;
@@ -1098,6 +1111,7 @@ export function upsertDoc(input: {
   id?: string;
   title: string;
   content: string;
+  category?: string;
 }): Doc {
   const now = nowIso();
   const existing =
@@ -1108,9 +1122,11 @@ export function upsertDoc(input: {
       null);
 
   if (existing) {
+    // Keep the existing category unless the caller explicitly sets a new one.
+    const category = input.category !== undefined ? normalizeDocCategory(input.category) : existing.category;
     db()
-      .prepare("UPDATE doc SET content = ?, title = ?, updated_at = ?, updated_by_agent_id = ? WHERE id = ?")
-      .run(input.content, input.title, now, input.agentId, existing.id);
+      .prepare("UPDATE doc SET content = ?, title = ?, category = ?, updated_at = ?, updated_by_agent_id = ? WHERE id = ?")
+      .run(input.content, input.title, category, now, input.agentId, existing.id);
     recordEvent({
       org_id: input.orgId,
       type: "doc.updated",
@@ -1126,9 +1142,9 @@ export function upsertDoc(input: {
   const id = input.id ?? uuid();
   db()
     .prepare(
-      "INSERT INTO doc(id, org_id, title, content, updated_at, updated_by_agent_id, created_at) VALUES (?,?,?,?,?,?,?)",
+      "INSERT INTO doc(id, org_id, title, content, category, updated_at, updated_by_agent_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
     )
-    .run(id, input.orgId, input.title, input.content, now, input.agentId, now);
+    .run(id, input.orgId, input.title, input.content, normalizeDocCategory(input.category), now, input.agentId, now);
   recordEvent({
     org_id: input.orgId,
     type: "doc.created",

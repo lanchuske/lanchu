@@ -323,7 +323,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ query }) => {
       const docs = query ? store.searchDocs(ctx.orgId, query) : store.listDocs(ctx.orgId);
-      return text(docs.map((d) => ({ id: d.id, title: d.title, updated_at: d.updated_at })));
+      return text(docs.map((d) => ({ id: d.id, title: d.title, category: d.category, updated_at: d.updated_at })));
     },
   );
 
@@ -344,12 +344,19 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "doc_update",
     {
       title: "Create or update doc",
-      description: "Creates or updates a shared doc (upsert by id or title). Keeps knowledge current.",
-      inputSchema: { id: z.string().optional(), title: z.string(), content: z.string() },
+      description:
+        "Creates or updates a shared doc (upsert by id or title). Keeps knowledge current. " +
+        "Set category to file it under the standard type: design, technical, product, backlog, bug (defaults to general).",
+      inputSchema: {
+        id: z.string().optional(),
+        title: z.string(),
+        content: z.string(),
+        category: z.enum(store.DOC_CATEGORIES).optional(),
+      },
     },
-    async ({ id, title, content }) => {
+    async ({ id, title, content, category }) => {
       try {
-        return text(store.upsertDoc({ orgId: ctx.orgId, agentId: ctx.agentId, id, title, content }));
+        return text(store.upsertDoc({ orgId: ctx.orgId, agentId: ctx.agentId, id, title, content, category }));
       } catch (err) {
         return fail(err);
       }

@@ -368,6 +368,8 @@ export function createServer(): http.Server {
         const docs = store.listDocs(org.id).map((d) => ({
           id: d.id,
           title: d.title,
+          category: d.category,
+          content: d.content,
           updated_at: d.updated_at,
           updated_by: d.updated_by_agent_id ? (store.getAgent(d.updated_by_agent_id)?.name ?? null) : null,
           chars: d.content.length,

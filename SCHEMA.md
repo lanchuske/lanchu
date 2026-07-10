@@ -134,6 +134,7 @@ CREATE TABLE doc (
   org_id              TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
   title               TEXT NOT NULL,
   content             TEXT NOT NULL DEFAULT '',
+  category            TEXT NOT NULL DEFAULT 'general',  -- design | technical | product | backlog | bug | general
   updated_at          TEXT NOT NULL,
   updated_by_agent_id TEXT REFERENCES agent(id),
   created_at          TEXT NOT NULL

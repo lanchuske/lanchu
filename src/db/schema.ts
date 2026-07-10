@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS doc (
   org_id              TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
   title               TEXT NOT NULL,
   content             TEXT NOT NULL DEFAULT '',
+  category            TEXT NOT NULL DEFAULT 'general',
   updated_at          TEXT NOT NULL,
   updated_by_agent_id TEXT REFERENCES agent(id),
   created_at          TEXT NOT NULL

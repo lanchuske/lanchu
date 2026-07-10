@@ -102,6 +102,17 @@ export function panelHtml(): string {
   .card .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .name { font-weight: 600; letter-spacing: -.01em; }
   .meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  /* ── docs: category sections + expandable detail ── */
+  .cat-title { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600;
+               text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+               margin: 22px 0 10px; }
+  .cat-title:first-child { margin-top: 4px; }
+  .card.doc .doc-body { display: none; white-space: pre-wrap; word-break: break-word; margin-top: 11px;
+               padding-top: 11px; border-top: 1px solid var(--line); color: var(--muted);
+               font-size: 13px; line-height: 1.6; font-family: var(--mono); }
+  .card.doc.open .doc-body { display: block; }
+  .card.doc.open { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .empty-inline { color: var(--faint); font-style: italic; }
   .meta .k { color: var(--faint); }
   .id { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
   .hint { color: var(--faint); font-size: 11.5px; margin-top: 6px; }
@@ -381,7 +392,10 @@ document.addEventListener("click", function (e) {
   // Click anywhere on an agent card (but not on its controls) → reveal its terminal.
   if (e.target.closest && !e.target.closest("button, select")) {
     var card = e.target.closest(".card[data-agent]");
-    if (card) reveal(card.getAttribute("data-agent"), card.getAttribute("data-name"));
+    if (card) { reveal(card.getAttribute("data-agent"), card.getAttribute("data-name")); return; }
+    // Click a doc card → expand/collapse its content.
+    var doc = e.target.closest(".card.doc[data-doc]");
+    if (doc) doc.classList.toggle("open");
   }
 });
 
@@ -507,13 +521,29 @@ function renderRoles(list) {
   }).join("") || '<div class="empty">No roles yet.</div>';
 }
 
+var DOC_CATS = [
+  ["design", "Design"], ["technical", "Technical docs"], ["product", "Product docs"],
+  ["backlog", "Backlog"], ["bug", "Bugs"], ["general", "General"],
+];
 function renderDocs(list) {
   document.getElementById("c-docs").textContent = list.length;
-  document.getElementById("docs").innerHTML = list.map(function (d) {
-    return '<div class="card"><span class="name">' + esc(d.title) + '</span>' +
-      '<div class="meta">' + d.chars + ' chars · ' + esc((d.updated_at || "").replace("T", " ").slice(0, 16)) +
-      (d.updated_by ? ' · by ' + esc(d.updated_by) : "") + '</div></div>';
-  }).join("") || '<div class="empty">No documentation yet.</div>';
+  if (!list.length) { document.getElementById("docs").innerHTML = '<div class="empty">No documentation yet.</div>'; return; }
+  var byCat = {};
+  list.forEach(function (d) { var c = d.category || "general"; (byCat[c] = byCat[c] || []).push(d); });
+  var html = "";
+  DOC_CATS.forEach(function (pair) {
+    var docs = byCat[pair[0]]; if (!docs || !docs.length) return;
+    html += '<div class="cat-title">' + esc(pair[1]) + ' <span class="badge">' + docs.length + '</span></div>';
+    html += docs.map(function (d) {
+      return '<div class="card clickable doc" data-doc="' + esc(d.id) + '">' +
+        '<span class="name">' + esc(d.title) + '</span>' +
+        '<div class="meta">' + d.chars + ' chars · ' + esc((d.updated_at || "").replace("T", " ").slice(0, 16)) +
+        (d.updated_by ? ' · by ' + esc(d.updated_by) : "") + '</div>' +
+        '<div class="doc-body">' + (d.content ? esc(d.content) : '<span class="empty-inline">(empty)</span>') + '</div>' +
+        '</div>';
+    }).join("");
+  });
+  document.getElementById("docs").innerHTML = html;
 }
 
 function renderAudit(list) {
