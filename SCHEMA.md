@@ -50,6 +50,8 @@ CREATE TABLE project (
   id          TEXT PRIMARY KEY,
   org_id      TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,
+  repo_url    TEXT,                     -- origin remote, normalized to https (captured on join)
+  local_path  TEXT,                     -- working-tree root on this machine (captured on join)
   created_at  TEXT NOT NULL,
   UNIQUE (org_id, name)
 );
@@ -79,6 +81,10 @@ CREATE TABLE agent (
                       CHECK (state IN ('active','idle','retired')),
   last_activity_at  TEXT,                     -- derived from the last tool-call (panel)
   last_activity     TEXT,                     -- short summary of that action
+  cwd               TEXT,                     -- directory it was launched in (captured on join)
+  branch            TEXT,                     -- git branch it is working on (captured on join)
+  worktree          TEXT,                     -- git worktree root (captured on join)
+  terminal_ref      TEXT,                     -- JSON handle to its live terminal (pane/window id) for re-focus
   created_at        TEXT NOT NULL,
   retired_at        TEXT,
   UNIQUE (org_id, name)
@@ -100,6 +106,8 @@ CREATE TABLE task (
   title               TEXT NOT NULL,
   status              TEXT NOT NULL DEFAULT 'available'
                         CHECK (status IN ('available','claimed','in_progress','blocked','done')),
+  stage               TEXT,                    -- SDLC lane: definition|build|review|qa|done (null=backlog)
+  pr_url              TEXT,                    -- pull/merge request the agent opened for this task
   owner_agent_id      TEXT REFERENCES agent(id),-- NULL iff status='available'
   workspace           TEXT,                    -- generic: git branch, folder, board… (optional)
   created_by_agent_id TEXT REFERENCES agent(id),

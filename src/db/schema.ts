@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS project (
   id         TEXT PRIMARY KEY,
   org_id     TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
   name       TEXT NOT NULL,
+  repo_url   TEXT,
+  local_path TEXT,
   created_at TEXT NOT NULL,
   UNIQUE (org_id, name)
 );
@@ -48,6 +50,10 @@ CREATE TABLE IF NOT EXISTS agent (
                      CHECK (state IN ('active','idle','retired')),
   last_activity_at TEXT,
   last_activity    TEXT,
+  cwd              TEXT,
+  branch           TEXT,
+  worktree         TEXT,
+  terminal_ref     TEXT,
   created_at       TEXT NOT NULL,
   retired_at       TEXT,
   UNIQUE (org_id, name)
@@ -69,6 +75,8 @@ CREATE TABLE IF NOT EXISTS task (
   title               TEXT NOT NULL,
   status              TEXT NOT NULL DEFAULT 'available'
                         CHECK (status IN ('available','claimed','in_progress','blocked','done')),
+  stage               TEXT,
+  pr_url              TEXT,
   owner_agent_id      TEXT REFERENCES agent(id),
   workspace           TEXT,
   created_by_agent_id TEXT REFERENCES agent(id),

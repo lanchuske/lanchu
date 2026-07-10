@@ -7,6 +7,17 @@ export type TaskStatus =
   | "blocked"
   | "done";
 
+/** SDLC lane, orthogonal to status. Optional; null is treated as backlog. */
+export type TaskStage =
+  | "backlog"
+  | "definition"
+  | "build"
+  | "review"
+  | "qa"
+  | "done";
+
+export const TASK_STAGES: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "done"];
+
 export type EventOutcome = "applied" | "rejected";
 
 export type EventType =
@@ -37,6 +48,8 @@ export interface Project {
   id: string;
   org_id: string;
   name: string;
+  repo_url: string | null;
+  local_path: string | null;
   created_at: string;
 }
 
@@ -58,6 +71,9 @@ export interface Agent {
   state: AgentState;
   last_activity_at: string | null;
   last_activity: string | null;
+  cwd: string | null;
+  branch: string | null;
+  worktree: string | null;
   created_at: string;
   retired_at: string | null;
 }
@@ -68,6 +84,8 @@ export interface Task {
   parent_task_id: string | null;
   title: string;
   status: TaskStatus;
+  stage: TaskStage | null;
+  pr_url: string | null;
   owner_agent_id: string | null;
   workspace: string | null;
   tags: string[];

@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { activeWindowMs, staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
+import { gitInfo } from "./git.js";
 import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
 import {
   ScopeError,
@@ -12,6 +13,7 @@ import {
   type LanchuEvent,
   type Role,
   type Task,
+  type TaskStage,
   type TaskStatus,
 } from "./types.js";
 
@@ -86,16 +88,73 @@ export function getOrCreateOrg(name: string): { id: string; name: string } {
   return { id, name };
 }
 
-export function getOrCreateProject(orgId: string, name: string): { id: string; name: string } {
+export interface ProjectRow {
+  id: string;
+  name: string;
+  repo_url: string | null;
+  local_path: string | null;
+}
+
+const PROJECT_COLS = "id, name, repo_url, local_path";
+
+function loadProject(row: Record<string, unknown>): ProjectRow {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    repo_url: (row.repo_url as string) ?? null,
+    local_path: (row.local_path as string) ?? null,
+  };
+}
+
+export function getOrg(orgId: string): { id: string; name: string } | null {
+  const row = db().prepare("SELECT id, name FROM org WHERE id = ?").get(orgId) as
+    | { id: string; name: string }
+    | undefined;
+  return row ?? null;
+}
+
+export function getOrCreateProject(orgId: string, name: string): ProjectRow {
   const existing = db()
-    .prepare("SELECT id, name FROM project WHERE org_id = ? AND name = ?")
-    .get(orgId, name) as { id: string; name: string } | undefined;
-  if (existing) return existing;
+    .prepare(`SELECT ${PROJECT_COLS} FROM project WHERE org_id = ? AND name = ?`)
+    .get(orgId, name) as Record<string, unknown> | undefined;
+  if (existing) return loadProject(existing);
   const id = uuid();
   db()
     .prepare("INSERT INTO project(id, org_id, name, created_at) VALUES (?,?,?,?)")
     .run(id, orgId, name, nowIso());
-  return { id, name };
+  return { id, name, repo_url: null, local_path: null };
+}
+
+export function listProjects(orgId: string): ProjectRow[] {
+  const rows = db()
+    .prepare(`SELECT ${PROJECT_COLS} FROM project WHERE org_id = ? ORDER BY name`)
+    .all(orgId) as Record<string, unknown>[];
+  return rows.map(loadProject);
+}
+
+/** Fill in a project's repo/path once (won't overwrite values already set). */
+export function setProjectRepo(
+  projectId: string,
+  info: { repoUrl?: string | null; localPath?: string | null },
+): void {
+  db()
+    .prepare(
+      `UPDATE project SET repo_url = COALESCE(repo_url, ?),
+                          local_path = COALESCE(local_path, ?) WHERE id = ?`,
+    )
+    .run(info.repoUrl ?? null, info.localPath ?? null, projectId);
+}
+
+/**
+ * Snapshot where an agent is working from its directory: fills the project's
+ * repo/path (once) and records the agent's branch + worktree. Best-effort — a
+ * missing directory or absent git just leaves the fields null.
+ */
+export function captureWorkspace(projectId: string, agentId: string, cwd?: string | null): void {
+  if (!cwd) return;
+  const g = gitInfo(cwd);
+  setProjectRepo(projectId, { repoUrl: g.repoUrl, localPath: g.worktree ?? cwd });
+  setAgentWorkspace(agentId, { cwd, branch: g.branch, worktree: g.worktree });
 }
 
 // ───────────────────────── roles ─────────────────────────
@@ -199,13 +258,16 @@ function loadAgent(row: Record<string, unknown>): Agent {
     state: row.state as AgentState,
     last_activity_at: (row.last_activity_at as string) ?? null,
     last_activity: (row.last_activity as string) ?? null,
+    cwd: (row.cwd as string) ?? null,
+    branch: (row.branch as string) ?? null,
+    worktree: (row.worktree as string) ?? null,
     created_at: row.created_at as string,
     retired_at: (row.retired_at as string) ?? null,
   };
 }
 
 const AGENT_COLS =
-  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, created_at, retired_at";
+  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, created_at, retired_at";
 
 export function createAgent(input: {
   orgId: string;
@@ -278,6 +340,61 @@ export function touchActivity(agentId: string, summary: string): void {
   db()
     .prepare("UPDATE agent SET last_activity = ?, last_activity_at = ? WHERE id = ?")
     .run(summary, nowIso(), agentId);
+}
+
+export interface TerminalRef {
+  method: "tmux" | "terminal.app";
+  id: string;
+}
+
+/** Persist a handle to the agent's live terminal so any process can re-focus it. */
+export function setAgentTerminal(agentId: string, ref: TerminalRef | null): void {
+  db()
+    .prepare("UPDATE agent SET terminal_ref = ? WHERE id = ?")
+    .run(ref ? JSON.stringify(ref) : null, agentId);
+}
+
+export function getAgentTerminal(agentId: string): TerminalRef | null {
+  const row = db().prepare("SELECT terminal_ref FROM agent WHERE id = ?").get(agentId) as
+    | { terminal_ref?: string }
+    | undefined;
+  if (!row?.terminal_ref) return null;
+  try {
+    return JSON.parse(row.terminal_ref) as TerminalRef;
+  } catch {
+    return null;
+  }
+}
+
+/** Agents that have a captured terminal handle (for the Processes view). */
+export function listTerminals(orgId: string): { agentId: string; name: string; ref: TerminalRef }[] {
+  const rows = db()
+    .prepare(
+      "SELECT id, name, terminal_ref FROM agent WHERE org_id = ? AND terminal_ref IS NOT NULL AND state != 'retired' ORDER BY created_at DESC",
+    )
+    .all(orgId) as { id: string; name: string; terminal_ref: string }[];
+  const out: { agentId: string; name: string; ref: TerminalRef }[] = [];
+  for (const r of rows) {
+    try {
+      out.push({ agentId: r.id, name: r.name, ref: JSON.parse(r.terminal_ref) as TerminalRef });
+    } catch {
+      /* skip malformed ref */
+    }
+  }
+  return out;
+}
+
+/** Record where an agent is working: its directory, git branch and worktree root. */
+export function setAgentWorkspace(
+  agentId: string,
+  ws: { cwd?: string | null; branch?: string | null; worktree?: string | null },
+): void {
+  db()
+    .prepare(
+      `UPDATE agent SET cwd = COALESCE(?, cwd), branch = COALESCE(?, branch),
+                        worktree = COALESCE(?, worktree) WHERE id = ?`,
+    )
+    .run(ws.cwd ?? null, ws.branch ?? null, ws.worktree ?? null, agentId);
 }
 
 const STOPWORDS = new Set([
@@ -393,6 +510,8 @@ function loadTask(row: Record<string, unknown>): Task {
     parent_task_id: (row.parent_task_id as string) ?? null,
     title: row.title as string,
     status: row.status as TaskStatus,
+    stage: (row.stage as Task["stage"]) ?? null,
+    pr_url: (row.pr_url as string) ?? null,
     owner_agent_id: (row.owner_agent_id as string) ?? null,
     workspace: (row.workspace as string) ?? null,
     tags: tags.map((t) => t.tag),
@@ -405,7 +524,7 @@ function loadTask(row: Record<string, unknown>): Task {
 }
 
 const TASK_COLS =
-  "id, project_id, parent_task_id, title, status, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at";
+  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at";
 
 export function getTask(taskId: string): Task | null {
   const row = db().prepare(`SELECT ${TASK_COLS} FROM task WHERE id = ?`).get(taskId) as
@@ -441,6 +560,7 @@ export function createTask(input: {
   agentId: string;
   title: string;
   tags?: string[];
+  stage?: TaskStage;
   parentTaskId?: string | null;
   deps?: string[];
 }): Task {
@@ -467,10 +587,10 @@ export function createTask(input: {
   const now = nowIso();
   db()
     .prepare(
-      `INSERT INTO task(id, project_id, parent_task_id, title, status, created_by_agent_id, created_at, updated_at)
-       VALUES (?,?,?,?, 'available', ?, ?, ?)`,
+      `INSERT INTO task(id, project_id, parent_task_id, title, status, stage, created_by_agent_id, created_at, updated_at)
+       VALUES (?,?,?,?, 'available', ?, ?, ?, ?)`,
     )
-    .run(id, input.projectId, input.parentTaskId ?? null, input.title, input.agentId, now, now);
+    .run(id, input.projectId, input.parentTaskId ?? null, input.title, input.stage ?? null, input.agentId, now, now);
   for (const tag of tags) {
     db().prepare("INSERT OR IGNORE INTO task_tag(task_id, tag) VALUES (?,?)").run(id, tag);
   }
@@ -564,6 +684,8 @@ export function updateTaskStatus(input: {
   agentId: string;
   taskId: string;
   status: TaskStatus;
+  stage?: TaskStage;
+  prUrl?: string;
   note?: string;
   tokens?: number;
 }): Task {
@@ -573,9 +695,14 @@ export function updateTaskStatus(input: {
 
   const now = nowIso();
   const doneAt = input.status === "done" ? now : null;
+  // Explicit stage wins; otherwise completing a task advances its lane to done.
+  const stage = input.stage ?? (input.status === "done" ? "done" : null);
   db()
-    .prepare("UPDATE task SET status = ?, updated_at = ?, done_at = COALESCE(?, done_at) WHERE id = ?")
-    .run(input.status, now, doneAt, input.taskId);
+    .prepare(
+      `UPDATE task SET status = ?, updated_at = ?, done_at = COALESCE(?, done_at),
+                       stage = COALESCE(?, stage), pr_url = COALESCE(?, pr_url) WHERE id = ?`,
+    )
+    .run(input.status, now, doneAt, stage, input.prUrl ?? null, input.taskId);
 
   const type: EventType =
     input.status === "done"
@@ -1078,6 +1205,7 @@ export type BoardAgent = Agent & {
 export interface BoardSnapshot {
   agents: BoardAgent[];
   tasks: BoardTask[];
+  projects: ProjectRow[];
 }
 
 export interface AuditEvent {
@@ -1160,5 +1288,5 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
     };
   });
 
-  return { agents, tasks };
+  return { agents, tasks, projects: listProjects(orgId) };
 }

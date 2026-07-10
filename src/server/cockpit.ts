@@ -24,29 +24,44 @@ const isMac = () => process.platform === "darwin";
 const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
 /** Shell command that wires Claude to Lanchu and launches it with a first prompt. */
-export function bootstrapCommand(cwd: string, token: string, prompt: string): string {
+export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string): string {
   const add = `claude mcp add lanchu --transport http ${mcpUrl()} --header 'Authorization: Bearer ${token}'`;
-  return `cd ${sq(cwd)}; ${add} >/dev/null 2>&1; claude ${sq(prompt)}`;
+  // Export the agent name so `lanchu statusline` can show which teammate owns this terminal.
+  const ident = agentName ? `export LANCHU_AGENT=${sq(agentName)}; ` : "";
+  return `cd ${sq(cwd)}; ${ident}${add} >/dev/null 2>&1; claude ${sq(prompt)}`;
 }
 
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+
+/**
+ * Handle to an agent's live terminal, captured at spawn: a tmux pane id or a
+ * Terminal.app window id. We focus by this id rather than by title, because
+ * Claude Code rewrites the window title with its own status once it starts.
+ * Persisted (via the store) so any process can re-focus, not just the spawner.
+ */
+export interface TerminalRef {
+  method: "tmux" | "terminal.app";
+  id: string;
+}
 
 export interface SpawnResult {
   method: "tmux" | "terminal.app" | "print";
   title: string;
   command: string;
   note: string;
+  ref?: TerminalRef;
 }
 
 /** Open a terminal for a new agent. With dry=true, returns the plan without executing. */
 export function spawnTerminal(input: {
   title: string;
+  agentName?: string;
   cwd: string;
   token: string;
   prompt: string;
   dry?: boolean;
 }): SpawnResult {
-  const command = bootstrapCommand(input.cwd, input.token, input.prompt);
+  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName);
 
   if (hasTmux()) {
     const plan: SpawnResult = {
@@ -56,16 +71,19 @@ export function spawnTerminal(input: {
       note: `tmux pane in session '${TMUX_SESSION}'. Attach with: tmux attach -t ${TMUX_SESSION}`,
     };
     if (input.dry) return plan;
-    // ensure session, add a tiled pane titled org·agent
+    // ensure session, add a tiled pane titled org·agent, and capture its pane id
     const has0 = spawnSync("tmux", ["has-session", "-t", TMUX_SESSION], { stdio: "ignore" }).status === 0;
+    let paneId = "";
     if (!has0) {
       spawnSync("tmux", ["new-session", "-d", "-s", TMUX_SESSION, "-c", input.cwd, command]);
+      paneId = (spawnSync("tmux", ["display-message", "-p", "-t", TMUX_SESSION, "#{pane_id}"], { encoding: "utf8" }).stdout ?? "").trim();
     } else {
-      spawnSync("tmux", ["split-window", "-t", TMUX_SESSION, "-c", input.cwd, command]);
+      paneId = (spawnSync("tmux", ["split-window", "-P", "-F", "#{pane_id}", "-t", TMUX_SESSION, "-c", input.cwd, command], { encoding: "utf8" }).stdout ?? "").trim();
     }
     spawnSync("tmux", ["select-layout", "-t", TMUX_SESSION, "tiled"]);
     spawnSync("tmux", ["set-option", "-p", "-t", TMUX_SESSION, "pane-border-status", "top"]);
-    spawnSync("tmux", ["select-pane", "-t", TMUX_SESSION, "-T", input.title]);
+    if (paneId) spawnSync("tmux", ["select-pane", "-t", paneId, "-T", input.title]);
+    if (paneId) plan.ref = { method: "tmux", id: paneId };
     return plan;
   }
 
@@ -77,15 +95,19 @@ export function spawnTerminal(input: {
       note: "Opened a new Terminal.app window.",
     };
     if (input.dry) return plan;
+    // Return the new window's id so we can re-focus it later regardless of title.
     const osa = [
       'tell application "Terminal"',
       "  activate",
       `  set t to do script ${asAppleStr(command)}`,
       "  delay 0.4",
       `  set custom title of t to ${asAppleStr(input.title)}`,
+      "  return id of front window",
       "end tell",
     ].join("\n");
-    spawnSync("osascript", ["-e", osa]);
+    const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8" });
+    const winId = (out.stdout ?? "").trim();
+    if (/^\d+$/.test(winId)) plan.ref = { method: "terminal.app", id: winId };
     return plan;
   }
 
@@ -95,6 +117,95 @@ export function spawnTerminal(input: {
     command,
     note: "No tmux and not macOS — run this command in a new terminal yourself.",
   };
+}
+
+/**
+ * Bring an agent's terminal to the front using the ref captured at spawn. Returns
+ * false when the terminal is gone (e.g. the user closed it), so the caller can
+ * open a fresh one instead.
+ */
+export function focusTerminal(ref: TerminalRef): boolean {
+  if (ref.method === "tmux") {
+    const panes = (spawnSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], { encoding: "utf8" }).stdout ?? "")
+      .trim().split("\n");
+    if (panes.indexOf(ref.id) < 0) return false;
+    spawnSync("tmux", ["select-window", "-t", ref.id]);
+    spawnSync("tmux", ["select-pane", "-t", ref.id]);
+    return true;
+  }
+
+  // terminal.app: raise the window by id if it still exists.
+  const osa = [
+    'tell application "Terminal"',
+    "  try",
+    `    set w to (first window whose id is ${ref.id})`,
+    "    set index of w to 1",
+    "    activate",
+    "    return true",
+    "  on error",
+    "    return false",
+    "  end try",
+    "end tell",
+  ].join("\n");
+  const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8" });
+  return (out.stdout ?? "").trim() === "true";
+}
+
+/** Is the agent's terminal still open? */
+export function terminalAlive(ref: TerminalRef): boolean {
+  if (ref.method === "tmux") {
+    const panes = (spawnSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}"], { encoding: "utf8" }).stdout ?? "")
+      .trim().split("\n");
+    return panes.indexOf(ref.id) >= 0;
+  }
+  const osa = `tell application "Terminal" to try
+  get (first window whose id is ${ref.id})
+  return true
+on error
+  return false
+end try`;
+  return (spawnSync("osascript", ["-e", osa], { encoding: "utf8" }).stdout ?? "").trim() === "true";
+}
+
+/** Recent output from the agent's terminal (best-effort; empty when unavailable). */
+export function terminalLogs(ref: TerminalRef, lines = 200): string {
+  if (ref.method === "tmux") {
+    const out = spawnSync("tmux", ["capture-pane", "-p", "-t", ref.id, "-S", `-${lines}`], { encoding: "utf8" });
+    return out.status === 0 ? (out.stdout ?? "") : "";
+  }
+  // Terminal.app: the tab's scrollback (history), tail-trimmed.
+  const osa = `tell application "Terminal" to try
+  return history of selected tab of (first window whose id is ${ref.id})
+on error
+  return ""
+end try`;
+  const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8" });
+  const text = (out.stdout ?? "").replace(/\n+$/, "");
+  const arr = text.split("\n");
+  return arr.slice(Math.max(0, arr.length - lines)).join("\n");
+}
+
+/**
+ * Stop the agent's terminal. tmux panes are killed directly; Terminal.app windows
+ * are stopped by killing the tty's processes first (so no "processes running"
+ * modal appears), then closing the window without a save prompt.
+ */
+export function closeTerminal(ref: TerminalRef): boolean {
+  if (ref.method === "tmux") {
+    return spawnSync("tmux", ["kill-pane", "-t", ref.id]).status === 0;
+  }
+  const tty = (spawnSync("osascript", ["-e",
+    `tell application "Terminal" to try
+  return tty of selected tab of (first window whose id is ${ref.id})
+on error
+  return ""
+end try`], { encoding: "utf8" }).stdout ?? "").trim();
+  if (tty) spawnSync("pkill", ["-t", tty.replace(/^\/dev\//, "")]);
+  spawnSync("osascript", ["-e",
+    `tell application "Terminal" to try
+  close (first window whose id is ${ref.id}) saving no
+end try`]);
+  return true;
 }
 
 export interface TileResult {

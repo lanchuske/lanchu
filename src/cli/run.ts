@@ -384,8 +384,10 @@ async function cmdSpawn(): Promise<void> {
   const objective = positional().slice(1).join(" ") || undefined;
   const s = (await post("/session", {
     org, project, objective, cwd: process.cwd(), role: role ?? "generalist", wildcard: role ? false : true,
-  })) as { token: string; agentName: string };
-  const result = spawnTerminal({ title: `${org}·${s.agentName}`, cwd: process.cwd(), token: s.token, prompt: SPAWN_PROMPT, dry: hasFlag("dry") });
+  })) as { token: string; agentName: string; agentId: string };
+  const result = spawnTerminal({ title: `${org}·${s.agentName}`, agentName: s.agentName, cwd: process.cwd(), token: s.token, prompt: SPAWN_PROMPT, dry: hasFlag("dry") });
+  // Persist the terminal handle so the panel can re-focus this agent later.
+  if (!hasFlag("dry") && result.ref) await post("/agent/terminal", { agentId: s.agentId, ref: result.ref });
   console.log(`Agent '${s.agentName}' · [${result.method}] ${result.note}`);
   if (result.method === "print" || hasFlag("dry")) console.log("\nCommand:\n  " + result.command);
 }
@@ -466,6 +468,8 @@ async function statusLine(): Promise<string> {
   const found = findConfig();
   if (!found) return "";
   const { org, project } = found.config;
+  // Set at launch (spawn/wizard) so the line can name which teammate owns this terminal.
+  const me = process.env.LANCHU_AGENT ? ` · you: ${process.env.LANCHU_AGENT}` : "";
   if (!(await serverUp())) return "lanchu ○ not running";
   try {
     const b = (await (await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`, {
@@ -473,9 +477,9 @@ async function statusLine(): Promise<string> {
     })).json()) as { agents: { state: string }[]; tasks: { status: string }[] };
     const active = b.agents.filter((a) => a.state === "active").length;
     const open = b.tasks.filter((t) => ["claimed", "in_progress", "blocked"].includes(t.status)).length;
-    return `lanchu ● ${org}/${project} · ${active} active · ${open} open`;
+    return `lanchu ● ${org}/${project}${me} · ${active} active · ${open} open`;
   } catch {
-    return "lanchu ● running";
+    return `lanchu ● running${me}`;
   }
 }
 
@@ -609,7 +613,8 @@ async function cmdWork(prefillObjective: string): Promise<void> {
       const instruction =
         "You are connected to Lanchu. Read the lanchu://me resource for your objective, role and tasks, " +
         "then claim (task_claim) and work the tasks in your scope, reporting progress with task_update.";
-      spawn(claudeCmd, [instruction], { stdio: "inherit" });
+      // Tag this terminal with the agent so `lanchu statusline` can name it.
+      spawn(claudeCmd, [instruction], { stdio: "inherit", env: { ...process.env, LANCHU_AGENT: s.agentName } });
     } else {
       const op = (await rl.question(`Open the supervisor panel instead? [Y/n] `)).trim().toLowerCase();
       rl.close();

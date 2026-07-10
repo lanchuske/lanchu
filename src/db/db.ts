@@ -42,14 +42,35 @@ export function openDb(file: string = dbPath()): DatabaseSync {
 }
 
 function migrate(db: DatabaseSync): void {
-  db.exec(SCHEMA_SQL);
+  db.exec(SCHEMA_SQL); // creates any missing tables (fresh installs)
+
+  // Additive column migrations for databases created before a column existed.
+  // CREATE TABLE IF NOT EXISTS never alters an existing table, so bring older
+  // rows up to date with idempotent ALTER … ADD COLUMN steps.
+  addColumn(db, "project", "repo_url", "TEXT");
+  addColumn(db, "project", "local_path", "TEXT");
+  addColumn(db, "agent", "cwd", "TEXT");
+  addColumn(db, "agent", "branch", "TEXT");
+  addColumn(db, "agent", "worktree", "TEXT");
+  addColumn(db, "agent", "terminal_ref", "TEXT");
+  addColumn(db, "task", "stage", "TEXT");
+  addColumn(db, "task", "pr_url", "TEXT");
+
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }
     | undefined;
   if (!row) {
     db.prepare("INSERT INTO schema_meta(version) VALUES (?)").run(SCHEMA_VERSION);
+  } else if (row.version < SCHEMA_VERSION) {
+    db.prepare("UPDATE schema_meta SET version = ?").run(SCHEMA_VERSION);
   }
-  // Future migrations: compare row.version with SCHEMA_VERSION and apply steps.
+}
+
+/** Add a column if the table doesn't already have it. Idempotent. */
+function addColumn(db: DatabaseSync, table: string, column: string, type: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 
 export function closeDb(): void {

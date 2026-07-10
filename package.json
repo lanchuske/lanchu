@@ -1,6 +1,6 @@
 {
   "name": "lanchu",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Control and trust layer for coordinating multiple AI agents. MCP, 100% local, open source.",
   "type": "module",
   "license": "MIT",

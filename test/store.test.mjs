@@ -12,6 +12,7 @@ process.env.LANCHU_STALE_HOURS = "24";
 
 const store = await import("../dist/core/store.js");
 const { ScopeError } = await import("../dist/core/types.js");
+const { getContext } = await import("../dist/server/context.js");
 
 function setup(orgName) {
   const org = store.getOrCreateOrg(orgName);
@@ -211,4 +212,21 @@ test("board enriches agents (role, open count, workspace) and task owner name", 
   assert.equal(ba.workspace, "feat/x");
   const bt = b.tasks.find((x) => x.id === t.id);
   assert.equal(bt.owner_name, agent.name);
+});
+
+test("getContext rehydrates a persisted session from the DB after a restart", () => {
+  // A fresh test process has an empty in-memory context map — the same state the
+  // server is in right after a restart. getContext must fall back to the open
+  // session row so a token minted before the restart still authenticates.
+  const { org, project, agent } = setup("acme11");
+  const { token } = store.openSession(agent.id);
+  const ctx = getContext(token);
+  assert.ok(ctx, "expected getContext to rehydrate from the DB");
+  assert.equal(ctx.token, token);
+  assert.equal(ctx.agentId, agent.id);
+  assert.equal(ctx.orgId, org.id);
+  assert.equal(ctx.orgName, org.name);
+  assert.equal(ctx.projectId, project.id);
+  // An unknown token resolves to nothing.
+  assert.equal(getContext("lsk_not_a_real_token"), undefined);
 });

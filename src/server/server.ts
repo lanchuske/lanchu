@@ -1,10 +1,14 @@
+import { spawn } from "node:child_process";
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { HOST, mcpUrl, port } from "../config.js";
+import { HOST, mcpUrl, port, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
+import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { getContext, putContext } from "./context.js";
 import { buildMcpServer } from "./mcp.js";
 import { panelHtml } from "./panel.js";
@@ -90,6 +94,7 @@ function handleSession(body: SessionRequest, res: http.ServerResponse): void {
   }
 
   const { token } = store.openSession(agentId, body.client);
+  store.captureWorkspace(project.id, agentId, body.cwd);
   putContext({
     token,
     agentId,
@@ -109,6 +114,47 @@ function handleSession(body: SessionRequest, res: http.ServerResponse): void {
     project: project.name,
     mcpUrl: mcpUrl(),
   });
+}
+
+/**
+ * Panel action: reveal an agent's terminal. If its window is still open, bring
+ * it to the front; otherwise open a fresh terminal, resuming the same agent
+ * (new session, its stored directory) so the supervisor can jump back in.
+ */
+function revealAgent(agentId: string): {
+  action: "focused" | "opened" | "unavailable";
+  method?: string;
+  reason?: string;
+} {
+  const agent = store.getAgent(agentId);
+  if (!agent) return { action: "unavailable", reason: "agent not found" };
+  const org = store.getOrg(agent.org_id);
+  const title = `${org?.name ?? "lanchu"}·${agent.name}`;
+
+  const ref = store.getAgentTerminal(agent.id);
+  if (ref && focusTerminal(ref)) return { action: "focused" };
+
+  // No live terminal — open one for this agent where it was last working.
+  const project = store.listProjects(agent.org_id)[0];
+  const cwd = agent.cwd || agent.worktree || process.cwd();
+  const { token } = store.openSession(agent.id);
+  if (project) store.captureWorkspace(project.id, agent.id, cwd);
+  putContext({
+    token,
+    agentId: agent.id,
+    agentName: agent.name,
+    orgId: agent.org_id,
+    orgName: org?.name ?? "",
+    projectId: project?.id ?? "",
+    projectName: project?.name ?? "",
+    cwd,
+  });
+  const prompt =
+    "You are resuming as a Lanchu teammate. Read the lanchu://me resource for your objective, " +
+    "role and open tasks, then continue working them, reporting progress with task_update.";
+  const result = spawnTerminal({ title, agentName: agent.name, cwd, token, prompt });
+  store.setAgentTerminal(agent.id, result.ref ?? null);
+  return { action: "opened", method: result.method };
 }
 
 async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -282,6 +328,64 @@ export function createServer(): http.Server {
         const body = (await readJson(req)) as { agentId: string };
         return sendJson(res, 200, store.retireAgent(body.agentId));
       }
+      if (url.pathname === "/agent/reveal" && req.method === "POST") {
+        const body = (await readJson(req)) as { agentId: string };
+        return sendJson(res, 200, revealAgent(body.agentId));
+      }
+      if (url.pathname === "/agent/terminal" && req.method === "POST") {
+        const body = (await readJson(req)) as { agentId: string; ref: store.TerminalRef | null };
+        store.setAgentTerminal(body.agentId, body.ref ?? null);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // ── processes (server + agent terminals) ──
+      if (url.pathname === "/api/processes" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        const terminals = store.listTerminals(org.id).map((t) => ({
+          agentId: t.agentId,
+          name: t.name,
+          method: t.ref.method,
+          id: t.ref.id,
+          alive: terminalAlive(t.ref),
+        }));
+        return sendJson(res, 200, {
+          server: {
+            pid: process.pid,
+            uptimeSec: Math.round(process.uptime()),
+            port: port(),
+            version: VERSION,
+            memMB: Math.round(process.memoryUsage().rss / 1e6),
+            platform: process.platform,
+            node: process.version,
+          },
+          terminals,
+        });
+      }
+      if (url.pathname === "/api/agent/logs" && req.method === "GET") {
+        const agentId = url.searchParams.get("agentId") ?? "";
+        const ref = store.getAgentTerminal(agentId);
+        if (!ref) return sendJson(res, 200, { logs: "", alive: false });
+        return sendJson(res, 200, { logs: terminalLogs(ref), alive: terminalAlive(ref) });
+      }
+      if (url.pathname === "/agent/terminal/close" && req.method === "POST") {
+        const body = (await readJson(req)) as { agentId: string };
+        const ref = store.getAgentTerminal(body.agentId);
+        const ok = ref ? closeTerminal(ref) : false;
+        store.setAgentTerminal(body.agentId, null);
+        return sendJson(res, 200, { closed: ok });
+      }
+      if (url.pathname === "/server/stop" && req.method === "POST") {
+        sendJson(res, 200, { ok: true });
+        setTimeout(() => process.exit(0), 50);
+        return;
+      }
+      if (url.pathname === "/server/restart" && req.method === "POST") {
+        sendJson(res, 200, { ok: true });
+        restartServer();
+        return;
+      }
       if (url.pathname === "/task/release" && req.method === "POST") {
         const body = (await readJson(req)) as { taskId: string };
         return sendJson(res, 200, store.releaseTask({ agentId: null, taskId: body.taskId, override: true }));
@@ -396,6 +500,21 @@ export function createServer(): http.Server {
       else res.end();
     }
   });
+}
+
+/**
+ * Restart the server for the panel's "Restart" action. We can't rebind the port
+ * while still listening, so a detached helper waits for us to exit, then starts a
+ * fresh `serve`. The panel's SSE drops and reconnects once it's back (~1s).
+ */
+function restartServer(): void {
+  const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cli", "index.js");
+  const [cmd, args] =
+    process.platform === "win32"
+      ? ["cmd", ["/c", `ping -n 2 127.0.0.1 >NUL & "${process.execPath}" "${bin}" serve`]]
+      : ["sh", ["-c", `sleep 1; exec "${process.execPath}" "${bin}" serve`]];
+  spawn(cmd, args as string[], { detached: true, stdio: "ignore" }).unref();
+  setTimeout(() => process.exit(0), 150);
 }
 
 export function startServer(): Promise<http.Server> {

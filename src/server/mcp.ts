@@ -173,9 +173,11 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         title: z.string(),
         tags: z.array(z.string()).default([]),
         deps: z.array(z.string()).default([]),
+        stage: z.enum(["backlog", "definition", "build", "review", "qa", "done"]).optional()
+          .describe("SDLC lane for the board: definition | build | review | qa | done."),
       },
     },
-    async ({ title, tags, deps }) => {
+    async ({ title, tags, deps, stage }) => {
       try {
         return text(
           store.createTask({
@@ -185,6 +187,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
             title,
             tags,
             deps,
+            stage,
           }),
         );
       } catch (err) {
@@ -231,17 +234,21 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "task_update",
     {
       title: "Update task",
-      description: "Changes status (in_progress|blocked|done). 'done' unblocks dependents.",
+      description:
+        "Changes status (in_progress|blocked|done). 'done' unblocks dependents. Optionally advance the SDLC stage or attach the PR/MR URL you opened.",
       inputSchema: {
         taskId: z.string(),
         status: z.enum(["in_progress", "blocked", "done"]),
+        stage: z.enum(["backlog", "definition", "build", "review", "qa", "done"]).optional()
+          .describe("SDLC lane for the board: definition | build | review | qa | done."),
+        prUrl: z.string().optional().describe("URL of the pull/merge request for this task."),
         note: z.string().optional(),
         tokens: z.number().optional(),
       },
     },
-    async ({ taskId, status, note, tokens }) => {
+    async ({ taskId, status, stage, prUrl, note, tokens }) => {
       try {
-        const task = store.updateTaskStatus({ agentId: ctx.agentId, taskId, status, note, tokens });
+        const task = store.updateTaskStatus({ agentId: ctx.agentId, taskId, status, stage, prUrl, note, tokens });
         const nudge =
           status === "done"
             ? "Remember to update the relevant documentation with what changed."
@@ -444,13 +451,15 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         const roleObj = store.getOrCreateRole(ctx.orgId, roleName, roleName === "generalist" ? { wildcard: true } : {});
         const agent = store.createAgent({ orgId: ctx.orgId, roleId: roleObj.id, objective });
         const { token } = store.openSession(agent.id);
+        store.captureWorkspace(ctx.projectId, agent.id, ctx.cwd);
         putContext({
           token, agentId: agent.id, agentName: agent.name,
           orgId: ctx.orgId, orgName: ctx.orgName, projectId: ctx.projectId, projectName: ctx.projectName, cwd: ctx.cwd,
         });
         const prompt =
           "You are a new Lanchu teammate. Greet the user in one line, then ask which task you should do. When they answer, read org_context, then claim and work the matching task.";
-        const result = spawnTerminal({ title: `${ctx.orgName}·${agent.name}`, cwd: ctx.cwd || process.cwd(), token, prompt });
+        const result = spawnTerminal({ title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd: ctx.cwd || process.cwd(), token, prompt });
+        store.setAgentTerminal(agent.id, result.ref ?? null);
         return text({ agent: agent.name, ...result });
       } catch (err) {
         return fail(err);
