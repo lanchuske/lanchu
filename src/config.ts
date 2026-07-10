@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 /** Single source of truth for the version (keep in sync with package.json). */
-export const VERSION = "0.5.3";
+export const VERSION = "0.5.4";
 
 /**
  * Local server paths and configuration, OS-agnostic.

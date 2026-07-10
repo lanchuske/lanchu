@@ -10,17 +10,35 @@ let _db: DatabaseSync | null = null;
 export function openDb(file: string = dbPath()): DatabaseSync {
   if (_db) return _db;
 
-  if (file !== ":memory:") {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    if (file !== ":memory:") {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+    }
+
+    const db = new DatabaseSync(file);
+    db.exec("PRAGMA journal_mode = WAL;");
+    db.exec("PRAGMA foreign_keys = ON;");
+    migrate(db);
+
+    _db = db;
+    return db;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM" || code === "EROFS" || code === "ENOSPC") {
+      const dir = path.dirname(file);
+      const reason =
+        code === "EROFS"
+          ? "the location is read-only"
+          : code === "ENOSPC"
+            ? "the disk is full"
+            : "Lanchu can't write there (permission denied)";
+      throw new Error(
+        `Can't open the local Lanchu database at ${file} — ${reason}.\n` +
+          `Fix the permissions on ${dir}, or point Lanchu elsewhere with LANCHU_STATE_DIR=/a/writable/path.`,
+      );
+    }
+    throw err;
   }
-
-  const db = new DatabaseSync(file);
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  migrate(db);
-
-  _db = db;
-  return db;
 }
 
 function migrate(db: DatabaseSync): void {
