@@ -114,6 +114,7 @@ async function cmdDoctor(): Promise<void> {
   console.log(`state dir   ${stateDir()}`);
   console.log(`db          ${dbPath()}`);
   console.log(`port        ${port()}${port() === DEFAULT_PORT ? " (default)" : ""}`);
+  console.log(`on PATH     ${lanchuOnPath() ? "yes" : "no — run: lanchu install-commands  (or npm i -g lanchu)"}`);
   console.log(`server      ${(await serverUp()) ? "running" : "stopped"}`);
 }
 
@@ -408,6 +409,38 @@ the user concisely (these are supervisor actions, not agent work).
 !\`npx lanchu $ARGUMENTS\`
 `;
 
+/** Is a real `lanchu` executable resolvable on PATH? (npx runs never leave one.) */
+function lanchuOnPath(): boolean {
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const names = process.platform === "win32" ? ["lanchu.cmd", "lanchu.exe", "lanchu"] : ["lanchu"];
+  for (const d of dirs) {
+    for (const n of names) {
+      try {
+        if (fs.existsSync(path.join(d, n))) return true;
+      } catch {
+        /* unreadable PATH entry — skip */
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Make sure `lanchu` is on PATH so the user can run it directly (not only via
+ * `npx` or the slash command). Installs it globally when missing. Best-effort:
+ * a failed install (e.g. needs sudo) just prints the manual command.
+ */
+function ensureOnPath(): void {
+  if (lanchuOnPath()) return;
+  console.log("`lanchu` isn't on your PATH yet — installing it globally so you can run it directly…");
+  const r = spawnSync("npm", ["i", "-g", "lanchu"], { stdio: "inherit" });
+  if (r.status === 0 && lanchuOnPath()) {
+    console.log("✓ `lanchu` is on your PATH. If this shell still can't find it, run `hash -r` or open a new tab.");
+  } else {
+    console.log("Couldn't auto-install. Add it yourself:  npm i -g lanchu");
+  }
+}
+
 function cmdInstallCommands(): void {
   const dir = path.join(os.homedir(), ".claude", "commands");
   const file = path.join(dir, "lanchu.md");
@@ -419,6 +452,7 @@ function cmdInstallCommands(): void {
   fs.writeFileSync(file, LANCHU_SLASH_COMMAND);
   console.log(`Installed the /lanchu slash command → ${file}`);
   console.log('In Claude Code:  /lanchu panel  ·  /lanchu status  ·  /lanchu spawn "write the docs"  ·  /lanchu tile');
+  ensureOnPath(); // so `lanchu …` works in a plain terminal too, not just `npx`/slash
 }
 
 async function cmdUninstall(): Promise<void> {
@@ -526,6 +560,7 @@ async function cmdWork(prefillObjective: string): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log("Lanchu — let's get you set up.");
+    ensureOnPath(); // one-time: put `lanchu` on PATH (no-op if already there)
     await maybeNotify();
 
     // 1) org / project
