@@ -129,6 +129,27 @@ test("manual blocked stays blocked; dependency-blocked auto-unblocks", () => {
   assert.equal(store.getTask(dependent.id).status, "available"); // dep done → unblocked
 });
 
+test("handoff reassigns to a peer (role-checked) and org rules persist", () => {
+  const { org, project, agent } = setup("acme14");
+  const peer = store.createAgent({ orgId: org.id, roleId: agent.role_id, objective: "peer" });
+  const t = store.createTask({ projectId: project.id, orgId: org.id, agentId: agent.id, title: "hand me", tags: ["ui"] });
+  store.claimTask({ agentId: agent.id, taskId: t.id });
+
+  const byName = store.findAgentByName(org.id, peer.name);
+  assert.equal(byName.id, peer.id);
+  const handed = store.reassignTask({ taskId: t.id, toAgentId: peer.id, byAgentId: agent.id, note: "your turn" });
+  assert.equal(handed.owner_agent_id, peer.id);
+
+  // role must cover: a role with no matching tags cannot receive
+  const narrow = store.getOrCreateRole(org.id, "narrow", { tags: ["other"] });
+  const narrowAgent = store.createAgent({ orgId: org.id, roleId: narrow.id, objective: "x" });
+  assert.throws(() => store.reassignTask({ taskId: t.id, toAgentId: narrowAgent.id }));
+
+  assert.equal(store.getOrgRules(org.id), "");
+  store.setOrgRules(org.id, "Be concise. Ask before deleting.");
+  assert.match(store.getOrgRules(org.id), /concise/);
+});
+
 test("webhooks CRUD and event filtering", () => {
   const { org } = setup("acme9");
   const w = store.createWebhook(org.id, "http://example.test/hook", ["task.created"], "s3cret");

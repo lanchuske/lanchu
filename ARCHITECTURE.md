@@ -116,21 +116,27 @@ HTTP (`/api/*`) and shown in the panel.
 
 ## 6. Agent tools (MCP)
 
-Eleven tools, each bound to the calling agent's session (names are the MCP tool ids).
+Fifteen tools, each bound to the calling agent's session (names are the MCP tool ids).
 
 | Tool | Inputs | Notes |
 |------|--------|-------|
 | `session_whoami` | — | Identity + role + `allowed_tags` + open tasks. |
 | `session_leave` | — | Ends the session; the agent goes to **IDLE**. |
 | `task_list` | `filter` (`mine`/`available`/`all`) | *Pull* view of the project's tasks. |
+| `task_get` | `taskId` | One task's detail (status, tags, owner, workspace, deps). |
 | `task_create` | `title`, `tags?`, `deps?` | The agent structures its plan. Rejected if `tags ⊄ allowed_tags`. Emits `task.created`. |
 | `task_check_scope` | `taskId` | `yours` / `someone_else` / `out_of_role` / `available`. |
 | `task_claim` | `taskId`, `workspace?` | **Atomic lock** + role check. Fails if taken or out of role. Emits `task.claimed`. |
 | `task_update` | `taskId`, `status`, `note?`, `tokens?` | `done` unblocks dependents; the response includes a doc *nudge* (C5). Emits `task.started/blocked/completed`. |
 | `task_release` | `taskId` | Returns the task to the pool. Emits `task.released`. |
+| `task_handoff` | `taskId`, `toAgent`, `note?` | Hand a task **you own** to another agent by name (role-checked, logged). Emits `task.reassigned`. |
 | `doc_list` | `query?` | List/search shared docs. |
 | `doc_read` | `id` | Read a doc (agents are pushed to read before acting). |
 | `doc_update` | `id?`, `title`, `content` | Create or update a doc (upsert). Emits `doc.created/updated`. |
+| `org_rules` | — | The org's rules/guidelines the agent must follow. |
+| `org_context` | — | Compact briefing (objective, role, rules, open tasks, doc index) to focus and save tokens. |
+
+Org rules are set by the supervisor via `lanchu rules set "…"` or `POST /api/org/rules`.
 
 > There is no `session_register`/`heartbeat`: identity is issued by the **launcher** (§2)
 > and presence is derived from recency of activity. `workspace` is generic (a git branch

@@ -224,6 +224,20 @@ export function createServer(): http.Server {
         return sendJson(res, 200, store.defineRole(org.id, body.name, { wildcard: body.wildcard, tags: body.tags }));
       }
 
+      if (url.pathname === "/api/org/rules" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(orgName);
+        return sendJson(res, 200, { rules: store.getOrgRules(org.id) });
+      }
+      if (url.pathname === "/api/org/rules" && req.method === "POST") {
+        const b = (await readJson(req)) as { org: string; rules: string };
+        if (!b?.org) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrCreateOrg(b.org);
+        store.setOrgRules(org.id, b.rules ?? "");
+        return sendJson(res, 200, { ok: true, rules: store.getOrgRules(org.id) });
+      }
+
       if (url.pathname === "/api/audit" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });

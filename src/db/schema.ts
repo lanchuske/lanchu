@@ -125,6 +125,12 @@ CREATE TABLE IF NOT EXISTS webhook (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS org_rules (
+  org_id     TEXT PRIMARY KEY REFERENCES org(id) ON DELETE CASCADE,
+  rules      TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS recurring (
   id               TEXT PRIMARY KEY,
   org_id           TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,

@@ -645,6 +645,7 @@ export function reassignTask(input: {
   toAgentId: string;
   byAgentId?: string | null;
   override?: boolean;
+  note?: string;
 }): Task {
   const task = getTask(input.taskId);
   const to = getAgent(input.toAgentId);
@@ -665,9 +666,37 @@ export function reassignTask(input: {
     actor_agent_id: input.byAgentId ?? null,
     subject_kind: "task",
     subject_id: task.id,
-    data: { to: input.toAgentId, override: input.override ?? false },
+    data: { to: input.toAgentId, to_name: to.name, override: input.override ?? false, ...(input.note ? { note: input.note } : {}) },
   });
+  if (input.byAgentId) touchActivity(input.byAgentId, `handed off ${task.id} to ${to.name}`);
   return getTask(input.taskId)!;
+}
+
+/** Find a durable agent by display name within an org (for directed handoffs). */
+export function findAgentByName(orgId: string, name: string): Agent | null {
+  const row = db()
+    .prepare(`SELECT ${AGENT_COLS} FROM agent WHERE org_id = ? AND name = ?`)
+    .get(orgId, name) as Record<string, unknown> | undefined;
+  return row ? loadAgent(row) : null;
+}
+
+// ───────────────────────── org rules ─────────────────────────
+
+export function getOrgRules(orgId: string): string {
+  const row = db().prepare("SELECT rules FROM org_rules WHERE org_id = ?").get(orgId) as
+    | { rules: string }
+    | undefined;
+  return row?.rules ?? "";
+}
+
+export function setOrgRules(orgId: string, rules: string): void {
+  const now = nowIso();
+  db()
+    .prepare(
+      `INSERT INTO org_rules(org_id, rules, updated_at) VALUES (?,?,?)
+       ON CONFLICT(org_id) DO UPDATE SET rules = excluded.rules, updated_at = excluded.updated_at`,
+    )
+    .run(orgId, rules, now);
 }
 
 export function openTasksForAgent(agentId: string): Task[] {

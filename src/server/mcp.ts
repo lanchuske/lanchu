@@ -264,6 +264,42 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
   );
 
   server.registerTool(
+    "task_get",
+    {
+      title: "Get task",
+      description: "Returns one task's detail (status, tags, owner, workspace).",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      const task = store.getTask(taskId);
+      return task ? text(task) : fail(new Error("task not found"));
+    },
+  );
+
+  server.registerTool(
+    "task_handoff",
+    {
+      title: "Hand off task",
+      description: "Hand a task you own to another agent (by name), with a note. Role-checked and logged.",
+      inputSchema: { taskId: z.string(), toAgent: z.string(), note: z.string().optional() },
+    },
+    async ({ taskId, toAgent, note }) => {
+      try {
+        const task = store.getTask(taskId);
+        if (!task) return fail(new Error("task not found"));
+        if (task.owner_agent_id !== ctx.agentId) return fail(new Error("you don't own this task"));
+        const target = store.findAgentByName(ctx.orgId, toAgent);
+        if (!target) return fail(new Error(`no agent named '${toAgent}'`));
+        return text(
+          store.reassignTask({ taskId, toAgentId: target.id, byAgentId: ctx.agentId, note }),
+        );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
     "doc_list",
     {
       title: "List docs",
@@ -302,6 +338,36 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       } catch (err) {
         return fail(err);
       }
+    },
+  );
+
+  server.registerTool(
+    "org_rules",
+    {
+      title: "Org rules",
+      description: "The organization's rules/guidelines you must follow.",
+      inputSchema: {},
+    },
+    async () => text({ rules: store.getOrgRules(ctx.orgId) }),
+  );
+
+  server.registerTool(
+    "org_context",
+    {
+      title: "My minimal context",
+      description: "A compact briefing: your objective, role, org rules, open tasks and doc index. Read this to focus and save tokens.",
+      inputSchema: {},
+    },
+    async () => {
+      const agent = store.getAgent(ctx.agentId);
+      const role = agent ? store.getRole(agent.role_id) : null;
+      return text({
+        agent: agent ? { name: agent.name, objective: agent.objective } : null,
+        role: role ? { name: role.name, allowed_tags: role.allowed_tags } : null,
+        rules: store.getOrgRules(ctx.orgId),
+        open_tasks: store.openTasksForAgent(ctx.agentId),
+        docs: store.listDocs(ctx.orgId).map((d) => ({ id: d.id, title: d.title })),
+      });
     },
   );
 

@@ -244,6 +244,18 @@ async function cmdRolesAdd(): Promise<void> {
   console.log("role:", JSON.stringify(r));
 }
 
+async function cmdRules(): Promise<void> {
+  const org = await orgOf();
+  if (positional()[1] === "set") {
+    const text = positional()[2] ?? "";
+    await post("/api/org/rules", { org, rules: text });
+    console.log("org rules updated");
+  } else {
+    const r = (await (await fetch(`${baseUrl()}/api/org/rules?org=${encodeURIComponent(org)}`)).json()) as { rules: string };
+    console.log(r.rules || "(no rules set — add with: lanchu rules set \"<text>\")");
+  }
+}
+
 async function cmdWebhooks(): Promise<void> {
   const org = await orgOf();
   const sub = positional()[1];
@@ -512,6 +524,7 @@ Usage:
   lanchu agents | tasks             list agents / tasks (JSON)
   lanchu roles | stats              list roles / local stats
   lanchu roles add <name> --tags a,b   create a role (or --wildcard)
+  lanchu rules [set "<text>"]       view / set the org's rules
   lanchu retire <agentId>           safe retirement (handoff enforced)
   lanchu task release <id>          supervisor override: release a task
   lanchu task reassign <id> <agent> supervisor override: reassign a task
@@ -563,6 +576,8 @@ async function main(): Promise<void> {
       return cmdBoard("tasks");
     case "roles":
       return positional()[1] === "add" ? cmdRolesAdd() : cmdRoles();
+    case "rules":
+      return cmdRules();
     case "webhooks":
       return cmdWebhooks();
     case "recurring":
