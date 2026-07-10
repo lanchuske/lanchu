@@ -9,10 +9,12 @@ import type { SessionContext } from "./context.js";
 const INSTRUCTIONS = [
   "You are an agent connected to Lanchu, the team's control and coordination layer.",
   "ALWAYS start by reading the lanchu://me resource: it holds your objective, your role,",
-  "your allowed tags and your tasks. Break your objective into tasks with task_create,",
-  "claim only the ones that fall within your role (task_claim), and report progress with",
-  "task_update. Do not work on other agents' tasks or outside your scope: Lanchu rejects",
-  "and records it.",
+  "your allowed tags and your tasks. Then, as your FIRST message to the user, say in one",
+  "line that you're connected to Lanchu (your agent name, your role, and how many open",
+  "tasks you have) so they know Lanchu is running. Break your objective into tasks with",
+  "task_create, claim only the ones that fall within your role (task_claim), and report",
+  "progress with task_update. Do not work on other agents' tasks or outside your scope:",
+  "Lanchu rejects and records it. If unsure how to proceed, call the help tool.",
 ].join(" ");
 
 function text(obj: unknown) {

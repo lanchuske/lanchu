@@ -389,6 +389,37 @@ async function cmdPanel(): Promise<void> {
   else console.log(`Open the panel in your browser: ${url}`);
 }
 
+/** One compact line for a Claude Code statusLine. Fast, never auto-starts the server. */
+async function statusLine(): Promise<string> {
+  const found = findConfig();
+  if (!found) return "";
+  const { org, project } = found.config;
+  if (!(await serverUp())) return "lanchu ○ not running";
+  try {
+    const b = (await (await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`, {
+      signal: AbortSignal.timeout(400),
+    })).json()) as { agents: { state: string }[]; tasks: { status: string }[] };
+    const active = b.agents.filter((a) => a.state === "active").length;
+    const open = b.tasks.filter((t) => ["claimed", "in_progress", "blocked"].includes(t.status)).length;
+    return `lanchu ● ${org}/${project} · ${active} active · ${open} open`;
+  } catch {
+    return "lanchu ● running";
+  }
+}
+
+async function cmdStatusline(): Promise<void> {
+  const line = await statusLine();
+  if (process.stdin.isTTY) {
+    // A person ran it: preview + how to wire it into Claude Code.
+    console.log(`Preview:  ${line || "(no .lanchu/config.json in this directory)"}\n`);
+    console.log("Add this to your Claude Code settings (~/.claude/settings.json):");
+    console.log('  "statusLine": { "type": "command", "command": "npx lanchu statusline" }');
+    console.log("\nThen Claude Code shows Lanchu's status at the bottom of every session.");
+  } else {
+    process.stdout.write(line); // Claude Code renders this
+  }
+}
+
 // ── interactive onboarding wizard ────────────────────────────
 const claudeCmd = process.platform === "win32" ? "claude.cmd" : "claude";
 function hasClaude(): boolean {
@@ -550,6 +581,7 @@ Usage:
   lanchu webhooks [add <url> --events a,b | rm <id>]   outbound webhooks (HMAC-signed)
   lanchu recurring [add "<title>" --every <min> | rm <id>]   scheduled task creation
   lanchu panel                      open the panel in your browser
+  lanchu statusline                 status line for Claude Code (setup shown when run)
   lanchu upgrade                    check npm for a newer version
   lanchu notify on|off              opt-in update notifications (off by default)
   lanchu uninstall [--purge]        stop the server; --purge deletes local data
@@ -611,6 +643,8 @@ async function main(): Promise<void> {
     case "panel":
     case "open":
       return cmdPanel();
+    case "statusline":
+      return cmdStatusline();
     case "retire":
       return cmdRetire(positional()[1] ?? "");
     case "task": {
