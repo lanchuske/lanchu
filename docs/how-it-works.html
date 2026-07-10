@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lanchu — how it works</title>
+<meta name="description" content="What Lanchu solves, what you do as a user, and how to see things, update, and uninstall." />
+<link rel="canonical" href="https://lanchuske.github.io/lanchu/how-it-works.html" />
+<style>
+  :root { color-scheme: light dark;
+    --bg:#ffffff; --fg:#1a1a1a; --muted:#5a6672; --line:#e6e8eb; --accent:#0b7285; --code-bg:#f5f6f7; }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9aa4af; --line:#232a31; --accent:#4dd0c1; --code-bg:#161b22; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 56px 24px 96px; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .top { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  h1 { font-size: 32px; letter-spacing: -.02em; margin: 0 0 8px; }
+  .lead { font-size: 18px; color: var(--muted); margin: 0 0 8px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted);
+    margin: 44px 0 12px; border-top: 1px solid var(--line); padding-top: 22px; }
+  h3 { font-size: 16px; margin: 22px 0 6px; }
+  p { margin: 0 0 14px; } ul, ol { margin: 0 0 16px; padding-left: 22px; } li { margin: 6px 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 13px 15px; overflow-x: auto; margin: 0 0 18px; }
+  code { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  p code, li code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; font-size: 13.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 18px; font-size: 14.5px; }
+  td, th { border-bottom: 1px solid var(--line); text-align: left; padding: 7px 10px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .note { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; color: var(--muted); margin: 0 0 18px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><a href="/lanchu/">← Lanchu</a> · <a href="https://github.com/lanchuske/lanchu">GitHub</a> · <a href="https://www.npmjs.com/package/lanchu">npm</a></div>
+
+  <h1>How Lanchu works</h1>
+  <p class="lead">What it solves, what you do, and how to see, update, and uninstall it.</p>
+
+  <h2>What it solves</h2>
+  <p>When you run <strong>several AI agents at once</strong>, they step on each other's work,
+     act blindly, and there's no way to see or trust what they did.</p>
+  <p>Lanchu is a <strong>local-first control &amp; trust layer</strong>. It gives your agents a
+     shared workspace so they <strong>coordinate without colliding</strong>, keeps each one in
+     its <strong>lane</strong> (a role can only touch what it's allowed to), and gives you a
+     <strong>panel + full history</strong> to see and trust everything they do. It doesn't run
+     or orchestrate your agents — it coordinates and bounds the work. Nothing ever leaves your
+     machine.</p>
+
+  <h2>What you do as a user</h2>
+  <ol>
+    <li><strong>Start it</strong> in your project — a guided wizard sets up your organization,
+        agent and role:
+      <pre><code>npx lanchu</code></pre>
+    </li>
+    <li><strong>Connect your agent</strong> (Claude Code). The wizard wires it for you, or run
+        the printed command, e.g.:
+      <pre><code>claude mcp add lanchu --transport http http://127.0.0.1:4319/mcp \
+  --header "Authorization: Bearer &lt;token&gt;"</code></pre>
+    </li>
+    <li><strong>Tell your agent to work in Lanchu.</strong> It reads its objective, role and
+        tasks, claims what's in its lane, and reports progress — all visible to you. Run more
+        agents (with different roles) and they coordinate through Lanchu, never directly.</li>
+  </ol>
+  <p class="note">Two roles in practice: an <em>operator</em> (semi-technical) does the setup;
+     a <em>supervisor</em> just watches the panel — no coding needed.</p>
+
+  <h2>How to see things</h2>
+  <table>
+    <tr><th>Command</th><th>Shows</th></tr>
+    <tr><td><code>lanchu panel</code></td><td>Opens the live dashboard: agents, tasks, roles, docs, and the audit log.</td></tr>
+    <tr><td><code>lanchu agents</code></td><td>Who's active, their role and what they're on.</td></tr>
+    <tr><td><code>lanchu tasks</code></td><td>The task board (flags stale tasks).</td></tr>
+    <tr><td><code>lanchu stats</code></td><td>A quick local summary.</td></tr>
+    <tr><td><code>lanchu doctor</code></td><td>Environment + version check.</td></tr>
+  </table>
+  <p>The panel is at <code>http://127.0.0.1:4319</code> and updates live. It's local and
+     read-focused; the supervisor actions (retire an agent, release/reassign a task) are there too.</p>
+
+  <h2>How to update</h2>
+  <ul>
+    <li><strong>Using <code>npx</code></strong> (the usual way): <code>npx lanchu@latest</code> always
+        runs the newest version — nothing to update.</li>
+    <li><strong>Installed globally:</strong> <code>npm i -g lanchu@latest</code>.</li>
+    <li><strong>Check anytime:</strong> <code>lanchu upgrade</code> tells you if a newer version exists.</li>
+    <li><strong>Optional notice:</strong> <code>lanchu notify on</code> shows a one-line heads-up when
+        an update is available (off by default; only reads the public npm registry).</li>
+  </ul>
+
+  <h2>How to uninstall</h2>
+  <pre><code>lanchu uninstall           # stops the server, shows where your data lives
+lanchu uninstall --purge   # also deletes all local Lanchu data</code></pre>
+  <p>To clean up fully:</p>
+  <ul>
+    <li><code>claude mcp remove lanchu</code> — remove the MCP client entry.</li>
+    <li><code>rm -rf .lanchu</code> — the per-project config, in each project.</li>
+    <li><code>npm rm -g lanchu</code> — only if you installed it globally (<code>npx</code> needs no removal).</li>
+  </ul>
+  <p class="note">Your data (orgs, agents, tasks, docs, audit) is a single local database under
+     your OS app-data folder — removing it with <code>--purge</code> leaves no trace.</p>
+
+  <h2>Learn more</h2>
+  <ul>
+    <li><a href="https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md">What Lanchu is (and isn't)</a></li>
+    <li><a href="https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md">Tools, resources and events</a></li>
+    <li><a href="https://github.com/lanchuske/lanchu/blob/main/CLI.md">Full command reference</a></li>
+  </ul>
+</main>
+</body>
+</html>
