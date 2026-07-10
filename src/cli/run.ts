@@ -711,42 +711,119 @@ async function cmdWork(prefillObjective: string): Promise<void> {
   }
 }
 
-function cmdHelp(): void {
-  console.log(`lanchu — control & trust layer for your AI agents
+type HelpSection = { topic: string; title: string; rows: Array<[string, string]> };
 
-Usage:
-  lanchu                            guided onboarding wizard (org, agent, role) + launch Claude
-  lanchu work ["<objective>"]       same wizard, optionally pre-filling the objective
-  lanchu "<objective>" --role r     non-interactive onboard (for scripting)
-  lanchu init                       set org/project for this directory
-  lanchu orgs [rm <name>]           list every org (with counts) / delete one
-  lanchu projects                   list this org's projects (each = a repo + local folder)
-  lanchu serve                      run the local server (foreground)
-  lanchu stop                       stop the background server
-  lanchu doctor                     environment checks
-  lanchu agents | tasks             list agents / tasks (JSON)
-  lanchu roles | stats              list roles / local stats
-  lanchu roles add <name> --tags a,b   create a role (or --wildcard)
-  lanchu rules [set "<text>"]       view / set the org's rules
-  lanchu skills [add <name> --tags a,b --instructions "…" | rm <id>]   skills per task type
-  lanchu retire <agentId>           safe retirement (handoff enforced)
-  lanchu task release <id>          supervisor override: release a task
-  lanchu task reassign <id> <agent> supervisor override: reassign a task
-  lanchu webhooks [add <url> --events a,b | rm <id>]   outbound webhooks (HMAC-signed)
-  lanchu recurring [add "<title>" --every <min> | rm <id>]   scheduled task creation
-  lanchu panel                      open the panel in your browser
-  lanchu spawn ["<objective>"] [--role r] [--dry]   new agent in a new terminal
-  lanchu tile [--dry]               arrange agent terminals into a mosaic
-  lanchu statusline                 status line for Claude Code (setup shown when run)
-  lanchu upgrade                    check npm for a newer version
-  lanchu notify on|off              opt-in update notifications (off by default)
-  lanchu install-commands [--uninstall]   add the /lanchu slash command to Claude Code
-  lanchu uninstall [--purge]        stop the server; --purge deletes local data
-  lanchu help | version
+// One entry per help topic. `topic` is what the user types after `lanchu help <topic>`.
+const HELP_SECTIONS: HelpSection[] = [
+  {
+    topic: "start",
+    title: "Getting started",
+    rows: [
+      ["lanchu", "guided onboarding wizard (org, agent, role) + launch Claude"],
+      ['lanchu work ["<objective>"]', "same wizard, optionally pre-filling the objective"],
+      ['lanchu "<objective>" --role r', "non-interactive onboard (for scripting)"],
+      ["lanchu init", "set org/project for this directory"],
+    ],
+  },
+  {
+    topic: "orgs",
+    title: "Orgs & projects",
+    rows: [
+      ["lanchu orgs [rm <name>]", "list every org (with counts) / delete one"],
+      ["lanchu projects", "list this org's projects (each = a repo + local folder)"],
+    ],
+  },
+  {
+    topic: "agents",
+    title: "Agents & tasks",
+    rows: [
+      ["lanchu agents | tasks", "list agents / tasks (JSON)"],
+      ['lanchu spawn ["<objective>"] [--role r] [--dry]', "new agent in a new terminal"],
+      ["lanchu tile [--dry]", "arrange agent terminals into a mosaic"],
+      ["lanchu retire <agentId>", "safe retirement (handoff enforced)"],
+      ["lanchu task release <id>", "supervisor override: release a task"],
+      ["lanchu task reassign <id> <agent>", "supervisor override: reassign a task"],
+    ],
+  },
+  {
+    topic: "governance",
+    title: "Governance",
+    rows: [
+      ["lanchu roles | stats", "list roles / local stats"],
+      ["lanchu roles add <name> --tags a,b", "create a role (or --wildcard)"],
+      ['lanchu rules [set "<text>"]', "view / set the org's rules"],
+      ['lanchu skills [add <name> --tags a,b --instructions "…"]', "skills per task type"],
+      ["lanchu skills load <url|file> [--name n] [--tags a,b]", "load a reusable SKILL.md"],
+      ["lanchu skills reload <id> | rm <id>", "re-fetch a loaded skill / remove one"],
+    ],
+  },
+  {
+    topic: "automation",
+    title: "Automation",
+    rows: [
+      ["lanchu webhooks [add <url> --events a,b | rm <id>]", "outbound webhooks (HMAC-signed)"],
+      ['lanchu recurring [add "<title>" --every <min> | rm <id>]', "scheduled task creation"],
+    ],
+  },
+  {
+    topic: "server",
+    title: "Server & panel",
+    rows: [
+      ["lanchu serve", "run the local server (foreground)"],
+      ["lanchu stop", "stop the background server"],
+      ["lanchu panel", "open the panel in your browser"],
+      ["lanchu statusline", "status line for Claude Code (setup shown when run)"],
+      ["lanchu doctor", "environment checks"],
+    ],
+  },
+  {
+    topic: "maintenance",
+    title: "Maintenance",
+    rows: [
+      ["lanchu upgrade", "check npm for a newer version"],
+      ["lanchu notify on|off", "opt-in update notifications (off by default)"],
+      ["lanchu install-commands [--uninstall]", "add the /lanchu slash command to Claude Code"],
+      ["lanchu uninstall [--purge]", "stop the server; --purge deletes local data"],
+      ["lanchu help [<topic>] | version", "show help (optionally for one topic) / print the version"],
+    ],
+  },
+  {
+    topic: "flags",
+    title: "Onboard flags",
+    rows: [["--org --project --role --tags a,b", "--as <name> --reuse <id> --new --client <claude|print>"]],
+  },
+];
 
-Onboard flags:
-  --org --project --role --tags a,b --as <name> --reuse <id> --new --client <claude|print>
-`);
+const HELP_PAD = 34;
+
+function renderSection(s: HelpSection): string {
+  const row = (usage: string, desc: string): string =>
+    usage.length + 2 <= HELP_PAD
+      ? `  ${usage.padEnd(HELP_PAD - 2)}${desc}`
+      : `  ${usage}\n  ${" ".repeat(HELP_PAD - 2)}${desc}`;
+  return `${s.title}\n${s.rows.map(([u, d]) => row(u, d)).join("\n")}`;
+}
+
+function cmdHelp(topic?: string): void {
+  const header = "lanchu — control & trust layer for your AI agents";
+
+  if (topic) {
+    const key = topic.toLowerCase();
+    const match = HELP_SECTIONS.find((s) => s.topic === key || s.title.toLowerCase().startsWith(key));
+    if (!match) {
+      const topics = HELP_SECTIONS.map((s) => s.topic).join(", ");
+      console.error(`Unknown help topic "${topic}". Try one of: ${topics}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`${header}\n\n${renderSection(match)}\n`);
+    return;
+  }
+
+  const usage = 'Usage: lanchu <command> [args]   ·   "lanchu help <topic>" narrows to one section';
+  const body = HELP_SECTIONS.map(renderSection).join("\n\n");
+  const footer = `Topics: ${HELP_SECTIONS.map((s) => s.topic).join(", ")}`;
+  console.log(`${header}\n${usage}\n\n${body}\n\n${footer}\n`);
 }
 
 function hasOnboardFlags(): boolean {
@@ -763,7 +840,7 @@ async function main(): Promise<void> {
     case "help":
     case "-h":
     case "--help":
-      return cmdHelp();
+      return cmdHelp(positional()[1]);
     case "version":
     case "-v":
     case "--version":

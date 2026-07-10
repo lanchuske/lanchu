@@ -11,5 +11,15 @@ if (!nodeOk) {
   process.exit(1);
 }
 
+// node:sqlite is stable enough for us but still marked experimental, so Node prints an
+// ExperimentalWarning on first use. Drop just that one warning; leave everything else intact.
+const emitWarning = process.emitWarning.bind(process);
+process.emitWarning = ((warning: string | Error, ...args: unknown[]) => {
+  const type = typeof args[0] === "string" ? args[0] : (args[0] as { type?: string })?.type;
+  const message = typeof warning === "string" ? warning : warning?.message;
+  if (type === "ExperimentalWarning" && /SQLite/i.test(message ?? "")) return;
+  return (emitWarning as (...a: unknown[]) => void)(warning, ...args);
+}) as typeof process.emitWarning;
+
 const { run } = await import("./run.js");
 await run();
