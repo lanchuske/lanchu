@@ -113,6 +113,37 @@ export function getOrg(orgId: string): { id: string; name: string } | null {
   return row ?? null;
 }
 
+export interface OrgSummary {
+  id: string;
+  name: string;
+  agents: number;
+  projects: number;
+  tasks: number;
+}
+
+/** All orgs with headline counts, for the org switcher and `lanchu orgs`. */
+export function listOrgs(): OrgSummary[] {
+  return db()
+    .prepare(
+      `SELECT o.id, o.name,
+         (SELECT COUNT(*) FROM agent a WHERE a.org_id = o.id AND a.state != 'retired') AS agents,
+         (SELECT COUNT(*) FROM project p WHERE p.org_id = o.id) AS projects,
+         (SELECT COUNT(*) FROM task t JOIN project p ON p.id = t.project_id WHERE p.org_id = o.id) AS tasks
+       FROM org o ORDER BY o.name`,
+    )
+    .all() as unknown as OrgSummary[];
+}
+
+/** Delete an org by name. Cascades to its projects, agents, tasks, docs, etc. */
+export function deleteOrg(name: string): { deleted: boolean; name: string } {
+  const org = db().prepare("SELECT id FROM org WHERE name = ?").get(name) as
+    | { id: string }
+    | undefined;
+  if (!org) return { deleted: false, name };
+  db().prepare("DELETE FROM org WHERE id = ?").run(org.id); // FK cascade does the rest
+  return { deleted: true, name };
+}
+
 export function getOrCreateProject(orgId: string, name: string): ProjectRow {
   const existing = db()
     .prepare(`SELECT ${PROJECT_COLS} FROM project WHERE org_id = ? AND name = ?`)

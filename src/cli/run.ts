@@ -234,6 +234,45 @@ async function post(path: string, body: unknown): Promise<unknown> {
   return res.json();
 }
 
+async function cmdOrgs(): Promise<void> {
+  const sub = positional()[1];
+  if (sub === "rm" || sub === "delete") {
+    const name = positional()[2];
+    if (!name) return console.log("usage: lanchu orgs rm <name>");
+    await ensureServer();
+    const r = (await post("/org/delete", { name })) as { deleted: boolean };
+    return console.log(
+      r.deleted
+        ? `Deleted org '${name}' and all its projects, agents and tasks.`
+        : `No org named '${name}'.`,
+    );
+  }
+  await ensureServer();
+  const orgs = (await (await fetch(`${baseUrl()}/api/orgs`)).json()) as {
+    name: string; agents: number; projects: number; tasks: number;
+  }[];
+  if (!orgs.length) return console.log("No orgs yet. Create one with: lanchu init --org <name> --project <name>");
+  const cur = findConfig()?.config.org;
+  console.log("Orgs (● = this directory):");
+  for (const o of orgs) {
+    console.log(`  ${o.name === cur ? "●" : " "} ${o.name.padEnd(20)} ${o.agents} agents · ${o.projects} projects · ${o.tasks} tasks`);
+  }
+}
+
+async function cmdProjects(): Promise<void> {
+  const org = await orgOf();
+  const b = (await (await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`)).json()) as {
+    projects: { name: string; repo_url: string | null; local_path: string | null }[];
+  };
+  if (!b.projects.length) return console.log(`Org '${org}' has no projects yet.`);
+  console.log(`Org '${org}' — ${b.projects.length} project(s) (each is a repo + local folder):`);
+  for (const p of b.projects) {
+    console.log(`  ${p.name}`);
+    if (p.repo_url) console.log(`      repo  ${p.repo_url}`);
+    if (p.local_path) console.log(`      path  ${p.local_path}`);
+  }
+}
+
 async function cmdRoles(): Promise<void> {
   const org = await orgOf();
   const res = await fetch(`${baseUrl()}/api/roles?org=${encodeURIComponent(org)}`);
@@ -680,6 +719,8 @@ Usage:
   lanchu work ["<objective>"]       same wizard, optionally pre-filling the objective
   lanchu "<objective>" --role r     non-interactive onboard (for scripting)
   lanchu init                       set org/project for this directory
+  lanchu orgs [rm <name>]           list every org (with counts) / delete one
+  lanchu projects                   list this org's projects (each = a repo + local folder)
   lanchu serve                      run the local server (foreground)
   lanchu stop                       stop the background server
   lanchu doctor                     environment checks
@@ -742,6 +783,10 @@ async function main(): Promise<void> {
       return cmdBoard("agents");
     case "tasks":
       return cmdBoard("tasks");
+    case "orgs":
+      return cmdOrgs();
+    case "projects":
+      return cmdProjects();
     case "roles":
       return positional()[1] === "add" ? cmdRolesAdd() : cmdRoles();
     case "rules":

@@ -81,6 +81,10 @@ export function panelHtml(): string {
   .view.on { display: block; }
   .vhead { font-size: 20px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 4px; }
   .vsub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .vsub code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--line);
+               border-radius: 6px; padding: 1px 6px; color: var(--fg); }
+  .proj-card .repo a { color: var(--accent); text-decoration: none; }
+  .proj-card .repo a:hover { text-decoration: underline; }
   .sub-h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint);
             margin: 26px 0 12px; }
 
@@ -197,10 +201,11 @@ export function panelHtml(): string {
   <div class="app">
     <nav class="sidebar">
       <div class="brand">Lanchu <small>control &amp; trust</small></div>
-      <div class="orgfield"><span>org</span><input id="org" value="lanchu" autocomplete="off" /></div>
+      <div class="orgfield"><span>org</span><input id="org" value="lanchu" list="orglist" autocomplete="off" placeholder="pick or type…" /><datalist id="orglist"></datalist></div>
       <span id="live" class="live"><span class="pip"></span><span id="live-t">connecting</span></span>
       <ul class="nav" id="nav">
         <li data-view="overview">Overview</li>
+        <li data-view="projects">Projects <span class="badge" id="c-projects">0</span></li>
         <li data-view="team">Team <span class="badge" id="c-agents">0</span></li>
         <li data-view="work">Work <span class="badge" id="c-tasks">0</span></li>
         <li data-view="bugs">Bugs <span class="badge" id="c-bugs">0</span></li>
@@ -214,9 +219,15 @@ export function panelHtml(): string {
     <main class="content">
       <section class="view" id="v-overview">
         <h1 class="vhead">Overview</h1>
-        <p class="vsub">Repositories in scope and the org at a glance.</p>
+        <p class="vsub">An <b>org</b> groups everything below it: <b>projects</b> (each a repo + local folder), the <b>agents</b> working across them, and their <b>tasks</b>.</p>
         <div class="projects" id="projects"></div>
         <div class="tiles" id="tiles"></div>
+      </section>
+
+      <section class="view" id="v-projects">
+        <h1 class="vhead">Projects</h1>
+        <p class="vsub">One org can span many repos and folders — each is a <b>project</b>. Add one by running <code>lanchu init --org THIS-ORG --project NAME</code> in another checkout; its repo and path appear here once an agent joins.</p>
+        <div id="projects-full"></div>
       </section>
 
       <section class="view" id="v-team">
@@ -359,6 +370,15 @@ function routeFromHash() { showView((location.hash || "#overview").slice(1)); }
 window.addEventListener("hashchange", routeFromHash);
 
 // ── renders ──
+function renderOrgOptions(orgs) {
+  var cur = org();
+  document.getElementById("orglist").innerHTML = (orgs || []).map(function (o) {
+    return '<option value="' + esc(o.name) + '">' + o.agents + ' agents · ' + o.projects + ' projects · ' + o.tasks + ' tasks</option>';
+  }).join("");
+  // keep the current selection; the datalist just offers the known names
+  void cur;
+}
+
 function renderProjects(list) {
   var withInfo = (list || []).filter(function (p) { return p.repo_url || p.local_path; });
   document.getElementById("projects").innerHTML = withInfo.map(function (p) {
@@ -367,6 +387,27 @@ function renderProjects(list) {
     var sep = repo && path ? '<span class="sep">·</span>' : "";
     return '<div class="repo-chip"><span class="pname">' + esc(p.name) + '</span><span class="sep">·</span>' + repo + sep + path + '</div>';
   }).join("") || '<div class="empty">No repository captured yet — it appears when an agent joins from a git checkout.</div>';
+}
+
+// Full Projects view: one card per project, with its repo/folder, task count and the branches agents are on.
+function renderProjectsView(projects, tasks, agents) {
+  document.getElementById("c-projects").textContent = (projects || []).length;
+  var agentById = {}; (agents || []).forEach(function (a) { agentById[a.id] = a; });
+  document.getElementById("projects-full").innerHTML = (projects || []).map(function (p) {
+    var pts = (tasks || []).filter(function (t) { return t.project_id === p.id; });
+    var owners = {}; pts.forEach(function (t) { if (t.owner_agent_id) owners[t.owner_agent_id] = true; });
+    var branches = {};
+    Object.keys(owners).forEach(function (id) { var a = agentById[id]; if (a && a.branch) branches[a.branch] = true; });
+    var done = pts.filter(function (t) { return t.status === "done"; }).length;
+    var repo = p.repo_url
+      ? '<div class="meta repo"><span class="k">repo</span> <a href="' + esc(p.repo_url) + '" target="_blank" rel="noopener">' + esc(repoLabel(p.repo_url)) + '</a></div>'
+      : '<div class="meta"><span class="k">repo</span> <span class="hint">not captured yet</span></div>';
+    var path = p.local_path ? '<div class="meta"><span class="k">path</span> <span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(shortPath(p.local_path)) + '</span></div>' : "";
+    var br = Object.keys(branches).map(function (b) { return '<span class="branch">⌥ ' + esc(b) + '</span>'; }).join(" ");
+    return '<div class="card proj-card"><div class="top"><span class="name">' + esc(p.name) + '</span>' +
+      '<span class="meta"><b>' + pts.length + '</b> tasks · <b>' + done + '</b> done · <b>' + Object.keys(owners).length + '</b> agents</span></div>' +
+      repo + path + (br ? '<div class="meta"><span class="k">branches</span> ' + br + '</div>' : "") + '</div>';
+  }).join("") || '<div class="empty">No projects yet. Run <code>lanchu init --org ' + esc(org()) + ' --project NAME</code> in a repo, then have an agent join.</div>';
 }
 
 function renderAgents(list) {
@@ -509,12 +550,14 @@ function renderStats(board, audit) {
 var busy = false, lastSig = "";
 function refresh() {
   if (!org() || busy) return; busy = true;
-  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit")])
+  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs")])
     .then(function (r) {
       var sig = JSON.stringify(r);
       if (sig === lastSig) return; // nothing changed — keep the DOM (and any open select) intact
       lastSig = sig;
+      renderOrgOptions(r[4]);
       renderProjects(r[0].projects);
+      renderProjectsView(r[0].projects, r[0].tasks, r[0].agents);
       renderAgents(r[0].agents);
       renderTasks(r[0].tasks, r[0].agents);
       renderRoles(r[1]); renderDocs(r[2]); renderAudit(r[3]);

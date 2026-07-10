@@ -243,6 +243,14 @@ export function createServer(): http.Server {
         return;
       }
 
+      if (url.pathname === "/api/orgs" && req.method === "GET") {
+        return sendJson(res, 200, store.listOrgs());
+      }
+      if (url.pathname === "/org/delete" && req.method === "POST") {
+        const body = (await readJson(req)) as { name: string };
+        if (!body?.name) return sendJson(res, 400, { error: "name required" });
+        return sendJson(res, 200, store.deleteOrg(body.name));
+      }
       if (url.pathname === "/api/board" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });

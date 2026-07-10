@@ -1,6 +1,6 @@
 {
   "name": "lanchu",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "Control and trust layer for coordinating multiple AI agents. MCP, 100% local, open source.",
   "type": "module",
   "license": "MIT",
@@ -24,7 +24,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('dist/cli/index.js', 0o755)\"",
     "dev": "tsc -w -p tsconfig.json",
     "start": "node dist/cli/index.js serve",
     "lanchu": "node dist/cli/index.js",
