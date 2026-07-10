@@ -1,0 +1,6 @@
+# Cloudflare Pages headers — https://developers.cloudflare.com/pages/configuration/headers/
+
+# RFC 8288 Link headers: advertise machine-readable resources for agent discovery.
+# Registered relations (IANA): describedby, service-doc (RFC 8631), service-meta (RFC 8631), alternate.
+/*
+  Link: </.well-known/mcp/server-card.json>; rel="describedby"; type="application/json", </.well-known/agent-skills/index.json>; rel="service-meta"; type="application/json", </llms.txt>; rel="alternate"; type="text/markdown"; title="LLM-friendly summary", <https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md>; rel="service-doc"

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Lanchu — control &amp; trust layer for AI agents</title>
-<meta name="description" content="Lanchu is a local-first, open-source control and trust layer for AI agents. Coordinate multiple agents without collisions, keep each one in its lane, and audit everything — 100% local, MCP-native." />
+<title>Lanchu — a shared control room for your AI agents</title>
+<meta name="description" content="Lanchu is a free, open-source project that keeps several AI agents working together without getting in each other's way — with clear limits per agent and a live view you can trust. Runs 100% on your own computer." />
 <link rel="canonical" href="https://lanchu.ar/" />
 
 <!-- Icons -->
@@ -16,8 +16,8 @@
 <!-- Open Graph -->
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Lanchu" />
-<meta property="og:title" content="Lanchu — control &amp; trust layer for AI agents" />
-<meta property="og:description" content="Coordinate multiple AI agents without collisions, keep each one in its lane, and audit everything. Open source, MCP-native, 100% local." />
+<meta property="og:title" content="Lanchu — a shared control room for your AI agents" />
+<meta property="og:description" content="A free, open-source project that keeps several AI agents working together without getting in each other's way. Clear limits per agent, a live view you can trust, 100% on your own computer." />
 <meta property="og:url" content="https://lanchu.ar/" />
 <meta property="og:image" content="https://lanchu.ar/og.png" />
 <meta property="og:image:width" content="1200" />
@@ -26,8 +26,8 @@
 
 <!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Lanchu — control &amp; trust layer for AI agents" />
-<meta name="twitter:description" content="Coordinate multiple AI agents without collisions, keep each one in its lane, and audit everything. Open source, MCP-native, 100% local." />
+<meta name="twitter:title" content="Lanchu — a shared control room for your AI agents" />
+<meta name="twitter:description" content="A free, open-source project that keeps several AI agents working together without getting in each other's way. 100% on your own computer." />
 <meta name="twitter:image" content="https://lanchu.ar/og.png" />
 
 <link rel="sitemap" type="application/xml" href="sitemap.xml" />
@@ -46,7 +46,7 @@
       "@id": "https://lanchu.ar/#website",
       "url": "https://lanchu.ar/",
       "name": "Lanchu",
-      "description": "Control and trust layer for the AI agents you already run.",
+      "description": "A free, open-source shared control room for the AI agents you already use.",
       "inLanguage": "en"
     },
     {
@@ -59,7 +59,8 @@
       "downloadUrl": "https://www.npmjs.com/package/lanchu",
       "softwareRequirements": "Node.js 22.5+",
       "license": "https://opensource.org/licenses/MIT",
-      "description": "A local-first, open-source Model Context Protocol (MCP) server that coordinates multiple AI agents with governance: durable agents, mediated coordination, cooperative and auditable scope limits, and a real-time supervisor panel.",
+      "isAccessibleForFree": true,
+      "description": "A free, open-source project that coordinates several AI agents so they do not collide, keeps each one within a role you define, and gives you a live view and full history — running entirely on your own computer.",
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
       "sameAs": [
         "https://github.com/lanchuske/lanchu",
@@ -73,37 +74,37 @@
         {
           "@type": "Question",
           "name": "What is Lanchu?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Lanchu is a local-first, open-source control and trust layer for AI coding agents. It coordinates multiple agents so they do not collide, keeps each one within a defined role, and gives you a real-time panel and a full audit history of everything they do." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Lanchu is a free, open-source project. It is a shared control room for the AI assistants you already use: it keeps several of them working together without getting in each other's way, gives each one clear limits, and shows you everything they do — all on your own computer." }
         },
         {
           "@type": "Question",
-          "name": "Is Lanchu free and open source?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Yes. Lanchu is MIT-licensed and free to use. The source is on GitHub and it is published to npm as the package 'lanchu'." }
+          "name": "Is it really free and open source?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes. Lanchu is free and open source under the MIT license. The full code is public on GitHub, and anyone can use it, read it, or contribute." }
         },
         {
           "@type": "Question",
-          "name": "Does Lanchu run in the cloud?",
-          "acceptedAnswer": { "@type": "Answer", "text": "No. Lanchu runs 100% on your machine. There is no public endpoint and no phone-home by design; your data never leaves your computer." }
+          "name": "Who is Lanchu for?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Anyone who runs more than one AI agent at a time — from a solo builder to a team lead who just wants to watch what the agents are doing. A technical person sets it up once; after that, following along needs no coding." }
         },
         {
           "@type": "Question",
-          "name": "Which agents does Lanchu work with?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Any MCP-compatible agent. Lanchu is built around Claude Code and connects over the Model Context Protocol (MCP), so agents coordinate through Lanchu rather than directly." }
+          "name": "Does it send my data to the cloud?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. Everything runs on your own computer. Nothing is sent anywhere and there is no account to create." }
         },
         {
           "@type": "Question",
-          "name": "Does Lanchu run or orchestrate my agents?",
-          "acceptedAnswer": { "@type": "Answer", "text": "No. Lanchu does not execute or drive your agents. It coordinates and bounds their work: a shared workspace, roles and scope limits, and an audit trail. You keep using your own agents." }
+          "name": "Does Lanchu control or replace my AI assistant?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. You keep using your own assistant, such as Claude Code. Lanchu does not do the work itself — it keeps the agents organized and gives you a clear, trustworthy view of everything they do." }
         },
         {
           "@type": "Question",
-          "name": "How do I install Lanchu?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Run 'npx lanchu'. A guided wizard sets up your organization, agent and role, wires your MCP client and launches it. Lanchu requires Node.js 22.5 or newer." }
+          "name": "How do I start?",
+          "acceptedAnswer": { "@type": "Answer", "text": "A technical person runs one command, 'npx lanchu', which sets everything up with a short guided wizard. It requires Node.js 22.5 or newer." }
         },
         {
           "@type": "Question",
-          "name": "What data does Lanchu store, and where?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Everything — organizations, agents, tasks, docs and the audit log — lives in a single local SQLite database in your operating system's app-data folder. Running 'lanchu uninstall --purge' removes it completely." }
+          "name": "What does Lanchu remember, and can I delete it?",
+          "acceptedAnswer": { "@type": "Answer", "text": "It keeps your agents, tasks and history in a single file on your computer. One command, 'lanchu uninstall --purge', deletes all of it." }
         }
       ]
     }
@@ -133,11 +134,14 @@
   main { max-width: 760px; margin: 0 auto; padding: 0 24px; }
   section { padding: 46px 0; border-top: 1px solid var(--line); }
   section:first-of-type { border-top: 0; }
+  strong { font-weight: 650; }
 
   /* Hero */
   header { padding: 76px 0 8px; }
-  h1 { font-size: 44px; line-height: 1.05; letter-spacing: -0.03em; margin: 0 0 10px; }
-  .tag { font-size: 20px; color: var(--muted); margin: 0 0 22px; max-width: 34ch; }
+  .eyebrow { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent);
+        font-weight: 700; margin: 0 0 14px; }
+  h1 { font-size: 44px; line-height: 1.05; letter-spacing: -0.03em; margin: 0 0 12px; }
+  .tag { font-size: 20px; color: var(--muted); margin: 0 0 22px; max-width: 40ch; }
   .badges { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 26px; }
   .badges img { height: 20px; display: block; }
   .lead { font-size: 17px; margin: 0 0 24px; }
@@ -158,7 +162,10 @@
        color: var(--muted); margin: 0 0 20px; font-weight: 600; }
   h3 { font-size: 17px; margin: 0 0 6px; letter-spacing: -0.01em; }
 
-  /* Feature grid */
+  .say { font-size: 17px; margin: 0; }
+  .say + .say { margin-top: 14px; }
+
+  /* Feature / audience grid */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px 28px; }
   .grid h3 { margin-bottom: 4px; }
   .grid p { margin: 0; color: var(--muted); font-size: 15px; }
@@ -204,59 +211,83 @@
 <body>
 <main>
   <header>
+    <p class="eyebrow">Free &amp; open-source project</p>
     <h1>Lanchu</h1>
-    <p class="tag">The control and trust layer for the AI agents you already run.</p>
+    <p class="tag">A shared control room for the AI agents you already use.</p>
     <div class="badges">
       <a href="https://www.npmjs.com/package/lanchu"><img alt="npm version" src="https://img.shields.io/npm/v/lanchu" loading="lazy" /></a>
       <a href="https://github.com/lanchuske/lanchu"><img alt="Source on GitHub" src="https://img.shields.io/badge/source-GitHub-181717" loading="lazy" /></a>
       <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue" loading="lazy" />
       <img alt="Runs 100% local" src="https://img.shields.io/badge/runs-100%25%20local-0b7285" loading="lazy" />
     </div>
-    <p class="lead">Run several AI agents at once and they step on each other's work, act blindly, and
-       leave you no way to see or trust what they did. Lanchu gives them a shared workspace so they
-       <strong>coordinate without colliding</strong>, keeps each one in its <strong>lane</strong>, and
-       gives you a <strong>panel and full audit history</strong> — all from one command. Open source,
-       MCP-native, 100% local.</p>
+    <p class="lead">When you run more than one AI assistant at the same time, they get in each other's way
+       and you can't really tell what they did. <strong>Lanchu</strong> keeps them organized — like a
+       shared control room. Each agent stays in its lane, and you get one screen that shows,
+       and remembers, everything they do. It runs entirely on your own computer.</p>
     <pre><code><span class="prompt">$ </span>npx lanchu</code></pre>
     <div class="cta">
-      <a class="btn primary" href="#quick-start">Get started</a>
-      <a class="btn ghost" href="https://github.com/lanchuske/lanchu">GitHub</a>
+      <a class="btn primary" href="#start">Get started</a>
+      <a class="btn ghost" href="https://github.com/lanchuske/lanchu">View on GitHub</a>
       <a class="btn ghost" href="how-it-works.html">How it works</a>
     </div>
   </header>
 
   <section id="what">
     <h2>What it is</h2>
-    <p>Lanchu is a <strong>local-first, open-source control and trust layer</strong> for AI agents,
-       built on the Model Context Protocol (MCP). It does not run or orchestrate your agents — it
-       coordinates and bounds their work. Agents talk through Lanchu instead of directly, so nothing
-       they do is a blind spot: work is claimed and mediated, roles limit what each agent can touch,
-       and every action lands in an audit log you can watch live.</p>
+    <p class="say">Lanchu is a <strong>free, open-source project</strong>. Think of it as a shared control
+       room for the AI assistants you already use.</p>
+    <p class="say">AI agents are great on their own, but the moment you run a few at once they start
+       stepping on each other's work, acting blindly, and leaving you no easy way to see or trust what
+       happened. Lanchu sits in the middle and fixes that: it keeps the agents coordinated, gives each
+       one clear boundaries, and turns their activity into a live view with a full history — without
+       anything leaving your computer.</p>
   </section>
 
-  <section id="features">
-    <h2>What it does</h2>
+  <section id="good-at">
+    <h2>What we're good at</h2>
     <div class="grid">
       <div>
-        <h3>Durable agents</h3>
-        <p>Agents persist as team members with a name, role and history — reuse them instead of spinning up duplicates.</p>
+        <h3>No more collisions</h3>
+        <p>Your agents share one workspace and take turns, so two of them never redo or undo each other's work.</p>
       </div>
       <div>
-        <h3>Mediated coordination</h3>
-        <p>Agents coordinate through Lanchu, never directly, so tasks are claimed without collisions and nothing is a blind spot.</p>
+        <h3>Everyone stays in their lane</h3>
+        <p>Give each agent a role. It can only touch what that role allows — anything out of bounds is blocked and logged.</p>
       </div>
       <div>
-        <h3>Cooperative, auditable limits</h3>
-        <p>Each role has a scope. Actions outside it are rejected and recorded — governance you can prove, not just hope for.</p>
+        <h3>See and trust everything</h3>
+        <p>A live screen shows who is doing what, with a full history you can look back on at any time.</p>
       </div>
       <div>
-        <h3>Real-time panel</h3>
-        <p>See who is active, what they are working on, and a full history — a live supervisor view over the whole team.</p>
+        <h3>100% private</h3>
+        <p>It all runs on your own computer. Nothing is sent to the cloud, and there is no account to create.</p>
       </div>
     </div>
   </section>
 
-  <section id="quick-start">
+  <section id="who">
+    <h2>Who it's for</h2>
+    <div class="grid">
+      <div>
+        <h3>Solo builders</h3>
+        <p>You already run several AI agents at once and want them to work as a team instead of tripping over each other.</p>
+      </div>
+      <div>
+        <h3>Team leads &amp; supervisors</h3>
+        <p>You want to see what the agents are doing and trust it — no coding needed to watch the live view.</p>
+      </div>
+      <div>
+        <h3>Anyone going beyond one agent</h3>
+        <p>The minute you have more than one assistant working, you need a way to keep order. That's Lanchu.</p>
+      </div>
+      <div>
+        <h3>Privacy-minded users</h3>
+        <p>You want the benefits of multiple agents without sending your work to someone else's servers.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="start">
     <h2>How it works</h2>
     <figure class="diagram" aria-hidden="true">
       <svg viewBox="0 0 700 150" xmlns="http://www.w3.org/2000/svg" role="img">
@@ -284,24 +315,23 @@
         <text class="th" x="350" y="80" text-anchor="middle">Lanchu</text>
         <rect class="box" x="548" y="52" width="132" height="46" rx="10" />
         <text class="t" x="614" y="72" text-anchor="middle">Panel</text>
-        <text class="tm" x="614" y="88" text-anchor="middle">+ audit log</text>
+        <text class="tm" x="614" y="88" text-anchor="middle">+ full history</text>
       </svg>
     </figure>
     <ol class="steps">
       <li>
         <h3>Start it in your project</h3>
-        <p>A guided wizard sets up your organization, agent and role.</p>
+        <p>A technical person runs one command; a short guided wizard sets up your team, agents and roles.</p>
         <pre><code><span class="prompt">$ </span>npx lanchu</code></pre>
       </li>
       <li>
-        <h3>Connect your agent</h3>
-        <p>The wizard wires your MCP client (Claude Code) for you, or prints the command to run.</p>
+        <h3>Connect your agents</h3>
+        <p>The wizard connects your AI assistant (such as Claude Code) for you.</p>
       </li>
       <li>
-        <h3>Tell your agent to work in Lanchu</h3>
-        <p>It reads its objective, role and tasks, claims what is in its lane, and reports progress —
-           all visible to you. Add more agents with different roles and they coordinate through Lanchu,
-           never directly.</p>
+        <h3>Watch them work together</h3>
+        <p>Each agent picks up the tasks in its lane and reports progress. Add more agents with different
+           roles and they coordinate through Lanchu — while you watch it all on one screen.</p>
       </li>
     </ol>
   </section>
@@ -310,41 +340,39 @@
     <h2>FAQ</h2>
     <details open>
       <summary>What is Lanchu?</summary>
-      <p>Lanchu is a local-first, open-source control and trust layer for AI coding agents. It
-         coordinates multiple agents so they do not collide, keeps each one within a defined role, and
-         gives you a real-time panel and a full audit history of everything they do.</p>
+      <p>Lanchu is a free, open-source project. It is a shared control room for the AI assistants you
+         already use: it keeps several of them working together without getting in each other's way,
+         gives each one clear limits, and shows you everything they do — all on your own computer.</p>
     </details>
     <details>
-      <summary>Is Lanchu free and open source?</summary>
-      <p>Yes. Lanchu is MIT-licensed and free to use. The source is on
-         <a href="https://github.com/lanchuske/lanchu">GitHub</a> and it is published to
-         <a href="https://www.npmjs.com/package/lanchu">npm</a> as <code>lanchu</code>.</p>
+      <summary>Is it really free and open source?</summary>
+      <p>Yes. Lanchu is free and open source under the MIT license. The full code is public on
+         <a href="https://github.com/lanchuske/lanchu">GitHub</a>, and anyone can use it, read it, or contribute.</p>
     </details>
     <details>
-      <summary>Does Lanchu run in the cloud?</summary>
-      <p>No. Lanchu runs 100% on your machine. There is no public endpoint and no phone-home by design;
-         your data never leaves your computer.</p>
+      <summary>Who is Lanchu for?</summary>
+      <p>Anyone who runs more than one AI agent at a time — from a solo builder to a team lead who just
+         wants to watch what the agents are doing. A technical person sets it up once; after that,
+         following along needs no coding.</p>
     </details>
     <details>
-      <summary>Which agents does it work with?</summary>
-      <p>Any MCP-compatible agent. Lanchu is built around Claude Code and connects over the Model
-         Context Protocol, so agents coordinate through Lanchu rather than directly.</p>
+      <summary>Does it send my data to the cloud?</summary>
+      <p>No. Everything runs on your own computer. Nothing is sent anywhere and there is no account to create.</p>
     </details>
     <details>
-      <summary>Does Lanchu run or orchestrate my agents?</summary>
-      <p>No. Lanchu does not execute or drive your agents. It coordinates and bounds their work: a
-         shared workspace, roles and scope limits, and an audit trail. You keep using your own agents.</p>
+      <summary>Does Lanchu control or replace my AI assistant?</summary>
+      <p>No. You keep using your own assistant, such as Claude Code. Lanchu does not do the work itself —
+         it keeps the agents organized and gives you a clear, trustworthy view of everything they do.</p>
     </details>
     <details>
-      <summary>How do I install it?</summary>
-      <p>Run <code>npx lanchu</code>. A guided wizard sets up your organization, agent and role, wires
-         your MCP client and launches it. Lanchu requires Node.js 22.5 or newer.</p>
+      <summary>How do I start?</summary>
+      <p>A technical person runs one command, <code>npx lanchu</code>, which sets everything up with a
+         short guided wizard. It requires Node.js 22.5 or newer.</p>
     </details>
     <details>
-      <summary>What data does Lanchu store, and where?</summary>
-      <p>Everything — organizations, agents, tasks, docs and the audit log — lives in a single local
-         SQLite database in your operating system's app-data folder. Running
-         <code>lanchu uninstall --purge</code> removes it completely.</p>
+      <summary>What does Lanchu remember, and can I delete it?</summary>
+      <p>It keeps your agents, tasks and history in a single file on your computer. One command,
+         <code>lanchu uninstall --purge</code>, deletes all of it.</p>
     </details>
   </section>
 
@@ -362,7 +390,7 @@
     <a href="how-it-works.html">How it works</a>
     <a href="https://github.com/lanchuske/lanchu">GitHub</a>
     <a href="https://www.npmjs.com/package/lanchu">npm</a>
-    <a href="https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md">Definition</a>
+    <a href="https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md">What it is</a>
     <a href="https://github.com/lanchuske/lanchu/discussions">Discussions</a>
   </footer>
 </main>
