@@ -18,12 +18,14 @@ function flag(name: string): string | undefined {
 function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
 }
+/** Flags that take no value; without this list positional() would swallow the token after them. */
+const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge"]);
 function positional(): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a.startsWith("--")) {
-      i++; // skip its value
+      if (!BOOL_FLAGS.has(a.slice(2))) i++; // skip its value
       continue;
     }
     out.push(a);
@@ -66,8 +68,10 @@ async function serverUp(): Promise<boolean> {
 }
 async function ensureServer(): Promise<void> {
   if (await serverUp()) return;
-  const script = fileURLToPath(import.meta.url);
-  const child = spawn(process.execPath, [script, "serve"], {
+  // Spawn the bin (index.js), not this module: run.js only exports run() and does
+  // nothing when executed directly, so we launch its sibling bootstrap entrypoint.
+  const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.js");
+  const child = spawn(process.execPath, [bin, "serve"], {
     detached: true,
     stdio: "ignore",
   });
