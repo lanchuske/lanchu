@@ -5,7 +5,8 @@ import { baseUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
-import type { SessionContext } from "./context.js";
+import { spawnTerminal, tileTerminals } from "./cockpit.js";
+import { putContext, type SessionContext } from "./context.js";
 
 const INSTRUCTIONS = [
   "You are an agent connected to Lanchu, the team's control and coordination layer.",
@@ -427,6 +428,44 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       }
       return text({ opened: true, url });
     },
+  );
+
+  server.registerTool(
+    "spawn_agent",
+    {
+      title: "Spawn a new agent",
+      description:
+        "Creates a new teammate in this org and opens a terminal running Claude, already joined to Lanchu, that will ask the user which task to do. Use when the user asks to add/create a new agent.",
+      inputSchema: { objective: z.string().optional(), role: z.string().optional() },
+    },
+    async ({ objective, role }) => {
+      try {
+        const roleName = role || "generalist";
+        const roleObj = store.getOrCreateRole(ctx.orgId, roleName, roleName === "generalist" ? { wildcard: true } : {});
+        const agent = store.createAgent({ orgId: ctx.orgId, roleId: roleObj.id, objective });
+        const { token } = store.openSession(agent.id);
+        putContext({
+          token, agentId: agent.id, agentName: agent.name,
+          orgId: ctx.orgId, orgName: ctx.orgName, projectId: ctx.projectId, projectName: ctx.projectName, cwd: ctx.cwd,
+        });
+        const prompt =
+          "You are a new Lanchu teammate. Greet the user in one line, then ask which task you should do. When they answer, read org_context, then claim and work the matching task.";
+        const result = spawnTerminal({ title: `${ctx.orgName}·${agent.name}`, cwd: ctx.cwd || process.cwd(), token, prompt });
+        return text({ agent: agent.name, ...result });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "tile_terminals",
+    {
+      title: "Tile the terminals",
+      description: "Arranges the agent terminals into a mosaic (tmux or macOS Terminal). Use when the user asks to organize/tile the windows.",
+      inputSchema: {},
+    },
+    async () => text(tileTerminals()),
   );
 
   server.registerTool(

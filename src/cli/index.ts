@@ -5,6 +5,7 @@ import path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { baseUrl, dbPath, DEFAULT_PORT, mcpUrl, port, readSettings, stateDir, VERSION, writeSettings } from "../config.js";
+import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
 
 const args = process.argv.slice(2);
@@ -367,6 +368,30 @@ async function cmdStop(): Promise<void> {
   console.log("server stopped");
 }
 
+const SPAWN_PROMPT =
+  "You are a new Lanchu teammate. Greet the user in one line, then ask which task you should do. When they answer, read org_context, then claim and work the matching task.";
+
+async function cmdSpawn(): Promise<void> {
+  const found = findConfig();
+  if (!found) return console.log("no .lanchu/config.json here — run `lanchu init` first");
+  await ensureServer();
+  const { org, project } = found.config;
+  const role = flag("role");
+  const objective = positional().slice(1).join(" ") || undefined;
+  const s = (await post("/session", {
+    org, project, objective, cwd: process.cwd(), role: role ?? "generalist", wildcard: role ? false : true,
+  })) as { token: string; agentName: string };
+  const result = spawnTerminal({ title: `${org}·${s.agentName}`, cwd: process.cwd(), token: s.token, prompt: SPAWN_PROMPT, dry: hasFlag("dry") });
+  console.log(`Agent '${s.agentName}' · [${result.method}] ${result.note}`);
+  if (result.method === "print" || hasFlag("dry")) console.log("\nCommand:\n  " + result.command);
+}
+
+async function cmdTile(): Promise<void> {
+  await ensureServer();
+  const r = tileTerminals(hasFlag("dry"));
+  console.log(`[${r.method}] ${r.note}`);
+}
+
 async function cmdUninstall(): Promise<void> {
   if (await serverUp()) {
     await fetch(`${baseUrl()}/shutdown`, { method: "POST" }).catch(() => {});
@@ -602,6 +627,8 @@ Usage:
   lanchu webhooks [add <url> --events a,b | rm <id>]   outbound webhooks (HMAC-signed)
   lanchu recurring [add "<title>" --every <min> | rm <id>]   scheduled task creation
   lanchu panel                      open the panel in your browser
+  lanchu spawn ["<objective>"] [--role r] [--dry]   new agent in a new terminal
+  lanchu tile [--dry]               arrange agent terminals into a mosaic
   lanchu statusline                 status line for Claude Code (setup shown when run)
   lanchu upgrade                    check npm for a newer version
   lanchu notify on|off              opt-in update notifications (off by default)
@@ -661,6 +688,10 @@ async function main(): Promise<void> {
       return cmdStats();
     case "stop":
       return cmdStop();
+    case "spawn":
+      return cmdSpawn();
+    case "tile":
+      return cmdTile();
     case "uninstall":
       return cmdUninstall();
     case "panel":

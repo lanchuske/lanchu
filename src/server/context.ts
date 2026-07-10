@@ -9,7 +9,10 @@ export interface SessionContext {
   agentId: string;
   agentName: string;
   orgId: string;
+  orgName: string;
   projectId: string;
+  projectName: string;
+  cwd?: string;
 }
 
 const byToken = new Map<string, SessionContext>();

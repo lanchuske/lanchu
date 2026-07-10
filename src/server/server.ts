@@ -57,6 +57,7 @@ interface SessionRequest {
   reuseAgentId?: string;
   agentName?: string;
   client?: string;
+  cwd?: string;
 }
 
 function handleSession(body: SessionRequest, res: http.ServerResponse): void {
@@ -89,7 +90,16 @@ function handleSession(body: SessionRequest, res: http.ServerResponse): void {
   }
 
   const { token } = store.openSession(agentId, body.client);
-  putContext({ token, agentId, agentName, orgId: org.id, projectId: project.id });
+  putContext({
+    token,
+    agentId,
+    agentName,
+    orgId: org.id,
+    orgName: org.name,
+    projectId: project.id,
+    projectName: project.name,
+    cwd: body.cwd,
+  });
 
   sendJson(res, 200, {
     token,
