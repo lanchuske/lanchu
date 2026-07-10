@@ -1,4 +1,4 @@
-# Lanchu — https://lanchuske.github.io/lanchu/
+# Lanchu — https://lanchu.ar/
 User-agent: *
 Allow: /
 
@@ -7,4 +7,4 @@ Allow: /
 # used as AI input. Edit to taste.
 Content-Signal: ai-train=yes, search=yes, ai-input=yes
 
-Sitemap: https://lanchuske.github.io/lanchu/sitemap.xml
+Sitemap: https://lanchu.ar/sitemap.xml

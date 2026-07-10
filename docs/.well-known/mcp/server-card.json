@@ -6,7 +6,7 @@
     "version": "0.2.0"
   },
   "description": "Control and trust layer for coordinating multiple AI agents. A local-first, open-source MCP server: durable agents, mediated coordination, scope limits (cooperative + auditable), and a real-time supervisor panel.",
-  "websiteUrl": "https://lanchuske.github.io/lanchu/",
+  "websiteUrl": "https://lanchu.ar/",
   "documentationUrl": "https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md",
   "repositoryUrl": "https://github.com/lanchuske/lanchu",
   "license": "MIT",
