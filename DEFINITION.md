@@ -302,11 +302,11 @@ The **three pillars** from §3, made concrete:
 
 ## 10. Roadmap (deliberately outside the v0)
 
-- **Webhooks** — integration with external systems (Slack, CI, GitHub).
-- **Recurring functions** — turn a useful session into a scheduled function.
-- **Skills** — reusable capabilities that agents load.
-- **Remote backend** — organizations across machines, with auth (to "automate an
-  entire company").
+- **Webhooks** *(shipped)* — integration with external systems (Slack, CI, GitHub).
+- **Recurring functions** *(shipped)* — turn a useful session into a scheduled function.
+- **Skills** *(shipped)* — reusable capabilities that agents load.
+- **Remote backend** *(shipped)* — organizations across machines, with a shared access
+  key (to "automate an entire company").
 - **Advanced limits** — token/cost budgets per role, quotas, approvals.
 - **A2A interoperability** — if agents need to delegate work to each other directly.
 

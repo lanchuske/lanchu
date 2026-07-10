@@ -4,7 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { baseUrl, dbPath, DEFAULT_PORT, mcpUrl, port, readSettings, stateDir, VERSION, writeSettings } from "../config.js";
+import {
+  accessKey,
+  baseUrl,
+  dbPath,
+  DEFAULT_PORT,
+  host,
+  localBaseUrl,
+  mcpUrl,
+  port,
+  publicUrl,
+  readSettings,
+  remoteServer,
+  stateDir,
+  VERSION,
+  writeSettings,
+} from "../config.js";
 import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
 
@@ -58,9 +73,33 @@ function writeConfig(config: ProjectConfig): string {
 }
 
 // ── server helpers ───────────────────────────────────────────
+/** Attach the shared access key (when configured) to backend requests. */
+function authHeaders(base?: Record<string, string>): Record<string, string> {
+  const key = accessKey();
+  const h: Record<string, string> = { ...(base ?? {}) };
+  if (key) h.authorization = `Bearer ${key}`;
+  return h;
+}
+/** fetch() against the backend (local or LANCHU_SERVER) with auth headers attached. */
+async function api(path: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(`${baseUrl()}${path}`, {
+    ...init,
+    headers: authHeaders(init.headers as Record<string, string> | undefined),
+  });
+  // Surface the shared-key gate plainly instead of letting callers mis-render a 401 body.
+  if (res.status === 401) {
+    throw new Error(
+      accessKey()
+        ? "access denied by the Lanchu server — the LANCHU_ACCESS_KEY does not match."
+        : "this Lanchu server requires an access key — set LANCHU_ACCESS_KEY.",
+    );
+  }
+  return res;
+}
+
 async function serverUp(): Promise<boolean> {
   try {
-    const res = await fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(500) });
+    const res = await fetch(`${baseUrl()}/health`, { signal: AbortSignal.timeout(remoteServer() ? 3000 : 500) });
     return res.ok;
   } catch {
     return false;
@@ -68,6 +107,11 @@ async function serverUp(): Promise<boolean> {
 }
 async function ensureServer(): Promise<void> {
   if (await serverUp()) return;
+  // A remote backend is not ours to start — point the user at it instead of
+  // silently spawning a local server that would answer a different DB.
+  if (remoteServer()) {
+    throw new Error(`could not reach the Lanchu server at ${remoteServer()} (LANCHU_SERVER). Is it running and reachable?`);
+  }
   // Spawn the bin (index.js), not this module: run.js only exports run() and does
   // nothing when executed directly, so we launch its sibling bootstrap entrypoint.
   const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.js");
@@ -86,10 +130,16 @@ async function ensureServer(): Promise<void> {
 // ── commands ─────────────────────────────────────────────────
 async function cmdServe(): Promise<void> {
   await startServer();
-  console.log(`Lanchu server listening on ${baseUrl()}`);
-  console.log(`  panel: ${baseUrl()}`);
-  console.log(`  mcp:   ${mcpUrl()}`);
+  const local = localBaseUrl();
+  const exposed = host() !== "127.0.0.1";
+  console.log(`Lanchu server listening on http://${host()}:${port()}`);
+  console.log(`  panel: ${local}`);
+  console.log(`  mcp:   ${publicUrl() ? publicUrl() + "/mcp" : local + "/mcp"}`);
   console.log(`  db:    ${dbPath()}`);
+  console.log(`  auth:  ${accessKey() ? "access key required (LANCHU_ACCESS_KEY)" : "open (loopback)"}`);
+  if (exposed && !accessKey()) {
+    console.log(`  ⚠ exposed on ${host()} without LANCHU_ACCESS_KEY — anyone who can reach this port has full access.`);
+  }
   await maybeNotify();
 }
 
@@ -114,6 +164,10 @@ async function cmdDoctor(): Promise<void> {
   console.log(`state dir   ${stateDir()}`);
   console.log(`db          ${dbPath()}`);
   console.log(`port        ${port()}${port() === DEFAULT_PORT ? " (default)" : ""}`);
+  const remote = remoteServer();
+  console.log(`backend     ${remote ? remote + "  (remote, LANCHU_SERVER)" : "local (" + localBaseUrl() + ")"}`);
+  if (!remote) console.log(`bind host   ${host()}${host() === "127.0.0.1" ? " (loopback)" : " (exposed)"}`);
+  console.log(`auth        ${accessKey() ? "access key set (LANCHU_ACCESS_KEY)" : "none"}`);
   console.log(`on PATH     ${lanchuOnPath() ? "yes" : "no — run: lanchu install-commands  (or npm i -g lanchu)"}`);
   console.log(`server      ${(await serverUp()) ? "running" : "stopped"}`);
 }
@@ -150,7 +204,7 @@ async function cmdBoard(kind: "agents" | "tasks"): Promise<void> {
   const found = findConfig();
   if (!found) return console.log("no .lanchu/config.json here — run `lanchu init` first");
   await ensureServer();
-  const res = await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(found.config.org)}`);
+  const res = await api(`/api/board?org=${encodeURIComponent(found.config.org)}`);
   const board = (await res.json()) as { agents: unknown[]; tasks: unknown[] };
   console.log(JSON.stringify(kind === "agents" ? board.agents : board.tasks, null, 2));
 }
@@ -193,7 +247,7 @@ async function cmdOnboard(objective: string): Promise<void> {
   if (flag("tags")) sessionReq.roleTags = flag("tags")!.split(",").map((t) => t.trim());
   if (flag("as")) sessionReq.agentName = flag("as");
 
-  const res = await fetch(`${baseUrl()}/session`, {
+  const res = await api(`/session`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(sessionReq),
@@ -226,7 +280,7 @@ async function orgOf(): Promise<string> {
 }
 
 async function post(path: string, body: unknown): Promise<unknown> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await api(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -248,7 +302,7 @@ async function cmdOrgs(): Promise<void> {
     );
   }
   await ensureServer();
-  const orgs = (await (await fetch(`${baseUrl()}/api/orgs`)).json()) as {
+  const orgs = (await (await api(`/api/orgs`)).json()) as {
     name: string; agents: number; projects: number; tasks: number;
   }[];
   if (!orgs.length) return console.log("No orgs yet. Create one with: lanchu init --org <name> --project <name>");
@@ -261,7 +315,7 @@ async function cmdOrgs(): Promise<void> {
 
 async function cmdProjects(): Promise<void> {
   const org = await orgOf();
-  const b = (await (await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`)).json()) as {
+  const b = (await (await api(`/api/board?org=${encodeURIComponent(org)}`)).json()) as {
     projects: { name: string; repo_url: string | null; local_path: string | null }[];
   };
   if (!b.projects.length) return console.log(`Org '${org}' has no projects yet.`);
@@ -275,7 +329,7 @@ async function cmdProjects(): Promise<void> {
 
 async function cmdRoles(): Promise<void> {
   const org = await orgOf();
-  const res = await fetch(`${baseUrl()}/api/roles?org=${encodeURIComponent(org)}`);
+  const res = await api(`/api/roles?org=${encodeURIComponent(org)}`);
   console.log(JSON.stringify(await res.json(), null, 2));
 }
 
@@ -296,7 +350,7 @@ async function cmdRules(): Promise<void> {
     await post("/api/org/rules", { org, rules: text });
     console.log("org rules updated");
   } else {
-    const r = (await (await fetch(`${baseUrl()}/api/org/rules?org=${encodeURIComponent(org)}`)).json()) as { rules: string };
+    const r = (await (await api(`/api/org/rules?org=${encodeURIComponent(org)}`)).json()) as { rules: string };
     console.log(r.rules || "(no rules set — add with: lanchu rules set \"<text>\")");
   }
 }
@@ -329,7 +383,7 @@ async function cmdSkills(): Promise<void> {
     await post("/api/skills/delete", { id });
     console.log("removed", id);
   } else {
-    const res = await fetch(`${baseUrl()}/api/skills?org=${encodeURIComponent(org)}`);
+    const res = await api(`/api/skills?org=${encodeURIComponent(org)}`);
     console.log(JSON.stringify(await res.json(), null, 2));
   }
 }
@@ -349,7 +403,7 @@ async function cmdWebhooks(): Promise<void> {
     await post("/api/webhooks/delete", { id });
     console.log("removed", id);
   } else {
-    const res = await fetch(`${baseUrl()}/api/webhooks?org=${encodeURIComponent(org)}`);
+    const res = await api(`/api/webhooks?org=${encodeURIComponent(org)}`);
     console.log(JSON.stringify(await res.json(), null, 2));
   }
 }
@@ -375,14 +429,14 @@ async function cmdRecurring(): Promise<void> {
     await post("/api/recurring/delete", { id });
     console.log("removed", id);
   } else {
-    const res = await fetch(`${baseUrl()}/api/recurring?org=${encodeURIComponent(org)}`);
+    const res = await api(`/api/recurring?org=${encodeURIComponent(org)}`);
     console.log(JSON.stringify(await res.json(), null, 2));
   }
 }
 
 async function cmdStats(): Promise<void> {
   const org = await orgOf();
-  const res = await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`);
+  const res = await api(`/api/board?org=${encodeURIComponent(org)}`);
   const b = (await res.json()) as { agents: unknown[]; tasks: { status: string; stale?: boolean }[] };
   const byStatus: Record<string, number> = {};
   for (const t of b.tasks) byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
@@ -510,7 +564,7 @@ function cmdInstallCommands(): void {
 
 async function cmdUninstall(): Promise<void> {
   if (await serverUp()) {
-    await fetch(`${baseUrl()}/shutdown`, { method: "POST" }).catch(() => {});
+    await api(`/shutdown`, { method: "POST" }).catch(() => {});
     console.log("Stopped the local server.");
   }
   const dir = stateDir();
@@ -559,7 +613,7 @@ async function statusLine(): Promise<string> {
   const me = process.env.LANCHU_AGENT ? ` · you: ${process.env.LANCHU_AGENT}` : "";
   if (!(await serverUp())) return "lanchu ○ not running";
   try {
-    const b = (await (await fetch(`${baseUrl()}/api/board?org=${encodeURIComponent(org)}`, {
+    const b = (await (await api(`/api/board?org=${encodeURIComponent(org)}`, {
       signal: AbortSignal.timeout(400),
     })).json()) as { agents: { state: string }[]; tasks: { status: string }[] };
     const active = b.agents.filter((a) => a.state === "active").length;
@@ -637,7 +691,7 @@ async function cmdWork(prefillObjective: string): Promise<void> {
 
     // 3) reuse-or-create
     const cands = (await (
-      await fetch(`${baseUrl()}/api/reuse?org=${encodeURIComponent(org)}&objective=${encodeURIComponent(objective)}`)
+      await api(`/api/reuse?org=${encodeURIComponent(org)}&objective=${encodeURIComponent(objective)}`)
     ).json()) as { agent: { id: string; name: string }; score: number }[];
 
     const sessionReq: Record<string, unknown> = { org, project, objective, client: "claude" };
@@ -649,7 +703,7 @@ async function cmdWork(prefillObjective: string): Promise<void> {
 
     // 4) role (only when creating)
     if (!sessionReq.reuseAgentId) {
-      const roles = (await (await fetch(`${baseUrl()}/api/roles?org=${encodeURIComponent(org)}`)).json()) as {
+      const roles = (await (await api(`/api/roles?org=${encodeURIComponent(org)}`)).json()) as {
         name: string;
         is_wildcard: boolean;
         allowed_tags: string[];
@@ -672,7 +726,7 @@ async function cmdWork(prefillObjective: string): Promise<void> {
 
     // 5) register
     const s = (await (
-      await fetch(`${baseUrl()}/session`, {
+      await api(`/session`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(sessionReq),

@@ -168,11 +168,34 @@ tasks live in `lanchu://me`, not in the prompt.
   - Linux: `~/.local/share/lanchu/`
   - Windows: `%APPDATA%\lanchu\`
   - DB: `<stateDir>/lanchu.db` (SQLite/WAL).
-- **Security (v0):** `127.0.0.1` only. The **MCP requires a token** (per session) → no
-  local process can impersonate an agent. The **panel is read-only, no auth** (local,
-  single-user). Nothing listens outside localhost; nothing leaves the machine.
+- **Security:** loopback (`127.0.0.1`) and open by default — single-user, nothing
+  leaves the machine. The **MCP requires a per-session token** so no process can
+  impersonate an agent.
 - **`LANCHU_STALE_HOURS`** (default `24`): after how many hours a task belonging to an
   idle agent is marked **stale**.
+
+### Remote backend + authentication
+
+Run one Lanchu server for a team and point every CLI/agent at it.
+
+- **Serve it (on the host):**
+  - `LANCHU_HOST=0.0.0.0` — bind beyond loopback so others can reach it.
+  - `LANCHU_ACCESS_KEY=<secret>` — **required once you expose the host.** It gates the
+    whole admin/API surface and `/session` (minting agents). `serve`/`doctor` warn if
+    the host is exposed without a key.
+  - `LANCHU_PUBLIC_URL=https://lanchu.example.com` — the reachable base URL advertised
+    to agents as their MCP endpoint (otherwise derived from the request's `Host`).
+- **Connect to it (on each machine):**
+  - `LANCHU_SERVER=https://lanchu.example.com` — send all CLI/agent traffic here
+    instead of spawning a local server.
+  - `LANCHU_ACCESS_KEY=<secret>` — the same shared key; the CLI attaches it to every
+    request.
+- **What each credential protects:** the **access key** is the human/admin gate (CLI,
+  panel, session minting). Each **agent** still authenticates its MCP connection with
+  its own per-session token — the access key is *not* needed by the agent's MCP client.
+- **Panel:** the page loads without the key and prompts for it; you can also open it
+  with `?key=<secret>` once (it's stored locally). `/health` stays open for liveness
+  probes.
 
 ---
 

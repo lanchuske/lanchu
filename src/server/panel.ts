@@ -1,10 +1,12 @@
 import { baseUrl } from "../config.js";
 
 /**
- * Supervisor panel. Local, no auth. Live via SSE (/events) with a polling
- * fallback. A sidebar switches between views (Overview, Team, Work, Bugs, Docs,
- * Activity); supervisor actions (retire / release / reassign) and revealing an
- * agent's terminal happen without browser dialogs.
+ * Supervisor panel. Open on loopback; when the server sets LANCHU_ACCESS_KEY the
+ * page prompts for it and sends it on every request (Bearer header, or ?key= for
+ * SSE). Live via SSE (/events) with a polling fallback. A sidebar switches
+ * between views (Overview, Team, Work, Bugs, Docs, Activity); supervisor actions
+ * (retire / release / reassign) and revealing an agent's terminal happen without
+ * browser dialogs.
  */
 export function panelHtml(): string {
   return `<!doctype html>
@@ -278,14 +280,45 @@ export function panelHtml(): string {
 var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
   return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 var org = function () { return document.getElementById("org").value.trim(); };
-var get = function (p) { return fetch(p + (p.indexOf("?") < 0 ? "?" : "&") + "org=" + encodeURIComponent(org())).then(function (r) { return r.json(); }); };
+
+// ── access key (only needed when the server sets LANCHU_ACCESS_KEY) ──
+// A shared secret can arrive as ?key=… (stored, then stripped from the URL) and
+// otherwise lives in localStorage. It rides on every request as a Bearer header,
+// and on the SSE URL as ?key= (EventSource can't set headers).
+var KEY = (function () {
+  try {
+    var u = new URL(location.href);
+    var q = u.searchParams.get("key");
+    if (q) { localStorage.setItem("lanchu_key", q); u.searchParams.delete("key"); history.replaceState(null, "", u.toString()); return q; }
+    return localStorage.getItem("lanchu_key") || "";
+  } catch (e) { return ""; }
+})();
+function authInit(init) {
+  init = init || {};
+  if (KEY) { init.headers = Object.assign({}, init.headers, { "authorization": "Bearer " + KEY }); }
+  return init;
+}
+function keyParam() { return KEY ? "&key=" + encodeURIComponent(KEY) : ""; }
+var authError = false;
+function authFetch(url, init) {
+  return fetch(url, authInit(init)).then(function (r) {
+    if (r.status === 401 && !authError) { authError = true; promptKey(); }
+    return r;
+  });
+}
+function promptKey() {
+  var k = window.prompt("This Lanchu server requires an access key (LANCHU_ACCESS_KEY):", "");
+  if (k) { localStorage.setItem("lanchu_key", k); location.reload(); }
+}
+
+var get = function (p) { return authFetch(p + (p.indexOf("?") < 0 ? "?" : "&") + "org=" + encodeURIComponent(org())).then(function (r) { return r.json(); }); };
 // owner/repo from a github-ish url, else the tail segment.
 var repoLabel = function (url) { var m = String(url).match(/[:/]([^/]+\\/[^/]+?)(?:\\.git)?$/); return m ? m[1] : url; };
 // collapse $HOME to ~ for readability.
 var shortPath = function (p) { return p ? String(p).replace(/^\\/Users\\/[^/]+/, "~").replace(/^\\/home\\/[^/]+/, "~") : ""; };
 
 function post(path, body) {
-  return fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  return authFetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
     .then(function (r) { return r.json(); }).then(function (r) { refresh(); return r; });
 }
 function toast(msg, bad) {
@@ -321,13 +354,13 @@ function toggleLogs(id) {
   var box = document.getElementById("log-" + id); if (!box) return;
   if (box.style.display !== "none") { box.style.display = "none"; return; }
   box.style.display = "block"; box.querySelector("pre").textContent = "loading…";
-  fetch("/api/agent/logs?agentId=" + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (r) {
+  authFetch("/api/agent/logs?agentId=" + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (r) {
     box.querySelector("pre").textContent = (r.logs || "").trim() || "(no output captured)";
     box.scrollTop = box.scrollHeight;
   }).catch(function () { box.querySelector("pre").textContent = "(couldn't read logs)"; });
 }
 function stopServer() {
-  fetch("/server/stop", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(function () {});
+  authFetch("/server/stop", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(function () {});
   toast("Stopping the server — the panel will go offline.", true);
 }
 
@@ -569,7 +602,7 @@ var sse = null;
 function connect() {
   if (sse) sse.close();
   var live = document.getElementById("live"), t = document.getElementById("live-t");
-  sse = new EventSource("/events?org=" + encodeURIComponent(org()));
+  sse = new EventSource("/events?org=" + encodeURIComponent(org()) + keyParam());
   sse.onopen = function () { live.className = "live on"; t.textContent = "live"; };
   sse.onmessage = function () { refresh(); };
   sse.onerror = function () { live.className = "live"; t.textContent = "reconnecting"; };

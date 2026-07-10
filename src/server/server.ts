@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { HOST, mcpUrl, port, VERSION } from "../config.js";
+import { accessKey, host, port, publicUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
@@ -22,6 +23,51 @@ function bearer(header: string | undefined): string | null {
   if (!header) return null;
   const m = /^Bearer\s+(.+)$/i.exec(header);
   return m?.[1] ?? null;
+}
+
+/** Constant-time string compare that tolerates unequal lengths. */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+/**
+ * When LANCHU_ACCESS_KEY is set, the admin/API surface requires it. The key may
+ * arrive as `Authorization: Bearer <key>`, an `x-lanchu-key` header, or a `?key=`
+ * query param (the last is for the panel's SSE, which can't set headers). These
+ * paths stay open: `/health`, the panel shell `/` (it prompts for the key
+ * client-side), `/mcp` (per-agent session tokens), and `/hooks/intake` (its own
+ * LANCHU_INTAKE_SECRET). Without a key configured, everything is open as before.
+ */
+function accessGate(req: http.IncomingMessage, url: URL): { ok: true } | { ok: false } {
+  const key = accessKey();
+  if (!key) return { ok: true };
+  const p = url.pathname;
+  if (p === "/health") return { ok: true };
+  if (p === "/" && req.method === "GET") return { ok: true };
+  if (p === "/mcp" || p === "/hooks/intake") return { ok: true };
+  const presented =
+    bearer(req.headers.authorization ?? undefined) ??
+    (typeof req.headers["x-lanchu-key"] === "string" ? (req.headers["x-lanchu-key"] as string) : null) ??
+    url.searchParams.get("key");
+  if (presented && safeEqual(presented, key)) return { ok: true };
+  return { ok: false };
+}
+
+/**
+ * The base URL a remote agent can reach this server at, for the `mcpUrl` we hand
+ * back from `/session`. Prefer LANCHU_PUBLIC_URL, then the request's Host header
+ * (so a laptop connecting to `lanchu-box:4319` gets that back, not `127.0.0.1`),
+ * then loopback.
+ */
+function advertisedMcpUrl(req: http.IncomingMessage): string {
+  const configured = publicUrl();
+  if (configured) return `${configured}/mcp`;
+  const hostHeader = req.headers.host;
+  if (hostHeader) return `http://${hostHeader}/mcp`;
+  return `http://127.0.0.1:${port()}/mcp`;
 }
 
 function readJson(req: http.IncomingMessage): Promise<unknown> {
@@ -64,7 +110,7 @@ interface SessionRequest {
   cwd?: string;
 }
 
-function handleSession(body: SessionRequest, res: http.ServerResponse): void {
+function handleSession(req: http.IncomingMessage, body: SessionRequest, res: http.ServerResponse): void {
   const org = store.getOrCreateOrg(body.org);
   const project = store.getOrCreateProject(org.id, body.project);
 
@@ -112,7 +158,7 @@ function handleSession(body: SessionRequest, res: http.ServerResponse): void {
     agentName,
     org: org.name,
     project: project.name,
-    mcpUrl: mcpUrl(),
+    mcpUrl: advertisedMcpUrl(req),
   });
 }
 
@@ -231,10 +277,15 @@ function handleEvents(orgId: string, res: http.ServerResponse): void {
 export function createServer(): http.Server {
   return http.createServer(async (req, res) => {
     try {
-      const url = new URL(req.url ?? "/", `http://${HOST}`);
+      const url = new URL(req.url ?? "/", "http://localhost");
 
       if (url.pathname === "/health") {
         return sendJson(res, 200, { ok: true, service: "lanchu" });
+      }
+
+      // Shared-secret gate for the admin/API surface (no-op unless a key is set).
+      if (!accessGate(req, url).ok) {
+        return sendJson(res, 401, { error: "invalid or missing access key" });
       }
 
       if (url.pathname === "/" && req.method === "GET") {
@@ -271,7 +322,7 @@ export function createServer(): http.Server {
         if (!body?.org || !body?.project) {
           return sendJson(res, 400, { error: "org and project required" });
         }
-        return handleSession(body, res);
+        return handleSession(req, body, res);
       }
 
       if (url.pathname === "/api/roles" && req.method === "GET") {
@@ -567,6 +618,6 @@ export function startServer(): Promise<http.Server> {
       }
       reject(err);
     });
-    server.listen(port(), HOST, () => resolve(server));
+    server.listen(port(), host(), () => resolve(server));
   });
 }

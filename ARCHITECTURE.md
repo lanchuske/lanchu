@@ -14,7 +14,7 @@
 |-----------|--------|-----------------|
 | **CLI / launcher** (`npx lanchu`) | What you run in the terminal. | Onboarding: matches the objective, asks the human the **reuse-or-create** question, picks a role, issues the **identity token**, and keeps the connection alive (= presence). |
 | **MCP server** | The shared service the agent connects to (`localhost` HTTP/SSE). | Tools, state (SQLite), roles/governance, event bus, audit. |
-| **Web panel** | Supervisor dashboard (local, no auth). | View agents/activity/audit in real time; retire agents with handoff. |
+| **Web panel** | Supervisor dashboard (open on loopback; access-key–gated when the server sets one). | View agents/activity/audit in real time; retire agents with handoff. |
 
 > **Key:** the *"reuse?"* question happens in the **CLI** (interaction with the
 > human), it is **not** an MCP tool. The launcher queries candidates and connects the
@@ -193,9 +193,29 @@ task in its project every N minutes, then reschedules. Manage via `lanchu recurr
 `POST /api/recurring`. Connected agents pick the tasks up like any other — Lanchu
 schedules the work, it doesn't run the agents.
 
+## 8c. Remote backend + authentication (shipped)
+
+Lanchu is loopback-first, but one server can back a whole team.
+
+- **Expose it** — `LANCHU_HOST=0.0.0.0` binds beyond loopback. Optionally
+  `LANCHU_PUBLIC_URL` sets the base URL advertised to agents as their MCP endpoint
+  (otherwise derived from the request's `Host`, falling back to loopback).
+- **Authenticate it** — `LANCHU_ACCESS_KEY` gates the admin/API surface and `/session`
+  (agent minting). The key may arrive as `Authorization: Bearer <key>`, an
+  `x-lanchu-key` header, or a `?key=` query param (for the panel's SSE). Constant-time
+  compared. Left open on loopback when unset. Always open: `/health` (liveness) and the
+  panel shell `/` (it prompts for the key client-side). `/mcp` is exempt from the
+  access-key gate because it carries **per-agent session tokens** — so an agent's MCP
+  client needs only its session token, never the admin key. `/hooks/intake` keeps its
+  own `LANCHU_INTAKE_SECRET`.
+- **Point clients at it** — `LANCHU_SERVER=<base-url>` makes the CLI and agents send all
+  traffic to the remote server instead of spawning a local one; the CLI attaches the
+  access key to every request and reports a clear error if the key is missing/wrong or
+  the server is unreachable.
+
 ### Still roadmap
-- **Remote backend**, **skills**, **advanced limits / token budgets** (need a local LLM
-  proxy to measure cost). Documented so as not to close the door.
+- **Advanced limits / token budgets** (need a local LLM proxy to measure cost).
+  Documented so as not to close the door.
 
 ---
 
