@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -392,6 +393,29 @@ async function cmdTile(): Promise<void> {
   console.log(`[${r.method}] ${r.note}`);
 }
 
+const LANCHU_SLASH_COMMAND = `---
+description: Lanchu control — run a user command (panel, status, spawn "<objective>", tile, doctor, agents, tasks, retire <agent>, rules, skills)
+allowed-tools: Bash(npx lanchu:*), Bash(lanchu:*)
+---
+The user ran a Lanchu control command. Below is its output — report the result to
+the user concisely (these are supervisor actions, not agent work).
+
+!\`npx lanchu $ARGUMENTS\`
+`;
+
+function cmdInstallCommands(): void {
+  const dir = path.join(os.homedir(), ".claude", "commands");
+  const file = path.join(dir, "lanchu.md");
+  if (hasFlag("uninstall")) {
+    fs.rmSync(file, { force: true });
+    return console.log(`Removed ${file}`);
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, LANCHU_SLASH_COMMAND);
+  console.log(`Installed the /lanchu slash command → ${file}`);
+  console.log('In Claude Code:  /lanchu panel  ·  /lanchu status  ·  /lanchu spawn "write the docs"  ·  /lanchu tile');
+}
+
 async function cmdUninstall(): Promise<void> {
   if (await serverUp()) {
     await fetch(`${baseUrl()}/shutdown`, { method: "POST" }).catch(() => {});
@@ -632,6 +656,7 @@ Usage:
   lanchu statusline                 status line for Claude Code (setup shown when run)
   lanchu upgrade                    check npm for a newer version
   lanchu notify on|off              opt-in update notifications (off by default)
+  lanchu install-commands [--uninstall]   add the /lanchu slash command to Claude Code
   lanchu uninstall [--purge]        stop the server; --purge deletes local data
   lanchu help | version
 
@@ -685,7 +710,10 @@ async function main(): Promise<void> {
     case "recurring":
       return cmdRecurring();
     case "stats":
+    case "status":
       return cmdStats();
+    case "install-commands":
+      return cmdInstallCommands();
     case "stop":
       return cmdStop();
     case "spawn":
