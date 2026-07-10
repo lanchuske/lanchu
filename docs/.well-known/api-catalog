@@ -1,0 +1,28 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://lanchu.ar/",
+      "service-desc": [
+        {
+          "href": "https://lanchu.ar/.well-known/mcp/server-card.json",
+          "type": "application/json",
+          "title": "Lanchu MCP Server Card"
+        }
+      ],
+      "service-doc": [
+        {
+          "href": "https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md",
+          "type": "text/html",
+          "title": "Lanchu architecture: tools, resources and events"
+        }
+      ],
+      "service-meta": [
+        {
+          "href": "https://lanchu.ar/llms.txt",
+          "type": "text/markdown",
+          "title": "LLM-friendly summary"
+        }
+      ]
+    }
+  ]
+}

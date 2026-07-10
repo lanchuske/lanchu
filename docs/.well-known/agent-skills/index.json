@@ -1,9 +1,17 @@
 {
-  "$schema": "https://agentskills.io/schemas/v0.2.0/index.json",
+  "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
   "version": "0.2.0",
   "provider": {
     "name": "Lanchu",
     "url": "https://lanchu.ar/"
   },
-  "skills": []
+  "skills": [
+    {
+      "name": "use-lanchu",
+      "type": "skill-md",
+      "description": "Install and use Lanchu, a free, local-first control and trust layer that coordinates multiple AI agents over MCP.",
+      "url": "https://lanchu.ar/.well-known/agent-skills/use-lanchu/SKILL.md",
+      "digest": "sha256:831ff42305afdeef6e119b0bbb05e69a11429e0d5ca9086e3bdb811fa66fce3f"
+    }
+  ]
 }

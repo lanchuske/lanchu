@@ -3,4 +3,12 @@
 # RFC 8288 Link headers: advertise machine-readable resources for agent discovery.
 # Registered relations (IANA): describedby, service-doc (RFC 8631), service-meta (RFC 8631), alternate.
 /*
-  Link: </.well-known/mcp/server-card.json>; rel="describedby"; type="application/json", </.well-known/agent-skills/index.json>; rel="service-meta"; type="application/json", </llms.txt>; rel="alternate"; type="text/markdown"; title="LLM-friendly summary", <https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md>; rel="service-doc"
+  Link: </.well-known/mcp/server-card.json>; rel="describedby"; type="application/json", </.well-known/agent-skills/index.json>; rel="service-meta"; type="application/json", </.well-known/api-catalog>; rel="api-catalog"; type="application/linkset+json", </llms.txt>; rel="alternate"; type="text/markdown"; title="LLM-friendly summary", <https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md>; rel="service-doc"
+
+# RFC 9727 API catalog must be served as application/linkset+json.
+/.well-known/api-catalog
+  Content-Type: application/linkset+json
+
+# Agent Skills SKILL.md files are markdown.
+/.well-known/agent-skills/*/SKILL.md
+  Content-Type: text/markdown; charset=utf-8
