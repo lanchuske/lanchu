@@ -347,6 +347,25 @@ async function cmdStop(): Promise<void> {
   console.log("server stopped");
 }
 
+async function cmdUninstall(): Promise<void> {
+  if (await serverUp()) {
+    await fetch(`${baseUrl()}/shutdown`, { method: "POST" }).catch(() => {});
+    console.log("Stopped the local server.");
+  }
+  const dir = stateDir();
+  if (hasFlag("purge")) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log(`Removed all local Lanchu data at ${dir}`);
+  } else {
+    console.log(`Local Lanchu data lives at:\n  ${dir}`);
+    console.log("Delete all orgs/agents/tasks with:  lanchu uninstall --purge");
+  }
+  console.log("\nAlso, to fully clean up:");
+  console.log("  claude mcp remove lanchu     # if you wired an MCP client");
+  console.log("  rm -rf .lanchu               # per-project config, in each project");
+  console.log("  npm rm -g lanchu             # if you installed it globally (npx needs no removal)");
+}
+
 function openBrowser(url: string): boolean {
   const [cmd, cmdArgs] =
     process.platform === "darwin"
@@ -533,6 +552,7 @@ Usage:
   lanchu panel                      open the panel in your browser
   lanchu upgrade                    check npm for a newer version
   lanchu notify on|off              opt-in update notifications (off by default)
+  lanchu uninstall [--purge]        stop the server; --purge deletes local data
   lanchu help | version
 
 Onboard flags:
@@ -586,6 +606,8 @@ async function main(): Promise<void> {
       return cmdStats();
     case "stop":
       return cmdStop();
+    case "uninstall":
+      return cmdUninstall();
     case "panel":
     case "open":
       return cmdPanel();

@@ -372,6 +372,30 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
   );
 
   server.registerTool(
+    "help",
+    {
+      title: "How Lanchu works",
+      description: "A short guide to working inside Lanchu — read this if you're unsure how to proceed.",
+      inputSchema: {},
+    },
+    async () =>
+      text({
+        overview:
+          "You are a member of a team coordinated by Lanchu. You coordinate through shared state, not by talking to other agents directly. Everything you do is visible and audited; actions outside your role are rejected.",
+        loop: [
+          "1. Read org_context (or the lanchu://me resource) for your objective, role, allowed tags, org rules and open tasks.",
+          "2. Break your objective into tasks with task_create (only tags within your allowed_tags).",
+          "3. Claim a task with task_claim before working it — this prevents duplication. Use task_check_scope if unsure it's yours.",
+          "4. Report progress with task_update (in_progress, then done). 'done' unblocks dependent tasks.",
+          "5. Keep shared knowledge current with doc_read / doc_update.",
+          "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release.",
+        ],
+        rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc.",
+        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_handoff, doc_list, doc_read, doc_update, session_leave.",
+      }),
+  );
+
+  server.registerTool(
     "session_leave",
     {
       title: "End session",
