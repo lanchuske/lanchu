@@ -411,7 +411,15 @@ export function startServer(): Promise<http.Server> {
   tick();
   setInterval(tick, 30_000).unref();
   const server = createServer();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(`Port ${port()} is already in use — another Lanchu server may be running.`);
+        console.error(`Stop it with 'lanchu stop', or use a different port: LANCHU_PORT=4320 lanchu ...`);
+        process.exit(1);
+      }
+      reject(err);
+    });
     server.listen(port(), HOST, () => resolve(server));
   });
 }
