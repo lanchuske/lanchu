@@ -1,0 +1,22 @@
+# Lanchu
+
+> Lanchu is a local-first, open-source control and trust layer for AI agents. It coordinates multiple agents over the Model Context Protocol (MCP) so they do not collide, keeps each one within a defined role, and gives you a real-time panel and a full audit log. It runs 100% on your machine.
+
+Lanchu does not run or orchestrate your agents; it coordinates and bounds their work — a shared workspace, roles and scope limits, and an audit trail. Install with `npx lanchu` (requires Node.js 22.5+). MIT-licensed.
+
+## Documentation
+- [How it works](https://lanchu.ar/how-it-works.html): what it solves, what you do as a user, and how to see, update and uninstall it.
+- [Architecture](https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md): tools, resources and events.
+- [Definition](https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md): what Lanchu is and is not.
+- [CLI reference](https://github.com/lanchuske/lanchu/blob/main/CLI.md): the full command reference.
+
+## Machine-readable
+- [MCP Server Card](https://lanchu.ar/.well-known/mcp/server-card.json)
+- [Agent Skills index](https://lanchu.ar/.well-known/agent-skills/index.json)
+
+## Key facts
+- Category: developer tool; Model Context Protocol (MCP) server; multi-agent coordination and governance.
+- Runs locally: no cloud, no phone-home. All data lives in a single local SQLite database in your OS app-data folder.
+- Works with any MCP-compatible agent; built around Claude Code.
+- Core capabilities: durable agents, mediated coordination, cooperative and auditable scope limits, real-time supervisor panel.
+- Source: https://github.com/lanchuske/lanchu — Package: https://www.npmjs.com/package/lanchu

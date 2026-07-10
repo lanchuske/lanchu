@@ -4,86 +4,359 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Lanchu — control &amp; trust layer for AI agents</title>
-<meta name="description" content="Lanchu is a local-first, open-source MCP server that coordinates multiple AI agents with governance: durable agents, scope limits, and a real-time panel." />
+<meta name="description" content="Lanchu is a local-first, open-source control and trust layer for AI agents. Coordinate multiple agents without collisions, keep each one in its lane, and audit everything — 100% local, MCP-native." />
 <link rel="canonical" href="https://lanchu.ar/" />
+
+<!-- Icons -->
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon.png" sizes="any" />
+<link rel="apple-touch-icon" href="favicon.png" />
+<meta name="theme-color" content="#0b7285" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Lanchu" />
+<meta property="og:title" content="Lanchu — control &amp; trust layer for AI agents" />
+<meta property="og:description" content="Coordinate multiple AI agents without collisions, keep each one in its lane, and audit everything. Open source, MCP-native, 100% local." />
+<meta property="og:url" content="https://lanchu.ar/" />
+<meta property="og:image" content="https://lanchu.ar/og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:locale" content="en_US" />
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Lanchu — control &amp; trust layer for AI agents" />
+<meta name="twitter:description" content="Coordinate multiple AI agents without collisions, keep each one in its lane, and audit everything. Open source, MCP-native, 100% local." />
+<meta name="twitter:image" content="https://lanchu.ar/og.png" />
+
 <link rel="sitemap" type="application/xml" href="sitemap.xml" />
 <!-- Agent discovery: advertise machine-readable resources (RFC 8288 relations) -->
 <link rel="describedby" href=".well-known/mcp/server-card.json" />
 <link rel="service-doc" href="https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md" />
-<meta name="theme-color" content="#0b7285" />
+<link rel="alternate" type="text/markdown" href="llms.txt" />
+
+<!-- Structured data for search engines and AI answer engines -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://lanchu.ar/#website",
+      "url": "https://lanchu.ar/",
+      "name": "Lanchu",
+      "description": "Control and trust layer for the AI agents you already run.",
+      "inLanguage": "en"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://lanchu.ar/#software",
+      "name": "Lanchu",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "macOS, Linux, Windows",
+      "url": "https://lanchu.ar/",
+      "downloadUrl": "https://www.npmjs.com/package/lanchu",
+      "softwareRequirements": "Node.js 22.5+",
+      "license": "https://opensource.org/licenses/MIT",
+      "description": "A local-first, open-source Model Context Protocol (MCP) server that coordinates multiple AI agents with governance: durable agents, mediated coordination, cooperative and auditable scope limits, and a real-time supervisor panel.",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "sameAs": [
+        "https://github.com/lanchuske/lanchu",
+        "https://www.npmjs.com/package/lanchu"
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://lanchu.ar/#faq",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is Lanchu?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Lanchu is a local-first, open-source control and trust layer for AI coding agents. It coordinates multiple agents so they do not collide, keeps each one within a defined role, and gives you a real-time panel and a full audit history of everything they do." }
+        },
+        {
+          "@type": "Question",
+          "name": "Is Lanchu free and open source?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes. Lanchu is MIT-licensed and free to use. The source is on GitHub and it is published to npm as the package 'lanchu'." }
+        },
+        {
+          "@type": "Question",
+          "name": "Does Lanchu run in the cloud?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. Lanchu runs 100% on your machine. There is no public endpoint and no phone-home by design; your data never leaves your computer." }
+        },
+        {
+          "@type": "Question",
+          "name": "Which agents does Lanchu work with?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Any MCP-compatible agent. Lanchu is built around Claude Code and connects over the Model Context Protocol (MCP), so agents coordinate through Lanchu rather than directly." }
+        },
+        {
+          "@type": "Question",
+          "name": "Does Lanchu run or orchestrate my agents?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. Lanchu does not execute or drive your agents. It coordinates and bounds their work: a shared workspace, roles and scope limits, and an audit trail. You keep using your own agents." }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I install Lanchu?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Run 'npx lanchu'. A guided wizard sets up your organization, agent and role, wires your MCP client and launches it. Lanchu requires Node.js 22.5 or newer." }
+        },
+        {
+          "@type": "Question",
+          "name": "What data does Lanchu store, and where?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Everything — organizations, agents, tasks, docs and the audit log — lives in a single local SQLite database in your operating system's app-data folder. Running 'lanchu uninstall --purge' removes it completely." }
+        }
+      ]
+    }
+  ]
+}
+</script>
+
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #ffffff; --fg: #1a1a1a; --muted: #5a6672;
-    --line: #e6e8eb; --accent: #0b7285; --code-bg: #f5f6f7;
+    --bg: #ffffff; --fg: #16181d; --muted: #5a6672;
+    --line: #e6e8eb; --accent: #0b7285; --accent-fg: #ffffff;
+    --code-bg: #f5f6f7; --card: #fbfcfd;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9aa4af;
-            --line: #232a31; --accent: #4dd0c1; --code-bg: #161b22; }
+            --line: #232a31; --accent: #4dd0c1; --accent-fg: #06231f;
+            --code-bg: #161b22; --card: #11161d; }
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body { margin: 0; background: var(--bg); color: var(--fg);
-         font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  main { max-width: 720px; margin: 0 auto; padding: 72px 24px 96px; }
-  header { margin-bottom: 40px; }
-  h1 { font-size: 40px; letter-spacing: -0.02em; margin: 0 0 8px; }
-  .tag { font-size: 19px; color: var(--muted); margin: 0 0 20px; }
-  .badges a, .badges img { height: 20px; vertical-align: middle; }
-  .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
-  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em;
-       color: var(--muted); margin: 44px 0 12px; }
-  p { margin: 0 0 16px; }
-  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
-        padding: 14px 16px; overflow-x: auto; margin: 0 0 20px; }
-  code { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  ul { padding-left: 20px; margin: 0 0 16px; }
-  li { margin: 6px 0; }
+         font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         -webkit-font-smoothing: antialiased; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; }
-  .grid div { border-top: 1px solid var(--line); padding-top: 10px; }
-  .grid b { display: block; }
-  .grid span { color: var(--muted); font-size: 14px; }
-  footer { margin-top: 56px; border-top: 1px solid var(--line); padding-top: 20px;
-           color: var(--muted); font-size: 14px; }
-  footer a { margin-right: 16px; }
+  main { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 46px 0; border-top: 1px solid var(--line); }
+  section:first-of-type { border-top: 0; }
+
+  /* Hero */
+  header { padding: 76px 0 8px; }
+  h1 { font-size: 44px; line-height: 1.05; letter-spacing: -0.03em; margin: 0 0 10px; }
+  .tag { font-size: 20px; color: var(--muted); margin: 0 0 22px; max-width: 34ch; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 26px; }
+  .badges img { height: 20px; display: block; }
+  .lead { font-size: 17px; margin: 0 0 24px; }
+  .cta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .btn { display: inline-block; padding: 9px 16px; border-radius: 9px; font-weight: 600; font-size: 15px; border: 1px solid var(--line); }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .btn.primary:hover { text-decoration: none; filter: brightness(1.05); }
+  .btn.ghost:hover { text-decoration: none; border-color: var(--accent); }
+
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
+        padding: 14px 16px; overflow-x: auto; margin: 0 0 22px; }
+  code { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .prompt { color: var(--muted); user-select: none; }
+  p code, li code, dd code { background: var(--code-bg); border: 1px solid var(--line);
+        border-radius: 6px; padding: 1px 5px; font-size: 13.5px; }
+
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.07em;
+       color: var(--muted); margin: 0 0 20px; font-weight: 600; }
+  h3 { font-size: 17px; margin: 0 0 6px; letter-spacing: -0.01em; }
+
+  /* Feature grid */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px 28px; }
+  .grid h3 { margin-bottom: 4px; }
+  .grid p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  /* Steps */
+  ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; }
+  ol.steps > li { counter-increment: s; position: relative; padding: 0 0 22px 46px; }
+  ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: -2px;
+        width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: var(--accent-fg);
+        font-weight: 700; font-size: 15px; display: grid; place-items: center; }
+  ol.steps > li:last-child { padding-bottom: 0; }
+  ol.steps p { margin: 4px 0 10px; color: var(--muted); font-size: 15px; }
+
+  figure.diagram { margin: 0 0 4px; }
+  figure.diagram svg { width: 100%; height: auto; display: block; }
+
+  /* FAQ */
+  details { border-top: 1px solid var(--line); padding: 14px 0; }
+  details:first-of-type { border-top: 0; }
+  summary { cursor: pointer; font-weight: 600; list-style: none; display: flex;
+        justify-content: space-between; align-items: center; gap: 16px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; color: var(--muted); font-weight: 400; font-size: 20px; }
+  details[open] summary::after { content: "\2013"; }
+  details p { margin: 10px 0 0; color: var(--muted); font-size: 15px; }
+
+  /* Resources */
+  .res { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; }
+  .res div { border-top: 1px solid var(--line); padding-top: 10px; }
+  .res b { display: block; font-weight: 600; }
+  .res span { color: var(--muted); font-size: 13px; }
+
+  footer { border-top: 1px solid var(--line); padding: 26px 0 60px; color: var(--muted); font-size: 14px;
+        display: flex; gap: 18px; flex-wrap: wrap; }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 560px) {
+    h1 { font-size: 36px; }
+    .grid, .res { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 <main>
   <header>
     <h1>Lanchu</h1>
-    <p class="tag">The control and trust layer for the AI agents you already have running.</p>
+    <p class="tag">The control and trust layer for the AI agents you already run.</p>
     <div class="badges">
-      <a href="https://www.npmjs.com/package/lanchu"><img alt="npm" src="https://img.shields.io/npm/v/lanchu"></a>
-      <a href="https://github.com/lanchuske/lanchu"><img alt="GitHub" src="https://img.shields.io/badge/source-GitHub-181717"></a>
-      <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
-      <img alt="Local" src="https://img.shields.io/badge/runs-100%25%20local-0b7285">
+      <a href="https://www.npmjs.com/package/lanchu"><img alt="npm version" src="https://img.shields.io/npm/v/lanchu" loading="lazy" /></a>
+      <a href="https://github.com/lanchuske/lanchu"><img alt="Source on GitHub" src="https://img.shields.io/badge/source-GitHub-181717" loading="lazy" /></a>
+      <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue" loading="lazy" />
+      <img alt="Runs 100% local" src="https://img.shields.io/badge/runs-100%25%20local-0b7285" loading="lazy" />
     </div>
-    <p>Coordinate multiple agents without collisions, keep each one in its lane, and see and
-       trust everything they do — from one command. Open source, MCP-native, 100% local.</p>
+    <p class="lead">Run several AI agents at once and they step on each other's work, act blindly, and
+       leave you no way to see or trust what they did. Lanchu gives them a shared workspace so they
+       <strong>coordinate without colliding</strong>, keeps each one in its <strong>lane</strong>, and
+       gives you a <strong>panel and full audit history</strong> — all from one command. Open source,
+       MCP-native, 100% local.</p>
+    <pre><code><span class="prompt">$ </span>npx lanchu</code></pre>
+    <div class="cta">
+      <a class="btn primary" href="#quick-start">Get started</a>
+      <a class="btn ghost" href="https://github.com/lanchuske/lanchu">GitHub</a>
+      <a class="btn ghost" href="how-it-works.html">How it works</a>
+    </div>
   </header>
 
-  <h2>Quick start</h2>
-  <pre><code>npx lanchu</code></pre>
-  <p>A guided wizard sets up your organization, picks or creates an agent and role, wires
-     your MCP client, and launches it — already connected.</p>
+  <section id="what">
+    <h2>What it is</h2>
+    <p>Lanchu is a <strong>local-first, open-source control and trust layer</strong> for AI agents,
+       built on the Model Context Protocol (MCP). It does not run or orchestrate your agents — it
+       coordinates and bounds their work. Agents talk through Lanchu instead of directly, so nothing
+       they do is a blind spot: work is claimed and mediated, roles limit what each agent can touch,
+       and every action lands in an audit log you can watch live.</p>
+  </section>
 
-  <h2>What it does</h2>
-  <ul>
-    <li><b>Durable agents</b> — agents persist as team members; reuse them instead of duplicating.</li>
-    <li><b>Mediated coordination</b> — agents coordinate through Lanchu, never directly, so nothing is a blind spot.</li>
-    <li><b>Cooperative, auditable limits</b> — actions outside a role's scope are rejected and recorded.</li>
-    <li><b>Real-time panel</b> — see who is active, on what, and a full history.</li>
-  </ul>
+  <section id="features">
+    <h2>What it does</h2>
+    <div class="grid">
+      <div>
+        <h3>Durable agents</h3>
+        <p>Agents persist as team members with a name, role and history — reuse them instead of spinning up duplicates.</p>
+      </div>
+      <div>
+        <h3>Mediated coordination</h3>
+        <p>Agents coordinate through Lanchu, never directly, so tasks are claimed without collisions and nothing is a blind spot.</p>
+      </div>
+      <div>
+        <h3>Cooperative, auditable limits</h3>
+        <p>Each role has a scope. Actions outside it are rejected and recorded — governance you can prove, not just hope for.</p>
+      </div>
+      <div>
+        <h3>Real-time panel</h3>
+        <p>See who is active, what they are working on, and a full history — a live supervisor view over the whole team.</p>
+      </div>
+    </div>
+  </section>
 
-  <h2>For agents</h2>
-  <div class="grid">
-    <div><b><a href=".well-known/mcp/server-card.json">MCP Server Card</a></b><span>/.well-known/mcp/server-card.json</span></div>
-    <div><b><a href=".well-known/agent-skills/index.json">Agent Skills index</a></b><span>/.well-known/agent-skills/index.json</span></div>
-    <div><b><a href="https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md">Architecture</a></b><span>tools, resources, events</span></div>
-    <div><b><a href="sitemap.xml">Sitemap</a></b><span>/sitemap.xml</span></div>
-  </div>
+  <section id="quick-start">
+    <h2>How it works</h2>
+    <figure class="diagram" aria-hidden="true">
+      <svg viewBox="0 0 700 150" xmlns="http://www.w3.org/2000/svg" role="img">
+        <defs>
+          <style>
+            .box { fill: var(--card); stroke: var(--line); }
+            .hub { fill: var(--accent); }
+            .t { fill: var(--fg); font: 600 14px -apple-system, Segoe UI, Roboto, sans-serif; }
+            .th { fill: var(--accent-fg); font: 700 14px -apple-system, Segoe UI, Roboto, sans-serif; }
+            .tm { fill: var(--muted); font: 12px -apple-system, Segoe UI, Roboto, sans-serif; }
+            .ln { stroke: var(--line); stroke-width: 2; }
+          </style>
+        </defs>
+        <line class="ln" x1="150" y1="45" x2="300" y2="70" />
+        <line class="ln" x1="150" y1="75" x2="300" y2="75" />
+        <line class="ln" x1="150" y1="105" x2="300" y2="80" />
+        <line class="ln" x1="400" y1="75" x2="548" y2="75" />
+        <rect class="box" x="20" y="28" width="130" height="34" rx="8" />
+        <text class="t" x="85" y="50" text-anchor="middle">Agent · backend</text>
+        <rect class="box" x="20" y="58" width="130" height="34" rx="8" />
+        <text class="t" x="85" y="80" text-anchor="middle">Agent · frontend</text>
+        <rect class="box" x="20" y="88" width="130" height="34" rx="8" />
+        <text class="t" x="85" y="110" text-anchor="middle">Agent · docs</text>
+        <rect class="hub" x="300" y="52" width="100" height="46" rx="10" />
+        <text class="th" x="350" y="80" text-anchor="middle">Lanchu</text>
+        <rect class="box" x="548" y="52" width="132" height="46" rx="10" />
+        <text class="t" x="614" y="72" text-anchor="middle">Panel</text>
+        <text class="tm" x="614" y="88" text-anchor="middle">+ audit log</text>
+      </svg>
+    </figure>
+    <ol class="steps">
+      <li>
+        <h3>Start it in your project</h3>
+        <p>A guided wizard sets up your organization, agent and role.</p>
+        <pre><code><span class="prompt">$ </span>npx lanchu</code></pre>
+      </li>
+      <li>
+        <h3>Connect your agent</h3>
+        <p>The wizard wires your MCP client (Claude Code) for you, or prints the command to run.</p>
+      </li>
+      <li>
+        <h3>Tell your agent to work in Lanchu</h3>
+        <p>It reads its objective, role and tasks, claims what is in its lane, and reports progress —
+           all visible to you. Add more agents with different roles and they coordinate through Lanchu,
+           never directly.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section id="faq">
+    <h2>FAQ</h2>
+    <details open>
+      <summary>What is Lanchu?</summary>
+      <p>Lanchu is a local-first, open-source control and trust layer for AI coding agents. It
+         coordinates multiple agents so they do not collide, keeps each one within a defined role, and
+         gives you a real-time panel and a full audit history of everything they do.</p>
+    </details>
+    <details>
+      <summary>Is Lanchu free and open source?</summary>
+      <p>Yes. Lanchu is MIT-licensed and free to use. The source is on
+         <a href="https://github.com/lanchuske/lanchu">GitHub</a> and it is published to
+         <a href="https://www.npmjs.com/package/lanchu">npm</a> as <code>lanchu</code>.</p>
+    </details>
+    <details>
+      <summary>Does Lanchu run in the cloud?</summary>
+      <p>No. Lanchu runs 100% on your machine. There is no public endpoint and no phone-home by design;
+         your data never leaves your computer.</p>
+    </details>
+    <details>
+      <summary>Which agents does it work with?</summary>
+      <p>Any MCP-compatible agent. Lanchu is built around Claude Code and connects over the Model
+         Context Protocol, so agents coordinate through Lanchu rather than directly.</p>
+    </details>
+    <details>
+      <summary>Does Lanchu run or orchestrate my agents?</summary>
+      <p>No. Lanchu does not execute or drive your agents. It coordinates and bounds their work: a
+         shared workspace, roles and scope limits, and an audit trail. You keep using your own agents.</p>
+    </details>
+    <details>
+      <summary>How do I install it?</summary>
+      <p>Run <code>npx lanchu</code>. A guided wizard sets up your organization, agent and role, wires
+         your MCP client and launches it. Lanchu requires Node.js 22.5 or newer.</p>
+    </details>
+    <details>
+      <summary>What data does Lanchu store, and where?</summary>
+      <p>Everything — organizations, agents, tasks, docs and the audit log — lives in a single local
+         SQLite database in your operating system's app-data folder. Running
+         <code>lanchu uninstall --purge</code> removes it completely.</p>
+    </details>
+  </section>
+
+  <section id="for-agents">
+    <h2>For agents</h2>
+    <div class="res">
+      <div><b><a href=".well-known/mcp/server-card.json">MCP Server Card</a></b><span>/.well-known/mcp/server-card.json</span></div>
+      <div><b><a href=".well-known/agent-skills/index.json">Agent Skills index</a></b><span>/.well-known/agent-skills/index.json</span></div>
+      <div><b><a href="llms.txt">llms.txt</a></b><span>/llms.txt</span></div>
+      <div><b><a href="https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md">Architecture</a></b><span>tools, resources, events</span></div>
+    </div>
+  </section>
 
   <footer>
     <a href="how-it-works.html">How it works</a>
