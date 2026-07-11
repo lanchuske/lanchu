@@ -283,6 +283,15 @@ export function panelHtml(): string {
   .ev .type { font-family: var(--mono); font-size: 12px; color: var(--accent); }
   .ev.rej .type { color: var(--bad); }
   .ev .right { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }
+  .ev.clamp { cursor: pointer; }
+  .ev .evmore { color: var(--accent); font-size: 11px; font-weight: 600; }
+  .id-link { color: var(--accent); cursor: pointer; text-decoration: none; font-size: 12.5px; }
+  .id-link:hover { text-decoration: underline; }
+
+  /* ── roles: holders + muted orphan chips ── */
+  .holder { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; }
+  .rolechip { display: inline-block; font-size: 11.5px; padding: 2px 9px; border-radius: 999px; margin-right: 4px;
+              background: var(--surface-2); color: var(--faint); border: 1px solid var(--line); }
 
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 9px; }
@@ -566,6 +575,16 @@ function stopServer() {
 document.addEventListener("click", function (e) {
   var cp = e.target.closest ? e.target.closest("button[data-copy]") : null;
   if (cp) { copyCmd(cp); return; }
+  // Activity id-links jump to the thing: task → Work board, doc → Docs expanded.
+  var il = e.target.closest ? e.target.closest("a.id-link") : null;
+  if (il) {
+    if (il.getAttribute("data-kind") === "doc") { openDocs[il.getAttribute("data-ref")] = true; renderDocs(lastDocs); location.hash = "docs"; }
+    else location.hash = "work";
+    return;
+  }
+  // Clamped activity rows expand/collapse on click.
+  var evEl = e.target.closest ? e.target.closest(".ev[data-ev]") : null;
+  if (evEl) { var k = evEl.getAttribute("data-ev"); openEvs[k] = !openEvs[k]; renderAuditRows(); return; }
   var b = e.target.closest ? e.target.closest("button[data-act]") : null;
   if (b) {
     var act = b.getAttribute("data-act"), id = b.getAttribute("data-id"), nm = b.getAttribute("data-name") || "agent";
@@ -778,14 +797,38 @@ function budgetChip(r) {
     fmtTokens(used) + " / " + fmtTokens(r.token_quota) + " tokens (" + pct + "%)</span>";
 }
 
-function renderRoles(list) {
-  document.getElementById("roles").innerHTML = list.map(function (r) {
+// Roles worth reading first: the ones agents actually hold or that can claim
+// work. Orphan roles (no tags, no wildcard, nobody holding them) collapse into
+// a muted chip row instead of shouting "no tags" once per card.
+function renderRoles(list, agents) {
+  var holders = {};
+  (agents || []).forEach(function (a) {
+    if (a.role_name) (holders[a.role_name] = holders[a.role_name] || []).push(a);
+  });
+  var used = [], orphan = [];
+  (list || []).forEach(function (r) {
+    var alive = r.is_wildcard || (r.allowed_tags || []).length || (holders[r.name] || []).length;
+    (alive ? used : orphan).push(r);
+  });
+  var card = function (r) {
+    var who = (holders[r.name] || []).map(function (a) {
+      return '<span class="holder">' + colorChip(a.name) + esc(a.name) + '</span>';
+    }).join("");
     var tags = r.is_wildcard
       ? '<span class="tag">★ all tags</span>'
       : ((r.allowed_tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("")
          || '<span class="hint">no tags — can\\'t claim any task yet</span>');
-    return '<div class="card"><span class="name">' + esc(r.name) + '</span> ' + tags + budgetChip(r) + '</div>';
-  }).join("") || '<div class="empty">No roles yet.</div>';
+    return '<div class="card"><div class="top"><span class="name">' + esc(r.name) + '</span>' +
+      '<span class="meta">' + (who || '<span class="empty-inline">nobody holds this role</span>') + '</span></div>' +
+      '<div>' + tags + budgetChip(r) + '</div></div>';
+  };
+  document.getElementById("roles").innerHTML =
+    (used.map(card).join("") || '<div class="empty">No roles yet.</div>') +
+    (orphan.length
+      ? '<div class="cat-title">Unused roles <span class="badge">' + orphan.length + '</span></div>' +
+        '<div class="meta"><span class="rolechips">' + orphan.map(function (r) { return '<span class="rolechip">' + esc(r.name) + '</span>'; }).join(" ") +
+        '</span> <span class="hint">no tags, no holders — give one tags from the terminal (<code>lanchu roles</code>) or leave it parked</span></div>'
+      : "");
 }
 
 var DOC_CATS = [
@@ -879,12 +922,28 @@ function renderDocs(list) {
   if (qi) qi.addEventListener("input", function () { docQuery = this.value; renderDocs(lastDocs); });
 })();
 
+// Activity rows: raw ids resolve to their task/doc titles (as jump links), and
+// wall-of-text notes clamp with a click-to-expand — remembered across refreshes.
+var openEvs = {}, evTaskTitles = {}, evDocTitles = {}, lastAudit = [];
+var EV_NOTE_CLAMP = 150;
 function evRow(e) {
   var when = (e.created_at || "").slice(11, 19);
-  var subj = e.subject_id ? ' <span class="id">' + esc(e.subject_id) + '</span>' : "";
-  var note = e.data && e.data.note ? ' — ' + esc(e.data.note) : "";
-  var right = (e.outcome === "rejected" ? "rejected" : "") + (e.tokens ? (e.outcome === "rejected" ? " · " : "") + e.tokens + " tok" : "");
-  return '<div class="ev' + (e.outcome === "rejected" ? " rej" : "") + '">' +
+  var subj = "";
+  if (e.subject_id) {
+    var tTitle = evTaskTitles[e.subject_id], dTitle = evDocTitles[e.subject_id];
+    var label = tTitle || dTitle;
+    subj = label
+      ? ' <a class="id-link" data-kind="' + (tTitle ? "task" : "doc") + '" data-ref="' + esc(e.subject_id) + '" title="' + esc(e.subject_id) + '">' +
+        esc(label.length > 46 ? label.slice(0, 46) + "…" : label) + '</a>'
+      : ' <span class="id">' + esc(e.subject_id) + '</span>';
+  }
+  var noteRaw = e.data && e.data.note ? String(e.data.note) : "";
+  var long = noteRaw.length > EV_NOTE_CLAMP;
+  var open = !!openEvs[e.id];
+  var note = noteRaw ? " — " + esc(long && !open ? noteRaw.slice(0, EV_NOTE_CLAMP) + "…" : noteRaw) : "";
+  var right = (e.outcome === "rejected" ? "rejected" : "") + (e.tokens ? (e.outcome === "rejected" ? " · " : "") + e.tokens + " tok" : "") +
+    (long ? ' <span class="evmore">' + (open ? "less ▲" : "more ▼") + '</span>' : "");
+  return '<div class="ev' + (e.outcome === "rejected" ? " rej" : "") + (long ? " clamp" : "") + '"' + (long ? ' data-ev="' + e.id + '"' : "") + '>' +
     '<span class="time">' + when + '</span>' +
     '<span>' + (e.actor_name ? colorChip(e.actor_name) : "") + '<span class="who">' + esc(e.actor_name || "—") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
     '<span class="right">' + right + '</span></div>';
@@ -913,8 +972,15 @@ function renderMemory(list) {
   }).join("") || '<div class="empty">No memories yet. They accrue automatically from events (merged PRs, conflict hot zones, role changes) and from agents\\' own <code>memory_set</code> calls.</div>';
 }
 
+// One source renders both audit surfaces so expand-on-click stays in sync.
+function renderAuditRows() {
+  document.getElementById("audit").innerHTML = lastAudit.map(evRow).join("") || '<div class="empty">No activity yet.</div>';
+  var ov = document.getElementById("ov-audit");
+  if (ov) ov.innerHTML = lastAudit.slice(0, 8).map(evRow).join("") || '<div class="empty">No activity yet.</div>';
+}
 function renderAudit(list) {
-  document.getElementById("audit").innerHTML = list.map(evRow).join("") || '<div class="empty">No activity yet.</div>';
+  lastAudit = list || [];
+  renderAuditRows();
 }
 
 // Overview is the supervisor's home: who is working right now (name → task →
@@ -930,8 +996,6 @@ function renderOverview(board, audit) {
       '<div class="top"><span class="name"><span class="dot active"></span>' + colorChip(a.name) + esc(a.name) + '</span>' + branch + '</div>' +
       '<div class="meta">' + (task ? '<span class="k">task</span> <span title="' + esc(a.active_task_title) + '">' + esc(task) + '</span>' : '<span class="empty-inline">no active task</span>') + '</div>' + wt + '</div>';
   }).join("") || '<div class="empty">Nobody is working right now — agents appear here while they hold a live session.</div>';
-
-  document.getElementById("ov-audit").innerHTML = audit.slice(0, 8).map(evRow).join("") || '<div class="empty">No activity yet.</div>';
 
   var confs = audit.filter(function (e) {
     return e.type === "conflict.detected" || e.type === "scope.violation" || e.outcome === "rejected";
@@ -1214,7 +1278,10 @@ function refresh() {
       renderProjectsView(r[0].projects, r[0].tasks, r[0].agents);
       renderAgents(r[0].agents);
       renderTasks(r[0].tasks, r[0].agents);
-      renderRoles(r[1]); renderDocs(r[2]); renderAudit(r[3]); renderMemory(r[5]);
+      // id → title lookups for the activity rows, before anything renders them.
+      evTaskTitles = {}; (r[0].tasks || []).forEach(function (t) { evTaskTitles[t.id] = t.title; });
+      evDocTitles = {}; (r[2] || []).forEach(function (d) { evDocTitles[d.id] = d.title; });
+      renderRoles(r[1], r[0].agents); renderDocs(r[2]); renderAudit(r[3]); renderMemory(r[5]);
       renderStats(r[0], r[3]);
       renderOverview(r[0], r[3]);
       renderAttention(r[4], r[0].agents);
