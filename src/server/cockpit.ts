@@ -96,6 +96,8 @@ export function spawnTerminal(input: {
   cwd: string;
   token: string;
   prompt: string;
+  /** De-collided per-org color (store.agentColorOf). Falls back to the name hash. */
+  colorHex?: string;
   dry?: boolean;
 }): SpawnResult {
   const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title);
@@ -124,8 +126,8 @@ export function spawnTerminal(input: {
       // Stable per-agent identity: tint this pane's border with the agent's
       // color (same hue as the panel chip). Best-effort — per-pane style
       // options need tmux >= 3.2; older tmux just ignores the call.
-      const color = agentColor(input.agentName);
-      spawnSync("tmux", ["set-option", "-p", "-t", paneId, "pane-border-style", `fg=${color.hex}`]);
+      const hex = input.colorHex ?? agentColor(input.agentName).hex;
+      spawnSync("tmux", ["set-option", "-p", "-t", paneId, "pane-border-style", `fg=${hex}`]);
     }
     if (paneId) plan.ref = { method: "tmux", id: paneId };
     return plan;
@@ -156,7 +158,7 @@ export function spawnTerminal(input: {
       // Same identity in Terminal.app: a light pastel of the agent's color as
       // the window background (blended toward white so dark text on the
       // default profile stays readable). Best-effort.
-      const [r, g, b] = pastelRgb16(agentColor(input.agentName));
+      const [r, g, b] = pastelRgb16(input.colorHex ?? agentColor(input.agentName));
       spawnSync("osascript", ["-e", [
         'tell application "Terminal" to try',
         `  set background color of selected tab of (first window whose id is ${winId}) to {${r}, ${g}, ${b}}`,

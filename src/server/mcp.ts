@@ -755,7 +755,10 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         });
         const prompt =
           "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work.";
-        const result = spawnTerminal({ title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd, token, prompt });
+        const result = spawnTerminal({
+          title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd, token, prompt,
+          colorHex: store.agentColorOf(agent).hex,
+        });
         store.setAgentTerminal(agent.id, result.ref ?? null);
         return text({ agent: agent.name, worktree: wt?.path ?? null, branch: wt?.branch ?? null, ...result });
       } catch (err) {

@@ -622,11 +622,17 @@ async function cmdSpawn(): Promise<void> {
     // Spawn always mints a fresh teammate: keep dedupe-on-collision instead of
     // the /session default of reusing an existing agent by name.
     create: true,
-  })) as { token: string; agentName: string; agentId: string; worktree: string | null; branch: string | null };
+  })) as {
+    token: string; agentName: string; agentId: string; worktree: string | null; branch: string | null;
+    color?: { hex: string; ansi256: number };
+  };
   // Launch inside the agent's isolated worktree (falls back to this dir with --no-isolate
   // or when the directory isn't a git repo).
   const cwd = s.worktree ?? process.cwd();
-  const result = spawnTerminal({ title: `${org}·${s.agentName}`, agentName: s.agentName, cwd, token: s.token, prompt: SPAWN_PROMPT, dry: hasFlag("dry") });
+  const result = spawnTerminal({
+    title: `${org}·${s.agentName}`, agentName: s.agentName, cwd, token: s.token, prompt: SPAWN_PROMPT,
+    colorHex: s.color?.hex, dry: hasFlag("dry"),
+  });
   // Persist the terminal handle so the panel can re-focus this agent later.
   if (!hasFlag("dry") && result.ref) await post("/agent/terminal", { agentId: s.agentId, ref: result.ref });
   console.log(`Agent '${s.agentName}' · [${result.method}] ${result.note}`);
@@ -647,6 +653,7 @@ async function cmdTile(): Promise<void> {
     agents: {
       name: string; state: string; branch: string | null; worktree: string | null;
       active_task_id: string | null; active_task_title: string | null;
+      color?: { hex: string; ansi256: number };
     }[];
   };
   if (!b.agents.length) return;
@@ -656,7 +663,8 @@ async function cmdTile(): Promise<void> {
   console.log("");
   for (const a of b.agents) {
     // Same hue as the terminal border and panel chip — one identity everywhere.
-    const dot = ansiColorize(a.state === "active" ? "●" : "○", agentColor(a.name));
+    // The board carries the de-collided slot; the hash is only the offline fallback.
+    const dot = ansiColorize(a.state === "active" ? "●" : "○", a.color ?? agentColor(a.name));
     const where = a.worktree
       ? `${tilde(a.worktree)}  (${a.branch ?? "no branch"})`
       : a.branch
@@ -775,18 +783,23 @@ async function statusLine(): Promise<string> {
   if (!found) return "";
   const { org, project } = found.config;
   // Set at launch (spawn/wizard) so the line can name which teammate owns this
-  // terminal — shown in the agent's stable color (same hue as panel and tile).
-  const me = process.env.LANCHU_AGENT
-    ? ` · you: ${ansiColorize(process.env.LANCHU_AGENT, agentColor(process.env.LANCHU_AGENT))}`
-    : "";
+  // terminal — shown in the agent's color (de-collided slot from the board
+  // when reachable; name-hash fallback offline).
+  const myName = process.env.LANCHU_AGENT;
+  const meWith = (color: { ansi256: number }) => (myName ? ` · you: ${ansiColorize(myName, color)}` : "");
+  const me = myName ? meWith(agentColor(myName)) : "";
   if (!(await serverUp())) return "lanchu ○ not running";
   try {
     const b = (await (await api(`/api/board?org=${encodeURIComponent(org)}`, {
       signal: AbortSignal.timeout(400),
-    })).json()) as { agents: { state: string }[]; tasks: { status: string }[] };
+    })).json()) as {
+      agents: { name: string; state: string; color?: { ansi256: number } }[];
+      tasks: { status: string }[];
+    };
     const active = b.agents.filter((a) => a.state === "active").length;
     const open = b.tasks.filter((t) => ["claimed", "in_progress", "blocked"].includes(t.status)).length;
-    return `lanchu ● ${org}/${project}${me} · ${active} active · ${open} open`;
+    const mine = myName ? b.agents.find((a) => a.name === myName)?.color : undefined;
+    return `lanchu ● ${org}/${project}${mine ? meWith(mine) : me} · ${active} active · ${open} open`;
   } catch {
     return `lanchu ● running${me}`;
   }

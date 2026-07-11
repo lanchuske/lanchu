@@ -86,6 +86,8 @@ export interface Agent {
   cwd: string | null;
   branch: string | null;
   worktree: string | null;
+  /** Persisted palette slot (per-org de-collision); null until first assignment. */
+  color_slot: number | null;
   created_at: string;
   retired_at: string | null;
 }
