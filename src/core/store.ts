@@ -715,11 +715,17 @@ export function listRoles(orgId: string): Role[] {
   return rows.map(loadRole);
 }
 
-/** Does the role cover ALL given tags? (scope rule T.tags ⊆ allowed_tags) */
+/**
+ * Does the role cover ALL given AREA tags? (scope rule T.area_tags ⊆
+ * allowed_tags). The dogfooding taxonomy (bug|extension|idea|process) is
+ * categorization, not a licensed surface — every role covers it implicitly
+ * (task-mrgplqdo11, completing #68's principle): filing, claiming or being
+ * handed a bug is gated by its AREA tags only.
+ */
 export function roleCoversTags(role: Role, tags: string[]): boolean {
   if (role.is_wildcard) return true;
   const allowed = new Set(role.allowed_tags);
-  return tags.every((t) => allowed.has(t));
+  return tags.every((t) => TAXONOMY_TAGS.has(t) || allowed.has(t));
 }
 
 /**
@@ -1367,7 +1373,14 @@ export function createTask(input: {
   if (!agent) throw new Error("unknown agent");
   const role = getRole(agent.role_id);
   const tags = input.tags ?? [];
-  if (role && !roleCoversTags(role, tags)) {
+  // Rule 7 (task-mrgplqdo11): detection is everyone's job — the dogfooding
+  // taxonomy (bug|extension|idea|process) categorizes what a task IS, not a
+  // surface a role must be licensed for. Every role implicitly covers the
+  // taxonomy on CREATE; area tags stay scope-checked (and claiming is
+  // untouched — filing a bug is not working it). Completes #68's principle,
+  // which already excluded taxonomy from conflict overlap.
+  const areaTags = tags.filter((t) => !TAXONOMY_TAGS.has(t));
+  if (role && !roleCoversTags(role, areaTags)) {
     recordEvent({
       org_id: input.orgId,
       project_id: input.projectId,
@@ -1378,7 +1391,7 @@ export function createTask(input: {
       data: { action: "create", title: input.title, tags },
     });
     throw new ScopeError(
-      `Role '${role.name}' does not cover tags [${tags.join(", ")}].`,
+      `Role '${role.name}' does not cover tags [${areaTags.join(", ")}].`,
     );
   }
 
