@@ -24,7 +24,14 @@ function has(cmd: string): boolean {
 const hasTmux = () => has("tmux");
 const isMac = () => process.platform === "darwin";
 
-/** POSIX single-quote a string (safe even if it contains apostrophes). */
+/**
+ * POSIX single-quote a string (safe even if it contains apostrophes). Never
+ * nest a call inside another literal '...' — e.g. `trap 'rm -f ${sq(x)}' EXIT`
+ * — the inner quote pair closes the outer one, so a space in x (macOS's
+ * default state dir has one) splits it into extra trap arguments and `sh`
+ * aborts the whole hook on "invalid signal specification". Quote the whole
+ * inner command instead: `trap ${sq(`rm -f ${x}`)} EXIT`.
+ */
 const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
 /**
@@ -71,7 +78,7 @@ export function bootstrapCommand(cwd: string, token: string, prompt: string, age
   const resumeFlag = resumeSessionId ? `--resume ${sq(resumeSessionId)} ` : "";
   // `--mcp-config` is variadic, so the prompt MUST be separated by `--` — otherwise
   // Claude slurps it as another config path ("MCP config file not found: <prompt>").
-  return `cd ${sq(cwd)}; ${setTitle}${ident}trap 'rm -f ${sq(mcpConfigFile)}' EXIT; claude ${modelFlag}${resumeFlag}--strict-mcp-config --mcp-config ${sq(mcpConfigFile)} -- ${sq(prompt)}`;
+  return `cd ${sq(cwd)}; ${setTitle}${ident}trap ${sq(`rm -f ${mcpConfigFile}`)} EXIT; claude ${modelFlag}${resumeFlag}--strict-mcp-config --mcp-config ${sq(mcpConfigFile)} -- ${sq(prompt)}`;
 }
 
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
@@ -121,7 +128,7 @@ export function installStopHook(cwd: string, token: string, agentName?: string):
     const rewakeCommand =
       `[ -d ${sq(lockDir)} ] && kill -0 "$(cat ${sq(path.join(lockDir, "pid"))} 2>/dev/null)" 2>/dev/null && exit 0; ` +
       `mkdir -p ${sq(lockDir)} && echo $$ > ${sq(path.join(lockDir, "pid"))}; ` +
-      `trap 'rm -rf ${sq(lockDir)}' EXIT; ` +
+      `trap ${sq(`rm -rf ${lockDir}`)} EXIT; ` +
       `while kill -0 "$PPID" 2>/dev/null; do ` +
       `N=$(curl -sf --max-time 70 -H "Authorization: Bearer $(cat ${sq(tokenFile)} 2>/dev/null)" ` +
       `${sq(`${baseUrl()}/api/agent/pending?wait=55000`)} 2>/dev/null); ` +

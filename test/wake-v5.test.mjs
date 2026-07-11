@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 
 // Isolated on-disk state; shrink the nudge grace window so tests don't wait.
 const dir = path.join(os.tmpdir(), "lanchu-wake-v5-test-" + process.pid);
@@ -163,4 +164,46 @@ test("installStopHook installs Stop + SessionStart + SessionEnd hooks, idempoten
   assert.match(start, /--data-binary @-/, "relays the hook's stdin JSON (session_id) verbatim");
   assert.match(start, /exit 0$/, "lifecycle reporting never blocks the session");
   assert.match(settings.hooks.SessionEnd[0].hooks[0].command, /\/hooks\/agent\/session-end/);
+});
+
+// ── spaced-path regression (task-mrgqt4ba3): macOS's default state dir is
+// "~/Library/Application Support/lanchu" — a bare `sh -n` syntax check can't
+// catch this bug (the broken quoting is still balanced), so these actually
+// run the rendered trap statement and check it doesn't abort.
+const runsClean = (fragmentSource) => {
+  const trapStmt = fragmentSource.match(/trap\s+.+?EXIT;/);
+  assert.ok(trapStmt, "trap statement present in rendered command");
+  const result = spawnSync("sh", ["-c", `${trapStmt[0]} echo RENDER_OK`], { encoding: "utf8" });
+  assert.equal(result.stderr.trim(), "", "no shell error from a spaced path");
+  assert.match(result.stdout, /RENDER_OK/, "trap did not abort the script (POSIX special-builtin failure kills non-interactive sh)");
+};
+
+test("bootstrapCommand's cleanup trap survives a state dir with a space", () => {
+  const spaced = path.join(dir, "Application Support", "lanchu");
+  fs.mkdirSync(spaced, { recursive: true });
+  const prev = process.env.LANCHU_STATE_DIR;
+  process.env.LANCHU_STATE_DIR = spaced;
+  try {
+    const cmd = bootstrapCommand("/tmp/wt", "tok", "hi", "spacey", "spacey");
+    runsClean(cmd);
+  } finally {
+    process.env.LANCHU_STATE_DIR = prev;
+  }
+});
+
+test("the asyncRewake rung's lock-cleanup trap survives a state dir with a space", () => {
+  const spaced = path.join(dir, "Application Support 2", "lanchu");
+  fs.mkdirSync(spaced, { recursive: true });
+  const prev = process.env.LANCHU_STATE_DIR;
+  process.env.LANCHU_STATE_DIR = spaced;
+  try {
+    const wt = path.join(dir, "hook-wt-spaced");
+    fs.mkdirSync(wt, { recursive: true });
+    assert.equal(installStopHook(wt, "tok-spaced", "spacey"), true);
+    const settings = JSON.parse(fs.readFileSync(path.join(wt, ".claude", "settings.local.json"), "utf8"));
+    const rewake = settings.hooks.Stop.find((e) => e.hooks[0].command.includes(": lanchu-rewake;"));
+    runsClean(rewake.hooks[0].command);
+  } finally {
+    process.env.LANCHU_STATE_DIR = prev;
+  }
 });
