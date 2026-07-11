@@ -107,11 +107,33 @@ export function panelHtml(): string {
                text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
                margin: 22px 0 10px; }
   .cat-title:first-child { margin-top: 4px; }
-  .card.doc .doc-body { display: none; white-space: pre-wrap; word-break: break-word; margin-top: 11px;
+  .card.doc .doc-body { display: none; word-break: break-word; margin-top: 11px;
                padding-top: 11px; border-top: 1px solid var(--line); color: var(--muted);
-               font-size: 13px; line-height: 1.6; font-family: var(--mono); }
+               font-size: 13px; line-height: 1.6; }
   .card.doc.open .doc-body { display: block; }
   .card.doc.open { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  /* rendered markdown inside a doc body */
+  .doc-body h1, .doc-body h2, .doc-body h3, .doc-body h4, .doc-body h5, .doc-body h6 {
+               color: var(--fg); font-weight: 600; line-height: 1.3; margin: 16px 0 6px; }
+  .doc-body h1 { font-size: 16px; } .doc-body h2 { font-size: 14.5px; } .doc-body h3 { font-size: 13.5px; }
+  .doc-body h4, .doc-body h5, .doc-body h6 { font-size: 13px; color: var(--muted); }
+  .doc-body > :first-child { margin-top: 0; }
+  .doc-body p { margin: 7px 0; }
+  .doc-body ul, .doc-body ol { margin: 7px 0; padding-left: 20px; }
+  .doc-body li { margin: 2px 0; }
+  .doc-body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+  .doc-body code { font-family: var(--mono); font-size: 12px; background: var(--surface-2);
+               border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+  .doc-body pre { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+               padding: 10px 12px; overflow-x: auto; margin: 9px 0; }
+  .doc-body pre code { background: none; border: 0; padding: 0; font-size: 12px; line-height: 1.5; white-space: pre; }
+  .doc-body strong { color: var(--fg); font-weight: 600; }
+  .doc-body a { color: var(--accent); text-decoration: none; }
+  .doc-body a:hover { text-decoration: underline; }
+  .doc-search { width: 100%; max-width: 420px; margin: 4px 0 16px; padding: 7px 12px; border-radius: 9px;
+               border: 1px solid var(--line); background: var(--surface); color: var(--fg); font: inherit; font-size: 13px; }
+  .doc-search:focus { outline: none; border-color: var(--accent); }
+  .doc-search::placeholder { color: var(--faint); }
   .empty-inline { color: var(--faint); font-style: italic; }
   .meta .k { color: var(--faint); }
   .id { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
@@ -266,6 +288,7 @@ export function panelHtml(): string {
       <section class="view" id="v-docs">
         <h1 class="vhead">Documentation</h1>
         <p class="vsub">Shared definitions and knowledge kept current by the team.</p>
+        <input id="doc-q" class="doc-search" type="search" placeholder="Filter docs by title or content…" autocomplete="off" spellcheck="false">
         <div id="docs"></div>
       </section>
 
@@ -390,12 +413,12 @@ document.addEventListener("click", function (e) {
     return;
   }
   // Click anywhere on an agent card (but not on its controls) → reveal its terminal.
-  if (e.target.closest && !e.target.closest("button, select")) {
+  if (e.target.closest && !e.target.closest("button, select, a")) {
     var card = e.target.closest(".card[data-agent]");
     if (card) { reveal(card.getAttribute("data-agent"), card.getAttribute("data-name")); return; }
-    // Click a doc card → expand/collapse its content.
+    // Click a doc card → expand/collapse its content (remembered across refreshes).
     var doc = e.target.closest(".card.doc[data-doc]");
-    if (doc) doc.classList.toggle("open");
+    if (doc) { openDocs[doc.getAttribute("data-doc")] = doc.classList.toggle("open"); }
   }
 });
 
@@ -492,7 +515,19 @@ function taskCard(t, opts) {
 }
 
 var STAGES = [["backlog", "Backlog"], ["definition", "Definition"], ["build", "Build"], ["review", "Review"], ["qa", "QA"], ["done", "Done"]];
-function stageOf(t) { return t.stage || (t.status === "done" ? "done" : "backlog"); }
+// A done task is done, whatever lane it was last parked in — checking status
+// first is what keeps the board's Done lane and the overview "done" tile from
+// disagreeing. Otherwise an explicit stage wins, and failing that we infer a
+// lane from the signals agents actually produce (PR + status), so cards move
+// Backlog → … → Done as work progresses instead of jumping straight to Done.
+function stageOf(t) {
+  if (t.status === "done") return "done";
+  if (t.stage && t.stage !== "backlog") return t.stage;
+  if (t.pr_url) return "review";
+  if (t.status === "in_progress" || t.status === "blocked") return "build";
+  if (t.status === "claimed") return "definition";
+  return "backlog";
+}
 
 function renderTasks(list, agents) {
   document.getElementById("c-tasks").textContent = list.length;
@@ -515,9 +550,11 @@ function renderTasks(list, agents) {
 
 function renderRoles(list) {
   document.getElementById("roles").innerHTML = list.map(function (r) {
-    return '<div class="card"><span class="name">' + esc(r.name) + '</span> ' +
-      (r.is_wildcard ? '<span class="tag">★ all tags</span>' : (r.allowed_tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("")) +
-      '</div>';
+    var tags = r.is_wildcard
+      ? '<span class="tag">★ all tags</span>'
+      : ((r.allowed_tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("")
+         || '<span class="hint">no tags — can\\'t claim any task yet</span>');
+    return '<div class="card"><span class="name">' + esc(r.name) + '</span> ' + tags + '</div>';
   }).join("") || '<div class="empty">No roles yet.</div>';
 }
 
@@ -525,26 +562,75 @@ var DOC_CATS = [
   ["design", "Design"], ["technical", "Technical docs"], ["product", "Product docs"],
   ["backlog", "Backlog"], ["bug", "Bugs"], ["general", "General"],
 ];
+// Minimal, dependency-free markdown → HTML. Input is HTML-escaped first, then a
+// safe subset (headings, lists, code, bold, links, rules) is re-introduced.
+function mdInline(s) {
+  var BT = String.fromCharCode(96);
+  s = s.replace(new RegExp(BT + "([^" + BT + "]+)" + BT, "g"), "<code>$1</code>");
+  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+  s = s.replace(/\\[([^\\]]+)\\]\\(([^)\\s]+)\\)/g, function (m, txt, url) {
+    return /^https?:\\/\\//.test(url) ? '<a href="' + url + '" target="_blank" rel="noopener">' + txt + '</a>' : m;
+  });
+  return s;
+}
+function mdToHtml(src) {
+  var FENCE = String.fromCharCode(96, 96, 96);
+  var lines = esc(src).split("\\n"), out = [], inCode = false, list = null;
+  function closeList() { if (list) { out.push("</" + list + ">"); list = null; } }
+  for (var i = 0; i < lines.length; i++) {
+    var ln = lines[i];
+    if (ln.replace(/^\\s+/, "").slice(0, 3) === FENCE) {
+      if (inCode) { out.push("</code></pre>"); inCode = false; }
+      else { closeList(); out.push("<pre><code>"); inCode = true; }
+      continue;
+    }
+    if (inCode) { out.push(ln + "\\n"); continue; }
+    if (/^\\s*(---+|\\*\\*\\*+)\\s*$/.test(ln)) { closeList(); out.push("<hr>"); continue; }
+    var h = ln.match(/^(#{1,6})\\s+(.*)$/);
+    if (h) { closeList(); var lv = h[1].length; out.push("<h" + lv + ">" + mdInline(h[2]) + "</h" + lv + ">"); continue; }
+    var ul = ln.match(/^\\s*[-*]\\s+(.*)$/);
+    if (ul) { if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; } out.push("<li>" + mdInline(ul[1]) + "</li>"); continue; }
+    var ol = ln.match(/^\\s*\\d+[.)]\\s+(.*)$/);
+    if (ol) { if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; } out.push("<li>" + mdInline(ol[1]) + "</li>"); continue; }
+    if (/^\\s*$/.test(ln)) { closeList(); continue; }
+    closeList(); out.push("<p>" + mdInline(ln) + "</p>");
+  }
+  if (inCode) out.push("</code></pre>");
+  closeList();
+  return out.join("");
+}
+var docQuery = "", lastDocs = [], openDocs = {};
 function renderDocs(list) {
+  lastDocs = list;
   document.getElementById("c-docs").textContent = list.length;
-  if (!list.length) { document.getElementById("docs").innerHTML = '<div class="empty">No documentation yet.</div>'; return; }
+  var box = document.getElementById("docs");
+  if (!list.length) { box.innerHTML = '<div class="empty">No documentation yet.</div>'; return; }
+  var q = docQuery.trim().toLowerCase();
+  var shown = q ? list.filter(function (d) {
+    return (d.title || "").toLowerCase().indexOf(q) >= 0 || (d.content || "").toLowerCase().indexOf(q) >= 0;
+  }) : list;
+  if (!shown.length) { box.innerHTML = '<div class="empty">No docs match “' + esc(docQuery) + '”.</div>'; return; }
   var byCat = {};
-  list.forEach(function (d) { var c = d.category || "general"; (byCat[c] = byCat[c] || []).push(d); });
+  shown.forEach(function (d) { var c = d.category || "general"; (byCat[c] = byCat[c] || []).push(d); });
   var html = "";
   DOC_CATS.forEach(function (pair) {
     var docs = byCat[pair[0]]; if (!docs || !docs.length) return;
     html += '<div class="cat-title">' + esc(pair[1]) + ' <span class="badge">' + docs.length + '</span></div>';
     html += docs.map(function (d) {
-      return '<div class="card clickable doc" data-doc="' + esc(d.id) + '">' +
+      return '<div class="card clickable doc' + (openDocs[d.id] ? " open" : "") + '" data-doc="' + esc(d.id) + '">' +
         '<span class="name">' + esc(d.title) + '</span>' +
         '<div class="meta">' + d.chars + ' chars · ' + esc((d.updated_at || "").replace("T", " ").slice(0, 16)) +
         (d.updated_by ? ' · by ' + esc(d.updated_by) : "") + '</div>' +
-        '<div class="doc-body">' + (d.content ? esc(d.content) : '<span class="empty-inline">(empty)</span>') + '</div>' +
+        '<div class="doc-body">' + (d.content ? mdToHtml(d.content) : '<span class="empty-inline">(empty)</span>') + '</div>' +
         '</div>';
     }).join("");
   });
-  document.getElementById("docs").innerHTML = html;
+  box.innerHTML = html;
 }
+(function () {
+  var qi = document.getElementById("doc-q");
+  if (qi) qi.addEventListener("input", function () { docQuery = this.value; renderDocs(lastDocs); });
+})();
 
 function renderAudit(list) {
   document.getElementById("audit").innerHTML = list.map(function (e) {
@@ -588,11 +674,19 @@ function refreshProcesses() {
   if (curView !== "processes") return;
   get("/api/processes").then(renderProcesses).catch(function () {});
 }
+// Keep the sidebar's Processes count live even while another view is open — the
+// full render is throttled to when Processes is visible, but the badge is cheap.
+function updateProcBadge() {
+  get("/api/processes").then(function (p) {
+    document.getElementById("c-proc").textContent = (p.terminals || []).length;
+  }).catch(function () {});
+}
 
 function renderStats(board, audit) {
   var active = board.agents.filter(function (a) { return a.state === "active"; }).length;
   var viol = audit.filter(function (e) { return e.outcome === "rejected"; }).length;
-  var done = board.tasks.filter(function (t) { return t.status === "done"; }).length;
+  // Count "done" the same way the board's Done lane does, so tile and lane agree.
+  var done = board.tasks.filter(function (t) { return stageOf(t) === "done"; }).length;
   var prs = board.tasks.filter(function (t) { return t.pr_url; }).length;
   var tiles = [
     { n: board.agents.length, l: "agents" },
@@ -612,7 +706,9 @@ function renderStats(board, audit) {
 
 var busy = false, lastSig = "";
 function refresh() {
-  if (!org() || busy) return; busy = true;
+  if (!org()) return;
+  updateProcBadge();
+  if (busy) return; busy = true;
   Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs")])
     .then(function (r) {
       var sig = JSON.stringify(r);
