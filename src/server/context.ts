@@ -59,3 +59,12 @@ function rehydrateContext(token: string): SessionContext | undefined {
 export function dropContext(token: string): void {
   byToken.delete(token);
 }
+
+/**
+ * Flush the whole token→context cache (after a token rotation): cached entries
+ * would keep authenticating rotated tokens until restart. Live tokens simply
+ * rehydrate from the DB on their next request.
+ */
+export function clearContexts(): void {
+  byToken.clear();
+}

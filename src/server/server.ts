@@ -12,7 +12,7 @@ import * as store from "../core/store.js";
 import { ensureAgentWorktree, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
 import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
-import { getContext, putContext } from "./context.js";
+import { clearContexts, getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
 import { probeServers, readProjectMcpServers } from "../core/mcps.js";
 import { buildMcpServer } from "./mcp.js";
@@ -622,6 +622,17 @@ export function createServer(): http.Server {
         sendJson(res, 200, { ok: true });
         restartServer();
         return;
+      }
+      // Kill every open session token in an org (after an exposure): agents
+      // re-register through the launcher and get fresh tokens.
+      if (url.pathname === "/tokens/rotate" && req.method === "POST") {
+        const body = (await readJson(req)) as { org: string };
+        if (!body?.org) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(body.org);
+        if (!org) return sendJson(res, 404, { error: `no org named '${body.org}'` });
+        const result = store.rotateOrgSessions(org.id);
+        clearContexts();
+        return sendJson(res, 200, result);
       }
       if (url.pathname === "/task/release" && req.method === "POST") {
         const body = (await readJson(req)) as { taskId: string };

@@ -1,5 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mcpUrl } from "../config.js";
+import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { mcpUrl, stateDir } from "../config.js";
 import { agentColor, pastelRgb16 } from "../core/colors.js";
 
 /**
@@ -24,22 +27,45 @@ const isMac = () => process.platform === "darwin";
 /** POSIX single-quote a string (safe even if it contains apostrophes). */
 const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
+/**
+ * Persist the per-agent MCP config to a private file (user-only state dir,
+ * mode 600) and return its path. SECURITY: the config carries the agent's
+ * Bearer token — passed inline it lands in the spawned command line, where
+ * macOS Terminal window titles and `ps` args expose it for the process
+ * lifetime (screen shares, window switchers, any local process). The launched
+ * shell removes the file on exit (trap EXIT); a leftover from a hard kill is
+ * still unreadable to other users.
+ */
+function writeMcpConfigFile(token: string, agentName?: string): string {
+  const dir = path.join(stateDir(), "run");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const slug = (agentName ?? "agent").replace(/[^a-zA-Z0-9._-]/g, "_");
+  const file = path.join(dir, `${slug}-${randomBytes(4).toString("hex")}.mcp.json`);
+  const config = JSON.stringify({
+    mcpServers: { lanchu: { type: "http", url: mcpUrl(), headers: { Authorization: `Bearer ${token}` } } },
+  });
+  fs.writeFileSync(file, config, { mode: 0o600 });
+  return file;
+}
+
 /** Shell command that wires Claude to Lanchu and launches it with a first prompt. */
-export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string): string {
-  // Carry this agent's identity as an inline MCP config scoped to THIS process
-  // only. We deliberately avoid `claude mcp add lanchu`, which writes a shared,
+export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string, title?: string): string {
+  // Carry this agent's identity as a per-process MCP config FILE. We
+  // deliberately avoid `claude mcp add lanchu`, which writes a shared,
   // project-scoped server: a second agent in the same repo would then either
   // inherit the first agent's token (add is a no-op when the server already
   // exists) or clobber it — both cause the agent's lanchu://me to report the
   // wrong identity/role. --strict-mcp-config makes the identity deterministic.
-  const mcpConfig = JSON.stringify({
-    mcpServers: { lanchu: { type: "http", url: mcpUrl(), headers: { Authorization: `Bearer ${token}` } } },
-  });
+  // The file (not inline JSON) keeps the token out of window titles and ps.
+  const mcpConfigFile = writeMcpConfigFile(token, agentName);
+  // Name the window before anything else runs, so the terminal never titles
+  // itself after the raw command.
+  const setTitle = title ? `printf '\\033]0;%s\\007' ${sq(title)}; ` : "";
   // Export the agent name so `lanchu statusline` can show which teammate owns this terminal.
   const ident = agentName ? `export LANCHU_AGENT=${sq(agentName)}; ` : "";
   // `--mcp-config` is variadic, so the prompt MUST be separated by `--` — otherwise
   // Claude slurps it as another config path ("MCP config file not found: <prompt>").
-  return `cd ${sq(cwd)}; ${ident}claude --strict-mcp-config --mcp-config ${sq(mcpConfig)} -- ${sq(prompt)}`;
+  return `cd ${sq(cwd)}; ${setTitle}${ident}trap 'rm -f ${sq(mcpConfigFile)}' EXIT; claude --strict-mcp-config --mcp-config ${sq(mcpConfigFile)} -- ${sq(prompt)}`;
 }
 
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
@@ -72,7 +98,7 @@ export function spawnTerminal(input: {
   prompt: string;
   dry?: boolean;
 }): SpawnResult {
-  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName);
+  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title);
 
   if (hasTmux()) {
     const plan: SpawnResult = {
