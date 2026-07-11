@@ -90,6 +90,17 @@ export function activeWindowMs(): number {
   return (Number.isFinite(n) && n > 0 ? n : 45) * 1000;
 }
 
+/**
+ * Reconnect grace after server start: while it lasts, a second MCP session for
+ * an already-live agent is treated as the SAME terminal re-establishing its
+ * transport (restart blip / retry race), not as a duplicate identity.
+ */
+export function reconnectGraceMs(): number {
+  const s = process.env.LANCHU_RECONNECT_GRACE_MS;
+  const n = s ? Number.parseInt(s, 10) : 120_000;
+  return Number.isFinite(n) && n >= 0 ? n : 120_000;
+}
+
 // ── local settings (opt-in preferences; never leaves the machine) ──
 export interface Settings {
   notifyUpdates?: boolean;
