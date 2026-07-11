@@ -14,6 +14,9 @@ import {
   type EventOutcome,
   type EventType,
   type LanchuEvent,
+  type MemoryEntry,
+  type MemoryScope,
+  type MemorySource,
   type Role,
   type Task,
   type TaskStage,
@@ -75,7 +78,193 @@ export function recordEvent(input: RecordEventInput): LanchuEvent {
     created_at,
   };
   bus.emitEvent(ev);
+  distillMemory(ev);
   return ev;
+}
+
+// ───────────────────────── memory ─────────────────────────
+// Persistent learnings in three scopes (agent / project / org): org-visible,
+// audited on write, size-capped with LRU eviction. Layer 1 below derives
+// entries deterministically from events (zero model tokens); agents add their
+// own via memory_set. See the memory-architecture design doc.
+
+const MEMORY_CAPS: Record<MemoryScope, number> = { agent: 50, project: 100, org: 100 };
+
+function loadMemory(row: Record<string, unknown>): MemoryEntry {
+  return {
+    id: row.id as string,
+    org_id: row.org_id as string,
+    scope: row.scope as MemoryScope,
+    subject_id: row.subject_id as string,
+    key: row.key as string,
+    value: row.value as string,
+    source: row.source as MemorySource,
+    source_ref: (row.source_ref as string) ?? null,
+    confidence: Number(row.confidence),
+    created_at: row.created_at as string,
+    updated_at: row.updated_at as string,
+  };
+}
+
+const MEMORY_COLS = "id, org_id, scope, subject_id, key, value, source, source_ref, confidence, created_at, updated_at";
+
+/** Upsert one learning (by scope+subject+key), audit it, and enforce the cap. */
+export function memorySet(input: {
+  orgId: string;
+  scope: MemoryScope;
+  subjectId: string;
+  key: string;
+  value: string;
+  source?: MemorySource;
+  sourceRef?: string | null;
+  confidence?: number;
+  actorAgentId?: string | null;
+}): MemoryEntry {
+  const now = nowIso();
+  db()
+    .prepare(
+      `INSERT INTO memory(id, org_id, scope, subject_id, key, value, source, source_ref, confidence, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(org_id, scope, subject_id, key)
+       DO UPDATE SET value = excluded.value, source = excluded.source, source_ref = excluded.source_ref,
+                     confidence = excluded.confidence, updated_at = excluded.updated_at`,
+    )
+    .run(
+      uuid(), input.orgId, input.scope, input.subjectId, input.key, input.value,
+      input.source ?? "agent",
+      // Agent-written entries carry their author as provenance by default.
+      input.sourceRef ?? ((input.source ?? "agent") === "agent" ? (input.actorAgentId ?? null) : null),
+      input.confidence ?? 1, now, now,
+    );
+
+  // LRU eviction: keep the newest N per (scope, subject).
+  db()
+    .prepare(
+      `DELETE FROM memory WHERE org_id = ? AND scope = ? AND subject_id = ? AND id NOT IN (
+         SELECT id FROM memory WHERE org_id = ? AND scope = ? AND subject_id = ?
+         ORDER BY updated_at DESC, id DESC LIMIT ?)`,
+    )
+    .run(
+      input.orgId, input.scope, input.subjectId,
+      input.orgId, input.scope, input.subjectId, MEMORY_CAPS[input.scope],
+    );
+
+  const row = db()
+    .prepare(`SELECT ${MEMORY_COLS} FROM memory WHERE org_id = ? AND scope = ? AND subject_id = ? AND key = ?`)
+    .get(input.orgId, input.scope, input.subjectId, input.key) as Record<string, unknown>;
+  const entry = loadMemory(row);
+
+  recordEvent({
+    org_id: input.orgId,
+    type: "memory.written",
+    actor_agent_id: input.actorAgentId ?? null,
+    subject_kind: "memory",
+    subject_id: entry.id,
+    data: { scope: entry.scope, key: entry.key, source: entry.source, source_ref: entry.source_ref },
+  });
+  return entry;
+}
+
+/** Query memories, optionally narrowed by scope/subject and a substring. */
+export function memoryGet(
+  orgId: string,
+  opts: { scope?: MemoryScope; subjectId?: string; query?: string } = {},
+): MemoryEntry[] {
+  const cond = ["org_id = ?"];
+  const params: unknown[] = [orgId];
+  if (opts.scope) { cond.push("scope = ?"); params.push(opts.scope); }
+  if (opts.subjectId) { cond.push("subject_id = ?"); params.push(opts.subjectId); }
+  if (opts.query) { cond.push("(key LIKE ? OR value LIKE ?)"); params.push(`%${opts.query}%`, `%${opts.query}%`); }
+  const rows = db()
+    .prepare(`SELECT ${MEMORY_COLS} FROM memory WHERE ${cond.join(" AND ")} ORDER BY updated_at DESC LIMIT 200`)
+    .all(...(params as string[])) as Record<string, unknown>[];
+  return rows.map(loadMemory);
+}
+
+/**
+ * The compact memories block org_context injects: the caller's own learnings
+ * plus its project's and org's, highest-confidence/newest first, capped so a
+ * respawned agent starts informed without burning context.
+ */
+export function memoriesForContext(
+  orgId: string,
+  agentId: string,
+  projectId: string,
+  cap = 15,
+): { scope: MemoryScope; key: string; value: string }[] {
+  const rows = db()
+    .prepare(
+      `SELECT ${MEMORY_COLS} FROM memory WHERE org_id = ? AND (
+         (scope = 'agent' AND subject_id = ?) OR
+         (scope = 'project' AND subject_id = ?) OR
+         (scope = 'org' AND subject_id = ?))
+       ORDER BY confidence DESC, updated_at DESC LIMIT ?`,
+    )
+    .all(orgId, agentId, projectId, orgId, cap) as Record<string, unknown>[];
+  return rows.map(loadMemory).map((m) => ({ scope: m.scope, key: m.key, value: m.value }));
+}
+
+// Layer 1 — event-derived learnings (deterministic, zero model tokens).
+const HOT_ZONE_THRESHOLD = 3;
+
+function distillMemory(ev: LanchuEvent): void {
+  try {
+    if (ev.type === "task.completed" && ev.subject_id) {
+      const task = getTask(ev.subject_id);
+      if (task?.pr_url) {
+        memorySet({
+          orgId: ev.org_id,
+          scope: "project",
+          subjectId: task.project_id,
+          key: `pr:${task.id}`,
+          value: `${task.pr_url} addressed: ${task.title.slice(0, 140)}`,
+          source: "event",
+          sourceRef: String(ev.id),
+        });
+      }
+    } else if (ev.type === "conflict.detected" && ev.subject_id) {
+      const task = getTask(ev.subject_id);
+      if (!task) return;
+      const tags = new Set<string>();
+      const conflicts = (ev.data?.conflicts ?? []) as { overlap_tags?: string[] }[];
+      for (const c of conflicts) for (const t of c.overlap_tags ?? []) tags.add(t);
+      const weekAgo = new Date(Date.now() - 7 * 24 * 3_600_000).toISOString();
+      for (const tag of tags) {
+        // Quoted match ("tag") is exact against the JSON-encoded data column.
+        const n = (db()
+          .prepare(
+            `SELECT COUNT(*) AS c FROM event
+             WHERE org_id = ? AND type = 'conflict.detected' AND created_at >= ? AND data LIKE ?`,
+          )
+          .get(ev.org_id, weekAgo, `%"${tag}"%`) as { c: number }).c;
+        if (n >= HOT_ZONE_THRESHOLD) {
+          memorySet({
+            orgId: ev.org_id,
+            scope: "project",
+            subjectId: task.project_id,
+            key: `hot-zone:${tag}`,
+            value: `hot zone: '${tag}' — ${n} work conflicts this week; coordinate before claiming`,
+            source: "event",
+            sourceRef: String(ev.id),
+          });
+        }
+      }
+    } else if (ev.type === "role.updated" && ev.data) {
+      const d = ev.data as { role?: string; before?: unknown; after?: unknown };
+      if (!d.role) return;
+      memorySet({
+        orgId: ev.org_id,
+        scope: "org",
+        subjectId: ev.org_id,
+        key: `role:${d.role}`,
+        value: `role '${d.role}' scope changed: ${JSON.stringify(d.before)} → ${JSON.stringify(d.after)}`,
+        source: "event",
+        sourceRef: String(ev.id),
+      });
+    }
+  } catch {
+    // Distillation is best-effort by design — it must never break the write path.
+  }
 }
 
 // ───────────────────────── org / project ─────────────────────────
