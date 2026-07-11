@@ -293,3 +293,44 @@ test("live-session presence is ref-counted across concurrent sessions", () => {
   presence.removeLiveSession(agent.id);
   assert.equal(presence.isAgentLive(agent.id), false);
 });
+
+test("updateRole extends a role's tags so its agent can claim a previously out-of-scope task", () => {
+  const { org, project, role, agent } = setup("acme-roles-edit");
+  const t = store.createTaskSystem({
+    orgId: org.id,
+    projectId: project.id,
+    title: "panel + server work",
+    tags: ["panel"],
+  });
+  assert.throws(() => store.claimTask({ agentId: agent.id, taskId: t.id }), ScopeError);
+
+  const updated = store.updateRole(org.id, role.name, { addTags: ["panel"] });
+  assert.ok(updated.allowed_tags.includes("panel"));
+  const claimed = store.claimTask({ agentId: agent.id, taskId: t.id });
+  assert.equal(claimed.owner_agent_id, agent.id);
+
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "role.updated");
+  assert.ok(ev, "role.updated must be audited");
+  assert.equal(ev.subject_id, role.id);
+  assert.deepEqual(ev.data.before.tags.sort(), ["css", "ui"]);
+  assert.deepEqual(ev.data.after.tags.sort(), ["css", "panel", "ui"]);
+});
+
+test("updateRole removes tags, replaces the set, toggles wildcard, and never creates roles", () => {
+  const { org } = setup("acme-roles-edit2");
+  store.defineRole(org.id, "backend", { tags: ["server", "db", "cli"] });
+
+  const afterRm = store.updateRole(org.id, "backend", { rmTags: ["cli"] });
+  assert.deepEqual(afterRm.allowed_tags.sort(), ["db", "server"]);
+
+  const afterReplace = store.updateRole(org.id, "backend", { tags: ["api"] });
+  assert.deepEqual(afterReplace.allowed_tags, ["api"]);
+
+  const wild = store.updateRole(org.id, "backend", { wildcard: true });
+  assert.equal(wild.is_wildcard, true);
+  const tame = store.updateRole(org.id, "backend", { wildcard: false });
+  assert.equal(tame.is_wildcard, false);
+
+  assert.equal(store.updateRole(org.id, "ghost", { addTags: ["x"] }), null);
+  assert.equal(store.listRoles(org.id).some((r) => r.name === "ghost"), false);
+});

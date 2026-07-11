@@ -411,6 +411,28 @@ export function createServer(): http.Server {
         return sendJson(res, 200, store.defineRole(org.id, body.name, { wildcard: body.wildcard, tags: body.tags }));
       }
 
+      if (url.pathname === "/api/roles" && req.method === "PATCH") {
+        const body = (await readJson(req)) as {
+          org: string;
+          name: string;
+          addTags?: string[];
+          rmTags?: string[];
+          tags?: string[];
+          wildcard?: boolean;
+        };
+        if (!body?.org || !body?.name) return sendJson(res, 400, { error: "org and name required" });
+        const org = store.getOrgByName(body.org);
+        if (!org) return sendJson(res, 404, { error: `no org named '${body.org}'` });
+        const role = store.updateRole(org.id, body.name, {
+          addTags: body.addTags,
+          rmTags: body.rmTags,
+          tags: body.tags,
+          wildcard: body.wildcard,
+        });
+        if (!role) return sendJson(res, 404, { error: `no role named '${body.name}' in org '${body.org}'` });
+        return sendJson(res, 200, role);
+      }
+
       if (url.pathname === "/api/org/rules" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });

@@ -149,6 +149,7 @@ tasks live in `lanchu://me`, not in the prompt.
 | `lanchu retire <agent>` | **Safe retirement**: if it has open tasks, requires reassigning or releasing each one; then archives. |
 | `lanchu roles` | Lists roles and their tags. |
 | `lanchu roles add <name> --tags ui,css` \| `--wildcard` | Creates a role. |
+| `lanchu roles edit <name> --add-tags a,b --rm-tags c` \| `--tags x,y` \| `--wildcard`/`--no-wildcard` | Edits an existing role's scope: adds/removes tags, `--tags` replaces the whole set, toggles wildcard. Audited as `role.updated`. |
 | `lanchu stats` | **Local** view for you (agents, tasks, orgs). Never leaves your machine. |
 | `lanchu panel` (alias `open`) | Opens the web panel in the browser. |
 | `lanchu serve` | Runs the server in the foreground (normally it auto-starts). |
