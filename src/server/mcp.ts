@@ -445,8 +445,10 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
                   : `Your 'done' is held until ${verification.id} passes (LANCHU_SDLC=strict).`,
             }
           : undefined;
+        // With a verification task minted, the docs/learnings reminder rides
+        // its checklist instead of scrolling away here (comms-gate design).
         const nudge =
-          status === "done"
+          status === "done" && !verification
             ? "Remember to update the relevant documentation with what changed. One learning worth keeping? Persist it with memory_set."
             : undefined;
         return text({ task, ...(sdlc ? { sdlc } : {}), nudge });
