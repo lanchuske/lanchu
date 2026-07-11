@@ -15,6 +15,7 @@ const TEMPLATE = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Lanchu — panel</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b7285'/%3E%3Cg fill='%23fff'%3E%3Crect x='16' y='19' width='24' height='6' rx='3'/%3E%3Crect x='16' y='29' width='32' height='6' rx='3'/%3E%3Crect x='16' y='39' width='18' height='6' rx='3'/%3E%3C/g%3E%3C/svg%3E" />
 <style>
   :root {
     color-scheme: light dark;
@@ -53,8 +54,11 @@ const TEMPLATE = `<!doctype html>
              display: flex; flex-direction: column; gap: 4px; padding: 18px 14px; }
   .content { padding: 26px 30px 64px; max-width: 1180px; }
 
-  .brand { font-weight: 700; font-size: 17px; letter-spacing: -.01em; padding: 2px 8px 12px; }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: -.01em; padding: 2px 8px 12px;
+           display: flex; align-items: center; gap: 9px; }
   .brand small { display: block; font-weight: 500; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  /* the same mark as the favicon and lanchu.ar — one brand family everywhere */
+  .brandmark { width: 26px; height: 26px; flex: none; border-radius: 6px; }
   .orgfield { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; padding: 0 8px 8px; }
   .orgfield input { min-width: 0; }
   input { padding: 6px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg);
@@ -369,7 +373,7 @@ const TEMPLATE = `<!doctype html>
 <body>
   <div class="app">
     <nav class="sidebar">
-      <div class="brand">Lanchu <small>control &amp; trust</small></div>
+      <div class="brand"><svg class="brandmark" viewBox="0 0 64 64" role="img" aria-label="Lanchu"><rect width="64" height="64" rx="14" fill="#0b7285"/><g fill="#fff"><rect x="16" y="19" width="24" height="6" rx="3"/><rect x="16" y="29" width="32" height="6" rx="3"/><rect x="16" y="39" width="18" height="6" rx="3"/></g></svg><span>Lanchu <small>control &amp; trust</small></span></div>
       <div class="orgfield"><span>org</span><input id="org" value="lanchu" list="orglist" autocomplete="off" placeholder="pick an existing org…" title="Picks an existing org — orgs are created from the terminal (run lanchu in your repo)" /><datalist id="orglist"></datalist></div>
       <span id="live" class="live"><span class="pip"></span><span id="live-t">connecting</span></span>
       <div id="orgwarn" class="orgwarn" style="display:none"></div>
