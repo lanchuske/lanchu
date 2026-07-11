@@ -2,8 +2,8 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-// 14 = task archive columns; 15 = doc lifecycle + one-time reclassification.
-export const SCHEMA_VERSION = 15;
+// 14 = task archive; 15 = doc lifecycle; 16 = wake v5 park & refire (agent session id + parked_at).
+export const SCHEMA_VERSION = 16;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS agent (
   git_author_name  TEXT,
   git_author_email TEXT,
   gh_login         TEXT,
+  claude_session_id TEXT,
+  parked_at        TEXT,
   created_at       TEXT NOT NULL,
   retired_at       TEXT,
   UNIQUE (org_id, name)

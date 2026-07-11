@@ -776,13 +776,15 @@ function loadAgent(row: Record<string, unknown>): Agent {
     git_author_name: (row.git_author_name as string) ?? null,
     git_author_email: (row.git_author_email as string) ?? null,
     gh_login: (row.gh_login as string) ?? null,
+    claude_session_id: (row.claude_session_id as string) ?? null,
+    parked_at: (row.parked_at as string) ?? null,
     created_at: row.created_at as string,
     retired_at: (row.retired_at as string) ?? null,
   };
 }
 
 const AGENT_COLS =
-  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, model, git_author_name, git_author_email, gh_login, created_at, retired_at";
+  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, model, git_author_name, git_author_email, gh_login, claude_session_id, parked_at, created_at, retired_at";
 
 /**
  * Per-org color de-collision (bug from #22: 'qa-gate' and 'product' hashed to
@@ -1139,6 +1141,39 @@ export function agentIdForToken(token: string): string | null {
     .prepare("SELECT agent_id FROM session WHERE token = ? AND ended_at IS NULL")
     .get(token) as { agent_id: string } | undefined;
   return row?.agent_id ?? null;
+}
+
+// ──────────────── wake v5: park & refire (session lifecycle hooks) ────────────────
+// Design doc "Orchestrating agents on Claude Code": the SessionStart hook
+// reports the Claude Code session id (zero heuristics — no JSONL scraping),
+// and the SessionEnd hook parks the agent. A parked agent with pending work
+// is refired by the sweep via `claude --resume <sid> "<prompt>"`, gated on
+// verified absence of any live session (fork risk: resuming a session that is
+// still open elsewhere interleaves two processes into one transcript).
+
+/** SessionStart (startup|resume): capture the session id and clear the parked flag. */
+export function setAgentClaudeSession(agentId: string, sessionId: string): void {
+  db()
+    .prepare("UPDATE agent SET claude_session_id = ?, parked_at = NULL WHERE id = ?")
+    .run(sessionId, agentId);
+}
+
+/** SessionEnd: the Claude session exited — the agent is parked (refire-able), not gone. */
+export function parkAgent(agentId: string, reason?: string): void {
+  const agent = getAgent(agentId);
+  if (!agent || agent.state === "retired" || agent.parked_at) return; // idempotent
+  db().prepare("UPDATE agent SET parked_at = ? WHERE id = ?").run(nowIso(), agentId);
+  recordEvent({
+    org_id: agent.org_id,
+    type: "agent.parked",
+    actor_agent_id: agentId,
+    subject_kind: "agent",
+    subject_id: agentId,
+    data: {
+      ...(reason ? { reason } : {}),
+      ...(agent.claude_session_id ? { claude_session_id: agent.claude_session_id } : {}),
+    },
+  });
 }
 
 /**
@@ -3775,6 +3810,76 @@ export function agentsNeedingNudge(orgId: string): NudgeCandidate[] {
     } catch {
       /* unparseable terminal_ref — not a nudgeable terminal */
     }
+  }
+  return out;
+}
+
+export interface RefireCandidate {
+  agent_id: string;
+  agent_name: string;
+  claude_session_id: string;
+  /** Where to reopen the session: the agent's isolated worktree, else its cwd. */
+  cwd: string;
+  model: string | null;
+  queued_notices: number;
+  /** Cleanly parked (SessionEnd hook fired); null = the session may have crashed. */
+  parked_at: string | null;
+  terminal_ref: TerminalRef | null;
+}
+
+/**
+ * Wake v5 rung 3: agents with a known Claude session id and starved notices —
+ * cleanly parked (SessionEnd fired) or crashed (no SessionEnd; the sweep
+ * verifies the terminal is dead). Same starvation rules as the nudge
+ * (non-broadcast, undelivered, no tool call since the oldest, grace +
+ * cooldown + budget) — but instead of a terminal to type into, these carry a
+ * session id to `claude --resume`. The caller owns the safety gates: parked
+ * or dead terminal, no live MCP transport, absent from `claude agents`.
+ */
+export function agentsNeedingRefire(orgId: string): RefireCandidate[] {
+  const graceCutoff = new Date(Date.now() - nudgeAfterMs()).toISOString();
+  const cooldownCutoff = new Date(Date.now() - nudgeCooldownMs()).toISOString();
+  const rows = db()
+    .prepare(
+      `SELECT a.id AS agent_id, a.name AS agent_name, a.claude_session_id, a.worktree, a.cwd, a.model,
+              a.parked_at, a.terminal_ref, COUNT(n.id) AS queued_notices
+       FROM agent a JOIN notice n ON n.to_agent_id = a.id
+       WHERE a.org_id = ? AND a.state != 'retired'
+         AND a.claude_session_id IS NOT NULL
+         AND n.delivered_at IS NULL AND n.acked_at IS NULL AND n.is_broadcast = 0
+         AND n.created_at <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM event e
+           WHERE e.type = 'agent.nudged' AND e.subject_id = a.id AND e.created_at >= ?)
+       GROUP BY a.id
+       HAVING COALESCE(
+         (SELECT MAX(t.created_at) FROM event t
+          WHERE t.actor_agent_id = a.id AND t.type = 'tool.response'), '')
+         < MIN(n.created_at)
+       AND (SELECT COUNT(*) FROM event b
+            WHERE b.type = 'agent.nudged' AND b.subject_id = a.id
+              AND b.created_at >= MIN(n.created_at)) < ?`,
+    )
+    .all(orgId, graceCutoff, cooldownCutoff, nudgeBudget()) as Record<string, unknown>[];
+  const out: RefireCandidate[] = [];
+  for (const r of rows) {
+    if (!r.worktree && !r.cwd) continue;
+    let terminal_ref: TerminalRef | null = null;
+    try {
+      terminal_ref = r.terminal_ref ? (JSON.parse(r.terminal_ref as string) as TerminalRef) : null;
+    } catch {
+      terminal_ref = null;
+    }
+    out.push({
+      agent_id: r.agent_id as string,
+      agent_name: r.agent_name as string,
+      claude_session_id: r.claude_session_id as string,
+      cwd: (r.worktree as string) || (r.cwd as string),
+      model: (r.model as string) ?? null,
+      queued_notices: Number(r.queued_notices),
+      parked_at: (r.parked_at as string) ?? null,
+      terminal_ref,
+    });
   }
   return out;
 }

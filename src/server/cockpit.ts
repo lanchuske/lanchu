@@ -49,7 +49,7 @@ function writeMcpConfigFile(token: string, agentName?: string): string {
 }
 
 /** Shell command that wires Claude to Lanchu and launches it with a first prompt. */
-export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string, title?: string, model?: string): string {
+export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string, title?: string, model?: string, resumeSessionId?: string): string {
   // Carry this agent's identity as a per-process MCP config FILE. We
   // deliberately avoid `claude mcp add lanchu`, which writes a shared,
   // project-scoped server: a second agent in the same repo would then either
@@ -65,9 +65,13 @@ export function bootstrapCommand(cwd: string, token: string, prompt: string, age
   const ident = agentName ? `export LANCHU_AGENT=${sq(agentName)}; ` : "";
   // Model routing: launch the terminal on the tier the role/spawn chose.
   const modelFlag = model ? `--model ${sq(model)} ` : "";
+  // Wake v5 refire: reopen an existing Claude session in this worktree. The
+  // prompt MUST ride as a CLI arg — a bare interactive resume revives the
+  // context but never triggers a turn (field finding, 2026-07-11).
+  const resumeFlag = resumeSessionId ? `--resume ${sq(resumeSessionId)} ` : "";
   // `--mcp-config` is variadic, so the prompt MUST be separated by `--` — otherwise
   // Claude slurps it as another config path ("MCP config file not found: <prompt>").
-  return `cd ${sq(cwd)}; ${setTitle}${ident}trap 'rm -f ${sq(mcpConfigFile)}' EXIT; claude ${modelFlag}--strict-mcp-config --mcp-config ${sq(mcpConfigFile)} -- ${sq(prompt)}`;
+  return `cd ${sq(cwd)}; ${setTitle}${ident}trap 'rm -f ${sq(mcpConfigFile)}' EXIT; claude ${modelFlag}${resumeFlag}--strict-mcp-config --mcp-config ${sq(mcpConfigFile)} -- ${sq(prompt)}`;
 }
 
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
@@ -95,11 +99,18 @@ export function installStopHook(cwd: string, token: string, agentName?: string):
     // POSIX, jq-free: the endpoint answers a bare number. Fail-open on any
     // curl error (server down, token rotated) — a hook must never trap an
     // agent at the end of its turn.
-    const command =
+    const stopCommand =
       `N=$(curl -sf --max-time 3 -H "Authorization: Bearer $(cat ${sq(tokenFile)} 2>/dev/null)" ` +
       `${sq(`${baseUrl()}/api/agent/pending`)} 2>/dev/null); ` +
       `case "$N" in ''|0|*[!0-9]*) exit 0;; ` +
       `*) echo "You have $N Lanchu notices — run message_list now and follow the instructions." >&2; exit 2;; esac`;
+    // Wake v5 (park & refire): the session lifecycle reports itself. The hook
+    // input JSON (session_id, reason…) is relayed verbatim from stdin; always
+    // exit 0 — lifecycle reporting must never block the session.
+    const lifecycleCommand = (endpoint: string) =>
+      `curl -sf --max-time 3 -X POST -H "Authorization: Bearer $(cat ${sq(tokenFile)} 2>/dev/null)" ` +
+      `-H 'content-type: application/json' --data-binary @- ` +
+      `${sq(`${baseUrl()}${endpoint}`)} >/dev/null 2>&1; exit 0`;
 
     const file = path.join(cwd, ".claude", "settings.local.json");
     let settings: Record<string, unknown> = {};
@@ -111,29 +122,62 @@ export function installStopHook(cwd: string, token: string, agentName?: string):
       }
     }
     const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
-    const stop = (hooks.Stop ??= []) as unknown[];
-    // Idempotency: the token-file path identifies this agent's hook entry.
+    // Idempotency: the token-file path identifies this agent's hook entries.
     // Compare against the RAW command strings — serializing the array first
     // (JSON.stringify) escapes Windows path backslashes, so the path never
     // matched and every respawn appended a duplicate hook (Windows CI red).
-    const installed = stop.some((entry) => {
-      const entryHooks = (entry as { hooks?: unknown })?.hooks;
-      return (
-        Array.isArray(entryHooks) &&
-        entryHooks.some((h) => {
-          const cmd = (h as { command?: unknown })?.command;
-          return typeof cmd === "string" && cmd.includes(tokenFile);
-        })
-      );
-    });
-    if (!installed) {
-      stop.push({ hooks: [{ type: "command", command }] });
-    }
+    const ensure = (event: string, command: string) => {
+      const list = (hooks[event] ??= []) as unknown[];
+      const installed = list.some((entry) => {
+        const entryHooks = (entry as { hooks?: unknown })?.hooks;
+        return (
+          Array.isArray(entryHooks) &&
+          entryHooks.some((h) => {
+            const cmd = (h as { command?: unknown })?.command;
+            return typeof cmd === "string" && cmd.includes(tokenFile);
+          })
+        );
+      });
+      if (!installed) list.push({ hooks: [{ type: "command", command }] });
+    };
+    ensure("Stop", stopCommand);
+    ensure("SessionStart", lifecycleCommand("/hooks/agent/session-start"));
+    ensure("SessionEnd", lifecycleCommand("/hooks/agent/session-end"));
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
     return true;
   } catch {
     return false; // best-effort: spawn must not fail over a hook
+  }
+}
+
+/**
+ * Liveness gate for refire (wake v5): the session ids `claude agents --json`
+ * reports as running. Returns null when the answer can't be trusted (CLI
+ * missing, non-zero exit, unparseable) — callers must treat null as "do not
+ * refire" (fail closed: resuming a session that is still open elsewhere
+ * interleaves two processes into one transcript).
+ */
+export function claudeLiveSessionIds(): Set<string> | null {
+  try {
+    const res = spawnSync("claude", ["agents", "--json"], { encoding: "utf8", timeout: 5000 });
+    if (res.status !== 0 || !res.stdout) return null;
+    const parsed = JSON.parse(res.stdout) as unknown;
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as { agents?: unknown[] })?.agents)
+        ? (parsed as { agents: unknown[] }).agents
+        : null;
+    if (!list) return null;
+    const ids = new Set<string>();
+    for (const item of list) {
+      const sid =
+        (item as { sessionId?: unknown })?.sessionId ?? (item as { session_id?: unknown })?.session_id;
+      if (typeof sid === "string") ids.add(sid);
+    }
+    return ids;
+  } catch {
+    return null;
   }
 }
 
@@ -167,9 +211,11 @@ export function spawnTerminal(input: {
   colorHex?: string;
   /** claude model alias for this terminal (opus|sonnet|haiku…); omitted = harness default. */
   model?: string;
+  /** Wake v5 refire: reopen this Claude session instead of starting fresh. */
+  resumeSessionId?: string;
   dry?: boolean;
 }): SpawnResult {
-  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model);
+  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model, input.resumeSessionId);
   // Wake v4: the Stop hook keeps the agent from idling with queued notices —
   // preferred over any terminal wake. Installed for every launch method (the
   // print path's user runs the command in this same cwd).

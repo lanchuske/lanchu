@@ -202,11 +202,21 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   "Reserved" (idle) is **not** a status: it's a `claimed`/`in_progress` task whose owner
   is `idle`.
 - **event.type:** `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
-  `agent.retired` · `retire.requested` · `retire.approved` · `retire.denied` ·
+  `agent.retired` · `agent.parked` · `retire.requested` · `retire.approved` · `retire.denied` ·
   `task.created` · `task.claimed` · `task.released` · `task.started` ·
   `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` ·
   `task.stage_changed` · `task.bounced` · `task.archived` · `task.superseded` ·
   `task.handoff` · `doc.created` · `doc.updated` · `doc.archived` · `scope.violation`.
+- **Wake v5 — park & refire:** agents report their Claude Code session lifecycle via
+  hooks installed at spawn (`SessionStart` → `POST /hooks/agent/session-start` captures
+  `claude_session_id` and clears `parked_at`; `SessionEnd` → `/session-end` parks the
+  agent, audited `agent.parked`). The wake sweep's third rung refires a parked (or
+  verifiably crashed) agent with starved notices: `claude --resume <sid> "<prompt>"`
+  in its worktree — prompt as CLI arg (a bare resume never triggers a turn). Safety
+  gates, all mandatory: parked or dead terminal, no live MCP transport, and the id
+  absent from `claude agents --json` (an unreadable answer fails CLOSED — resuming a
+  live session from a second process interleaves both into one transcript). Audited
+  `agent.nudged` with `transport: "runner"`.
 - **Retirement gate:** while an org's coordinator lease is live, a non-forced
   `retireAgent` of anyone but the lease holder files `retire.requested` (notice to the
   coordinator; visible in the panel's Needs-attention) instead of executing. The
