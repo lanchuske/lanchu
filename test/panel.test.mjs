@@ -99,3 +99,14 @@ test("panel stamps the build id and reloads when an SSE hello disagrees", () => 
   assert.ok(html.includes("panel updated, reloading"), "expected the reload banner text");
   assert.ok(html.includes("staleReload"), "expected the guarded reload helper");
 });
+
+// Panel polish (task-mrg672qp4): a typo'd URL hash used to toggle every view
+// off, leaving a blank content area next to the sidebar.
+
+test("hash router falls back to overview on unknown hashes and aliases #orglife", () => {
+  assert.ok(html.includes('document.getElementById("v-" + name)'), "router must check the view exists before showing it");
+  assert.ok(html.includes('name = "overview"'), "unknown hashes must fall back to overview");
+  assert.ok(html.includes('history.replaceState'), "the URL is normalized without polluting history");
+  assert.ok(html.includes('"orglife"'), "the guessable #orglife hash must map to the Org life view");
+  assert.ok(html.includes('kv("running build", "v" + s.version)'), "processes card labels the version as the running build");
+});
