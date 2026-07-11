@@ -35,6 +35,7 @@ export type EventType =
   | "task.reassigned"
   | "task.rejected"
   | "task.stage_changed"
+  | "task.stage_reconciled"
   | "task.bounced"
   | "task.handoff"
   | "doc.created"

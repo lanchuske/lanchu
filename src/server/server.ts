@@ -975,6 +975,13 @@ export function runNudgeSweep(
 
 export function startServer(): Promise<http.Server> {
   startWebhookDelivery();
+  // Heal done/review inconsistencies left by pre-batch-flip history (audited,
+  // idempotent — see reconcileSdlcStages). Must never stop the server.
+  try {
+    store.reconcileSdlcStages();
+  } catch {
+    /* reconciliation is best-effort */
+  }
   // Warm the runtime inventory off the startup path (each probe is capped at
   // 1.5s; deferring keeps `lanchu serve` responsive on machines with many CLIs).
   setTimeout(() => detectRuntimes({ refresh: true }), 0).unref();
