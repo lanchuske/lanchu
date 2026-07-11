@@ -5,7 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { accessKey, host, port, publicUrl, VERSION } from "../config.js";
+import { accessKey, host, port, publicUrl, reconnectGraceMs, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
@@ -22,6 +22,19 @@ import { startWebhookDelivery } from "./webhooks.js";
 const transports = new Map<string, StreamableHTTPServerTransport>();
 /** Maps an MCP session id to its agent, so we can refresh presence on each request. */
 const sessionAgent = new Map<string, string>();
+
+/**
+ * Right after the server starts, clients whose transports died with the old
+ * process re-establish sessions — sometimes twice (initialize retry race), and
+ * the first attempt can linger half-open holding a live-presence entry. Within
+ * this window a second session for the same agent is a RECONNECT, not a second
+ * terminal: replace the old entry instead of counting it, and don't alarm the
+ * agent. Steady-state duplicates still flag once the window has passed.
+ */
+const serverStartedAt = Date.now();
+function inReconnectGrace(): boolean {
+  return Date.now() - serverStartedAt < reconnectGraceMs();
+}
 
 /**
  * Forget a closed MCP session and drop its live-presence hold. Guarded by the
@@ -306,20 +319,35 @@ async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): P
       // Two live sessions resolving to one agent id means two terminals share
       // an identity — misattribution waiting to happen (isolation root cause #2).
       // Warn the agent (it'll see it on its next tool call) and audit it.
+      // Exception: during the post-start grace window it's the same terminal
+      // reconnecting — replace its previous session instead of counting it.
       if (isAgentLive(ctx.agentId)) {
-        store.recordEvent({
-          org_id: ctx.orgId,
-          type: "agent.duplicate_session",
-          actor_agent_id: ctx.agentId,
-          subject_kind: "agent",
-          subject_id: ctx.agentId,
-          data: { note: "a second live session connected as this agent" },
-        });
-        store.systemNotice(
-          ctx.orgId,
-          ctx.agentId,
-          "Another live session is connected as this same agent. Two terminals sharing one identity causes misattribution — close one, or spawn a separate agent (lanchu spawn).",
-        );
+        if (inReconnectGrace()) {
+          const stale = [...sessionAgent.entries()]
+            .filter(([sid, agentId]) => agentId === ctx.agentId && sid !== id)
+            .map(([sid]) => sid);
+          for (const sid of stale) {
+            const old = transports.get(sid);
+            forgetSession(sid); // idempotent — a later onclose for the same sid is a no-op
+            void old?.close().catch(() => {
+              /* already half-closed */
+            });
+          }
+        } else {
+          store.recordEvent({
+            org_id: ctx.orgId,
+            type: "agent.duplicate_session",
+            actor_agent_id: ctx.agentId,
+            subject_kind: "agent",
+            subject_id: ctx.agentId,
+            data: { note: "a second live session connected as this agent" },
+          });
+          store.systemNotice(
+            ctx.orgId,
+            ctx.agentId,
+            "Another live session is connected as this same agent. Two terminals sharing one identity causes misattribution — close one, or spawn a separate agent (lanchu spawn).",
+          );
+        }
       }
       addLiveSession(ctx.agentId);
     },
