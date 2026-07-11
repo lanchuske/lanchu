@@ -61,7 +61,7 @@ test("a done batch verification flips every original its title covers (ranges + 
   for (const t of [a, b, d]) {
     const done = store.getTask(t.id);
     assert.equal(done.status, "done", `${t.title} flipped`);
-    assert.equal(done.stage, "done", `${t.title} lane closed`);
+    assert.equal(done.stage, "rc", `${t.title} joined the release pipeline`);
     assert.equal(store.openVerificationTaskFor(t.id), null, `${t.title}'s per-task child superseded`);
   }
   assert.equal(store.getTask(c.id).stage, "qa", "uncovered original untouched");
@@ -93,7 +93,7 @@ test("refs named in a FAIL sentence of the note stay unverified", () => {
     note: "1/2 PASS. PARTIAL FAIL: #21 crashes on empty input. Evidence in the QA doc.",
   });
 
-  assert.equal(store.getTask(good.id).stage, "done", "#20 flipped");
+  assert.equal(store.getTask(good.id).stage, "rc", "#20 flipped into RC");
   assert.equal(store.getTask(bad.id).stage, "qa", "#21 stays awaiting verification");
 });
 
@@ -138,7 +138,7 @@ test("reconcile: verified done/review rows land in done, unverified ones in qa w
   assert.deepEqual(toQa, [orphan.id]);
 
   const v = store.getTask(verified.id);
-  assert.equal(v.stage, "done");
+  assert.equal(v.stage, "rc"); // healed rows join the release pipeline
   assert.equal(v.status, "done");
 
   const o = store.getTask(orphan.id);
@@ -149,7 +149,7 @@ test("reconcile: verified done/review rows land in done, unverified ones in qa w
   const events = store.listAuditEvents(ctx.org.id).filter((e) => e.type === "task.stage_reconciled");
   assert.equal(events.length, 2);
   const byId = Object.fromEntries(events.map((e) => [e.subject_id, e.data]));
-  assert.equal(byId[verified.id].to_stage, "done");
+  assert.equal(byId[verified.id].to_stage, "rc");
   assert.equal(byId[verified.id].via, batch.id);
   assert.equal(byId[orphan.id].to_stage, "qa");
   assert.match(byId[orphan.id].reason, /without verification/);

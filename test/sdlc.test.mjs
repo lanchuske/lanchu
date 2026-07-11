@@ -84,7 +84,7 @@ test("verification pass flips the original to done; the builder hears about it",
 
   const done = store.getTask(task.id);
   assert.equal(done.status, "done");
-  assert.equal(done.stage, "done");
+  assert.equal(done.stage, "rc"); // QA pass parks it in Release Candidate
 
   const heard = store.takeUndeliveredNotices(builder.id);
   assert.ok(heard.some((n) => /passed QA verification/.test(n.body)));
@@ -146,7 +146,7 @@ test("strict: done is held at in_progress until verification passes", () => {
     store.claimTask({ agentId: qa.id, taskId: second.id });
     store.updateTaskStatus({ agentId: qa.id, taskId: second.id, status: "done", note: "pass" });
     assert.equal(store.getTask(task.id).status, "done");
-    assert.equal(store.getTask(task.id).stage, "done");
+    assert.equal(store.getTask(task.id).stage, "rc");
   } finally {
     delete process.env.LANCHU_SDLC;
   }

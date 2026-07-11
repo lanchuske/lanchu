@@ -14,16 +14,24 @@ export type TaskStatus =
   | "blocked"
   | "done";
 
-/** SDLC lane, orthogonal to status. Optional; null is treated as backlog. */
+/**
+ * SDLC lane, orthogonal to status. Optional; null is treated as backlog.
+ * After qa: `rc` = QA passed, accumulating toward the next release (the
+ * visible form of release pressure); `released` = shipped, stamped with
+ * release_version. `done` remains the terminal lane for work outside the
+ * release pipeline (verification instruments, off-mode orgs).
+ */
 export type TaskStage =
   | "backlog"
   | "definition"
   | "build"
   | "review"
   | "qa"
+  | "rc"
+  | "released"
   | "done";
 
-export const TASK_STAGES: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "done"];
+export const TASK_STAGES: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "rc", "released", "done"];
 
 export type EventOutcome = "applied" | "rejected";
 
@@ -189,6 +197,9 @@ export interface Task {
   archived_reason: string | null;
   /** When archived because newer work replaces it, the successor task. */
   superseded_by_task_id: string | null;
+  /** The release that shipped this task (e.g. "v0.5.13"); stamped by the
+   *  release sweep when a tag covering the work appears on origin/main. */
+  release_version: string | null;
 }
 
 export interface LanchuEvent {

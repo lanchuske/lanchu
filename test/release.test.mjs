@@ -105,3 +105,105 @@ test("untagged repos are skipped entirely", () => {
   assert.deepEqual(created, []);
   assert.equal(store.boardSnapshot(ctx.org.id).release.length, 0);
 });
+
+// ── Work board v3: release stamping (rc → released by tag coverage) ──
+
+function shipVerified(ctx, title, doneIso) {
+  const raw = (globalThis.__openDb ??= null);
+  const t = store.createTask({ projectId: ctx.project.id, orgId: ctx.org.id, agentId: ctx.product.id, title, tags: [] });
+  store.claimTask({ agentId: ctx.product.id, taskId: t.id });
+  // Manufacture a QA-passed row directly: status done, stage rc, done_at set.
+  const { openDb } = awaitedDb;
+  openDb()
+    .prepare("UPDATE task SET status = 'done', stage = 'rc', done_at = ? WHERE id = ?")
+    .run(doneIso, t.id);
+  return t;
+}
+const awaitedDb = await import("../dist/db/db.js");
+
+test("stamping: rc work covered by a tag becomes released with that version; later work stays rc", () => {
+  const ctx = setup("stamp-org");
+  const early = shipVerified(ctx, "shipped before the tag", "2026-07-10T10:00:00.000Z");
+  const late = shipVerified(ctx, "merged after the tag", "2026-07-12T10:00:00.000Z");
+
+  store.runReleaseSweep({
+    releaseInfo: (p) => (p.id === ctx.project.id ? { lastTag: "v0.9.0", unreleased: 1, oldestIso: hoursAgo(1) } : null),
+    tagList: (p) => (p.id === ctx.project.id
+      ? [
+          { tag: "v0.8.0", dateIso: "2026-07-09T00:00:00.000Z" },
+          { tag: "v0.9.0", dateIso: "2026-07-11T00:00:00.000Z" },
+        ]
+      : null),
+  });
+
+  const a = store.getTask(early.id);
+  assert.equal(a.stage, "released");
+  assert.equal(a.release_version, "v0.9.0", "earliest covering tag, not the newest");
+  const b = store.getTask(late.id);
+  assert.equal(b.stage, "rc", "post-tag work awaits the next release");
+  assert.equal(b.release_version, null);
+
+  // The stamp is audited with the version.
+  const ev = store
+    .listAuditEvents(ctx.org.id, 50)
+    .find((e) => e.type === "task.stage_changed" && e.subject_id === early.id);
+  assert.ok(ev, "stamp audited");
+  assert.equal(ev.data.release_version, "v0.9.0");
+  assert.equal(ev.data.to_stage, "released");
+});
+
+test("stamping backfill: legacy stage=done rows get a version or normalize to rc; instruments untouched", () => {
+  const ctx = setup("stamp-backfill-org");
+  const db = awaitedDb.openDb();
+  const legacyShipped = shipVerified(ctx, "old feature shipped in v1", "2026-07-01T00:00:00.000Z");
+  const legacyPending = shipVerified(ctx, "old feature not yet shipped", "2026-07-12T00:00:00.000Z");
+  db.prepare("UPDATE task SET stage = 'done' WHERE id IN (?, ?)").run(legacyShipped.id, legacyPending.id);
+  // A verification instrument: done/done, must never join a release.
+  const instrument = store.createTask({
+    projectId: ctx.project.id, orgId: ctx.org.id, agentId: ctx.product.id,
+    title: "QA: verify task-x against its acceptance criteria", tags: [],
+  });
+  db.prepare("UPDATE task SET status='done', stage='done', done_at=?, parent_task_id=? WHERE id = ?")
+    .run("2026-07-01T00:00:00.000Z", legacyShipped.id, instrument.id);
+
+  store.runReleaseSweep({
+    releaseInfo: (p) => (p.id === ctx.project.id ? { lastTag: "v1.0.0", unreleased: 0, oldestIso: null } : null),
+    tagList: (p) => (p.id === ctx.project.id ? [{ tag: "v1.0.0", dateIso: "2026-07-05T00:00:00.000Z" }] : null),
+  });
+
+  assert.equal(store.getTask(legacyShipped.id).stage, "released");
+  assert.equal(store.getTask(legacyShipped.id).release_version, "v1.0.0");
+  assert.equal(store.getTask(legacyPending.id).stage, "rc", "unreleased legacy done normalizes to rc");
+  assert.equal(store.getTask(instrument.id).stage, "done", "gate instruments never enter the pipeline");
+  assert.equal(store.getTask(instrument.id).release_version, null);
+
+  // Idempotent: a second sweep changes nothing further.
+  const before = JSON.stringify(store.listTasks(ctx.project.id));
+  store.runReleaseSweep({
+    releaseInfo: (p) => (p.id === ctx.project.id ? { lastTag: "v1.0.0", unreleased: 0, oldestIso: null } : null),
+    tagList: (p) => (p.id === ctx.project.id ? [{ tag: "v1.0.0", dateIso: "2026-07-05T00:00:00.000Z" }] : null),
+  });
+  assert.equal(JSON.stringify(store.listTasks(ctx.project.id)), before);
+});
+
+test("stamping prefers the recorded pr.merged time over done_at", () => {
+  const ctx = setup("stamp-merge-time-org");
+  // QA verified AFTER the tag (done_at late), but the PR merged BEFORE it —
+  // the work shipped in the tag and must be stamped with it.
+  const t = shipVerified(ctx, "merged early, verified late", "2026-07-12T09:00:00.000Z");
+  store.recordEvent({
+    org_id: ctx.org.id, project_id: ctx.project.id, type: "pr.merged",
+    actor_agent_id: null, subject_kind: "task", subject_id: t.id, data: { pr_number: 42 },
+  });
+  awaitedDb.openDb()
+    .prepare("UPDATE event SET created_at = ? WHERE type = 'pr.merged' AND subject_id = ?")
+    .run("2026-07-10T00:00:00.000Z", t.id);
+
+  store.runReleaseSweep({
+    releaseInfo: (p) => (p.id === ctx.project.id ? { lastTag: "v2.0.0", unreleased: 0, oldestIso: null } : null),
+    tagList: (p) => (p.id === ctx.project.id ? [{ tag: "v2.0.0", dateIso: "2026-07-11T00:00:00.000Z" }] : null),
+  });
+
+  assert.equal(store.getTask(t.id).stage, "released");
+  assert.equal(store.getTask(t.id).release_version, "v2.0.0");
+});

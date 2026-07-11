@@ -2,8 +2,9 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-// 14 = task archive; 15 = doc lifecycle; 16 = wake v5 park & refire (agent session id + parked_at).
-export const SCHEMA_VERSION = 16;
+// 14 = task archive; 15 = doc lifecycle; 16 = wake v5 park & refire (agent session id + parked_at);
+// 17 = release pipeline (task.release_version; rc/released stages stamped by the release sweep).
+export const SCHEMA_VERSION = 17;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -100,7 +101,8 @@ CREATE TABLE IF NOT EXISTS task (
   last_bounce         TEXT,
   archived_at         TEXT,
   archived_reason     TEXT,
-  superseded_by_task_id TEXT REFERENCES task(id)
+  superseded_by_task_id TEXT REFERENCES task(id),
+  release_version     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_tag (

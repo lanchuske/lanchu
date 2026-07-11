@@ -46,7 +46,7 @@ test("a fixed-unverified bug carries its open verification; a verified one carri
   store.updateTaskStatus({ agentId: agent.id, taskId: verification.id, status: "done", note: "acceptance holds" });
 
   row = boardBug(org.id, bug.id);
-  assert.equal(row.stage, "done");
+  assert.equal(row.stage, "rc"); // verified work parks in Release Candidate until a tag ships it
   assert.equal(row.verified_via, verification.id, "QA evidence is the done verification");
   assert.equal(row.verification_task_id, null);
 });
