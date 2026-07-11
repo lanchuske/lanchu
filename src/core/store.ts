@@ -1453,6 +1453,103 @@ export function claimTask(input: {
   return getTask(input.taskId)!;
 }
 
+/**
+ * Definition refinement in place (task-mrglmtd013): the vision says tasks
+ * must ARRIVE refined — so whoever matures a definition needs to edit it
+ * without breaking task identity (the old workaround, supersede, severed
+ * history and queue references). Only in the definition/backlog stages,
+ * only by the owner, the creator, the coordinator lease holder, or the
+ * supervisor override; audited task.redefined with the old title preserved.
+ */
+export function redefineTask(input: {
+  taskId: string;
+  title: string;
+  byAgentId?: string | null;
+  override?: boolean;
+}): Task {
+  const task = getTask(input.taskId);
+  if (!task) throw new Error("unknown task");
+  assertNotArchived(task);
+  const title = input.title.trim();
+  if (!title) throw new Error("the new title must not be empty");
+
+  const stage = task.stage ?? "backlog";
+  if (stage !== "definition" && stage !== "backlog") {
+    throw new Error(
+      `${task.id} is in the ${stage} stage — definitions only change in definition/backlog. ` +
+        `Once work started, bounce it back (task_reject) or supersede it instead.`,
+    );
+  }
+
+  const orgId = orgIdForProject(task.project_id);
+  if (!input.override) {
+    const actor = input.byAgentId ? getAgent(input.byAgentId) : null;
+    if (!actor) throw new Error("unknown agent");
+    const lease = getCoordinator(orgId);
+    const isCoordinator = !!lease && !lease.expired && lease.agent_id === actor.id;
+    const allowed =
+      task.owner_agent_id === actor.id || task.created_by_agent_id === actor.id || isCoordinator;
+    if (!allowed) {
+      recordEvent({
+        org_id: orgId,
+        project_id: task.project_id,
+        type: "scope.violation",
+        actor_agent_id: actor.id,
+        subject_kind: "task",
+        subject_id: task.id,
+        outcome: "rejected",
+        data: { action: "redefine" },
+      });
+      throw new ScopeError(
+        `Redefining ${task.id} needs its owner, its creator, or the coordinator lease.`,
+      );
+    }
+  }
+
+  if (title === task.title) return task; // nothing to record
+
+  const now = nowIso();
+  db().prepare("UPDATE task SET title = ?, updated_at = ? WHERE id = ?").run(title, now, task.id);
+  recordEvent({
+    org_id: orgId,
+    project_id: task.project_id,
+    type: "task.redefined",
+    actor_agent_id: input.byAgentId ?? null,
+    subject_kind: "task",
+    subject_id: task.id,
+    // The audit IS the definition history: the panel affordance and any
+    // dispute resolve from these payloads.
+    data: { from_title: task.title, to_title: title },
+  });
+  if (input.byAgentId) touchActivity(input.byAgentId, `redefined ${task.id}`);
+  // The owner hears their brief changed under them (pool tasks have no one to tell).
+  if (task.owner_agent_id && task.owner_agent_id !== input.byAgentId) {
+    const owner = getAgent(task.owner_agent_id);
+    if (owner && owner.state !== "retired") {
+      insertNotice({
+        orgId,
+        kind: "system",
+        fromAgentId: input.byAgentId ?? null,
+        toAgentId: owner.id,
+        body: `${task.id} was redefined — re-read it before continuing: "${title.slice(0, 160)}"`,
+        ref: task.id,
+      });
+    }
+  }
+  return getTask(task.id)!;
+}
+
+/** task.redefined counts per task, one query (panel definition-history pill). */
+export function redefineCounts(orgId: string): Map<string, number> {
+  const rows = db()
+    .prepare(
+      `SELECT subject_id, COUNT(*) AS n FROM event
+       WHERE org_id = ? AND type = 'task.redefined' GROUP BY subject_id`,
+    )
+    .all(orgId) as { subject_id: string; n: number }[];
+  return new Map(rows.map((r) => [r.subject_id, Number(r.n)]));
+}
+
 export function updateTaskStatus(input: {
   agentId: string;
   taskId: string;
@@ -3362,6 +3459,8 @@ export type BoardTask = Task & {
   verified_via?: string | null;
   /** Bug lifecycle (bug-tagged tasks only): the open verification checking the fix. */
   verification_task_id?: string | null;
+  /** Times the definition was edited in place (task.redefined events). */
+  redefined_count?: number;
 };
 
 /** Agent plus derived details for the panel. */
@@ -4097,6 +4196,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
     .all(orgId) as { id: string }[];
   const threshold = staleHours();
   const isOpen = (s: TaskStatus) => s === "claimed" || s === "in_progress" || s === "blocked";
+  const redefined = redefineCounts(orgId);
 
   const tasks: BoardTask[] = projects
     .flatMap((p) => listTasks(p.id))
@@ -4112,6 +4212,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       const verified_via = isBug && t.status === "done" ? verifiedBy(t) : null;
       const verification_task_id =
         isBug && t.status === "done" && !verified_via ? (openVerificationTaskFor(t.id)?.id ?? null) : null;
+      const redefCount = redefined.get(t.id);
       return {
         ...t,
         owner_state: ownerState,
@@ -4119,6 +4220,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
         stale,
         owner_name,
         ...(isBug ? { verified_via, verification_task_id } : {}),
+        ...(redefCount ? { redefined_count: redefCount } : {}),
       };
     });
 

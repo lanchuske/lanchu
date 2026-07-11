@@ -50,6 +50,7 @@ export type EventType =
   | "task.bounced"
   | "task.archived"
   | "task.superseded"
+  | "task.redefined"
   | "pr.merged"
   | "task.handoff"
   | "doc.created"
