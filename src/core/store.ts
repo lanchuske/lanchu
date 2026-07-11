@@ -4,6 +4,7 @@ import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
 import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
+import { isAgentLive } from "./presence.js";
 import { loadSkillDefinition } from "./skills_loader.js";
 import {
   ScopeError,
@@ -368,6 +369,17 @@ export function isRecentlyActive(agent: Agent): boolean {
   return Date.now() - new Date(agent.last_activity_at).getTime() < activeWindowMs();
 }
 
+/**
+ * Presence for display/reuse: an agent counts as present if it holds an open
+ * MCP transport (reliable while the server is up) or was recently active
+ * (the fallback that survives a server restart until transports reconnect).
+ * Fixes agents that hold their MCP session open but call tools only sporadically
+ * showing as idle between calls.
+ */
+export function isPresent(agent: Agent): boolean {
+  return isAgentLive(agent.id) || isRecentlyActive(agent);
+}
+
 export function touchActivity(agentId: string, summary: string): void {
   db()
     .prepare("UPDATE agent SET last_activity = ?, last_activity_at = ? WHERE id = ?")
@@ -448,7 +460,7 @@ export function findReuseCandidates(
   const wanted = new Set(keywords(objective));
   if (wanted.size === 0) return [];
 
-  const idle = listAgents(orgId).filter((a) => a.state !== "retired" && !isRecentlyActive(a));
+  const idle = listAgents(orgId).filter((a) => a.state !== "retired" && !isPresent(a));
   const scored = idle.map((agent) => {
     const footprint = new Set<string>(keywords(agent.objective ?? ""));
     const tasks = db()
@@ -1371,11 +1383,11 @@ function ageHours(iso: string | null): number {
 }
 
 export function boardSnapshot(orgId: string): BoardSnapshot {
-  // Presence is derived from recency of activity (robust; no reliance on
-  // detecting transport disconnects). Retired agents stay retired.
+  // Presence is an open MCP transport, falling back to recency of activity so
+  // it survives a server restart. Retired agents stay retired.
   const rawAgents = listAgents(orgId)
     .filter((a) => a.state !== "retired")
-    .map((a) => ({ ...a, state: (isRecentlyActive(a) ? "active" : "idle") as AgentState }));
+    .map((a) => ({ ...a, state: (isPresent(a) ? "active" : "idle") as AgentState }));
   const stateById = new Map(rawAgents.map((a) => [a.id, a.state] as const));
   const nameById = new Map(rawAgents.map((a) => [a.id, a.name] as const));
   const roleName = new Map<string, string | null>();
