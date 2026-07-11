@@ -16,6 +16,7 @@ import { ScopeError } from "../core/types.js";
 import { claudeLiveSessionIds, closeTerminal, focusTerminal, nudgeTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { clearContexts, getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
+import { buildProvenance, packageRoot } from "../core/provenance.js";
 import { probeServers, readProjectMcpServers } from "../core/mcps.js";
 import { buildMcpServer } from "./mcp.js";
 import { PANEL_BUILD_ID, panelHtml } from "./panel.js";
@@ -488,7 +489,7 @@ export function createServer(): http.Server {
       const url = new URL(req.url ?? "/", "http://localhost");
 
       if (url.pathname === "/health") {
-        return sendJson(res, 200, { ok: true, service: "lanchu" });
+        return sendJson(res, 200, { ok: true, service: "lanchu", ...healthProvenance() });
       }
 
       // Shared-secret gate for the admin/API surface (no-op unless a key is set).
@@ -1125,12 +1126,31 @@ export function createServer(): http.Server {
  */
 function restartServer(): void {
   const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "cli", "index.js");
+  // Deploy discipline (task-mrg7nmg43): restart ≠ rebuild — a greenzone
+  // restart once relaunched a 3-hour-old dist and two merged PRs silently
+  // weren't running. When the checkout is newer than the build, the relaunch
+  // helper rebuilds first; if the build fails the old dist still comes back
+  // up (availability first) and /health keeps shouting `stale: true`.
+  const prov = buildProvenance(VERSION);
+  const rebuild = prov.stale && process.platform !== "win32"
+    ? `cd ${JSON.stringify(packageRoot())} && npm run build >/dev/null 2>&1; `
+    : "";
   const [cmd, args] =
     process.platform === "win32"
       ? ["cmd", ["/c", `ping -n 2 127.0.0.1 >NUL & "${process.execPath}" "${bin}" serve`]]
-      : ["sh", ["-c", `sleep 1; exec "${process.execPath}" "${bin}" serve`]];
+      : ["sh", ["-c", `sleep 1; ${rebuild}exec "${process.execPath}" "${bin}" serve`]];
   spawn(cmd, args as string[], { detached: true, stdio: "ignore" }).unref();
   setTimeout(() => process.exit(0), 150);
+}
+
+/** /health provenance, cached briefly — the CLI pings health on every command. */
+let provCache: { at: number; value: ReturnType<typeof buildProvenance> } | null = null;
+function healthProvenance(): { version: string; commit: string | null; built_at: string | null; stale: boolean } {
+  if (!provCache || Date.now() - provCache.at > 60_000) {
+    provCache = { at: Date.now(), value: buildProvenance(VERSION) };
+  }
+  const { version, commit, built_at, stale } = provCache.value;
+  return { version, commit, built_at, stale };
 }
 
 /**

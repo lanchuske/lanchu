@@ -21,6 +21,7 @@ import {
   writeSettings,
 } from "../config.js";
 import { agentColor, ansiColorize } from "../core/colors.js";
+import { buildProvenance } from "../core/provenance.js";
 import { gitInfo } from "../core/git.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
@@ -140,6 +141,12 @@ async function cmdServe(): Promise<void> {
   console.log(`  mcp:   ${publicUrl() ? publicUrl() + "/mcp" : local + "/mcp"}`);
   console.log(`  db:    ${dbPath()}`);
   console.log(`  auth:  ${accessKey() ? "access key required (LANCHU_ACCESS_KEY)" : "open (loopback)"}`);
+  // Deploy discipline: say exactly which code is live, and shout if dist is stale.
+  const prov = buildProvenance(VERSION);
+  console.log(`  build: v${prov.version}${prov.commit ? ` @ ${prov.commit.slice(0, 7)}` : ""}${prov.built_at ? ` (compiled ${prov.built_at.replace("T", " ").slice(0, 16)})` : ""}`);
+  if (prov.stale) {
+    console.log(`  ⚠ dist/ is OLDER than HEAD — this serve runs stale code. Run: npm run build (a greenzone restart rebuilds automatically).`);
+  }
   if (exposed && !accessKey()) {
     console.log(`  ⚠ exposed on ${host()} without LANCHU_ACCESS_KEY — anyone who can reach this port has full access.`);
   }
