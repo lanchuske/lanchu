@@ -115,6 +115,15 @@ export function getOrg(orgId: string): { id: string; name: string } | null {
   return row ?? null;
 }
 
+/** Look up an org by name WITHOUT creating it — use for reads so a typo in the
+ * panel's org field can't spawn empty phantom orgs. */
+export function getOrgByName(name: string): { id: string; name: string } | null {
+  const row = db().prepare("SELECT id, name FROM org WHERE name = ?").get(name) as
+    | { id: string; name: string }
+    | undefined;
+  return row ?? null;
+}
+
 export interface OrgSummary {
   id: string;
   name: string;
