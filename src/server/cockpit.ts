@@ -25,10 +25,18 @@ const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 
 /** Shell command that wires Claude to Lanchu and launches it with a first prompt. */
 export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string): string {
-  const add = `claude mcp add lanchu --transport http ${mcpUrl()} --header 'Authorization: Bearer ${token}'`;
+  // Carry this agent's identity as an inline MCP config scoped to THIS process
+  // only. We deliberately avoid `claude mcp add lanchu`, which writes a shared,
+  // project-scoped server: a second agent in the same repo would then either
+  // inherit the first agent's token (add is a no-op when the server already
+  // exists) or clobber it — both cause the agent's lanchu://me to report the
+  // wrong identity/role. --strict-mcp-config makes the identity deterministic.
+  const mcpConfig = JSON.stringify({
+    mcpServers: { lanchu: { type: "http", url: mcpUrl(), headers: { Authorization: `Bearer ${token}` } } },
+  });
   // Export the agent name so `lanchu statusline` can show which teammate owns this terminal.
   const ident = agentName ? `export LANCHU_AGENT=${sq(agentName)}; ` : "";
-  return `cd ${sq(cwd)}; ${ident}${add} >/dev/null 2>&1; claude ${sq(prompt)}`;
+  return `cd ${sq(cwd)}; ${ident}claude --strict-mcp-config --mcp-config ${sq(mcpConfig)} ${sq(prompt)}`;
 }
 
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
