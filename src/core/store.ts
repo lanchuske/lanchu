@@ -802,9 +802,49 @@ export function ensureColorSlots(orgId: string): void {
   const missing = db()
     .prepare("SELECT id, name FROM agent WHERE org_id = ? AND color_slot IS NULL ORDER BY created_at, rowid")
     .all(orgId) as { id: string; name: string }[];
-  if (!missing.length) return;
   for (const a of missing) {
     db().prepare("UPDATE agent SET color_slot = ? WHERE id = ?").run(pickColorSlot(orgId, a.name), a.id);
+  }
+  healColorCollisions(orgId);
+}
+
+/**
+ * Heal persisted collisions among the LIVE roster (QA bounce on
+ * task-mrg24ok46): a collision written before the occupancy fix — or exposed
+ * by churn when a teammate retires — used to stay forever, because slots were
+ * only ever assigned while NULL. While a completely free hue exists, the
+ * NEWER of a colliding pair moves to it (probing from its own hash
+ * preference) and the elder keeps its color — minimal churn, deterministic
+ * order, idempotent. With more live agents than hues, ties are legitimate.
+ */
+function healColorCollisions(orgId: string): void {
+  const live = db()
+    .prepare(
+      "SELECT id, name, color_slot AS s FROM agent WHERE org_id = ? AND state != 'retired' AND color_slot IS NOT NULL ORDER BY created_at, rowid",
+    )
+    .all(orgId) as { id: string; name: string; s: number }[];
+  if (live.length < 2) return;
+  const norm = (s: number) => ((s % 10) + 10) % 10;
+  const counts = new Array(10).fill(0) as number[];
+  for (const a of live) counts[norm(a.s)] = (counts[norm(a.s)] ?? 0) + 1;
+  const seen = new Set<number>();
+  for (const a of live) {
+    const slot = norm(a.s);
+    if (!seen.has(slot)) {
+      seen.add(slot);
+      continue;
+    }
+    const pref = preferredSlot(a.name);
+    let target = -1;
+    for (let i = 0; i < 10; i++) {
+      const c = (pref + i) % 10;
+      if (counts[c] === 0) { target = c; break; }
+    }
+    if (target < 0) continue; // palette saturated — nothing freer to give
+    db().prepare("UPDATE agent SET color_slot = ? WHERE id = ?").run(target, a.id);
+    counts[slot] = (counts[slot] ?? 1) - 1;
+    counts[target] = (counts[target] ?? 0) + 1;
+    seen.add(target);
   }
 }
 

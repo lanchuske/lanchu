@@ -178,3 +178,44 @@ test("bug repro: retired agents must not count as slot occupancy — two live ag
   const freshSlot = store.agentColorOf(store.getAgent(fresh.id)).slot;
   assert.notEqual(freshSlot, liveSlot, "two live teammates must never share a hue while others are free");
 });
+
+test("bounce fix: an EXISTING collision among live agents heals on ensureColorSlots — newer moves, elder keeps its hue", async () => {
+  const { openDb } = await import("../dist/db/db.js");
+  const org = store.getOrCreateOrg("color-org5");
+  const role = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+
+  // Pad every slot with retired churn so min-use logic alone can't help.
+  for (let i = 0; i < 10; i++) {
+    const ghost = store.createAgent({ orgId: org.id, roleId: role.id, name: `pad-${i}` });
+    store.retireAgent(ghost.id);
+  }
+  const elder = store.createAgent({ orgId: org.id, roleId: role.id, name: "qa-gate-2" });
+  const newer = store.createAgent({ orgId: org.id, roleId: role.id, name: "builder-core-2" });
+  // Manufacture the persisted collision the bounce reported (both slot 2).
+  openDb().prepare("UPDATE agent SET color_slot = 2 WHERE id IN (?, ?)").run(elder.id, newer.id);
+
+  store.ensureColorSlots(org.id);
+  const e = store.getAgent(elder.id), n = store.getAgent(newer.id);
+  assert.equal(e.color_slot, 2, "the elder keeps its color");
+  assert.notEqual(n.color_slot, 2, "the newer collider moves to a free hue");
+
+  // Idempotent: a second pass changes nothing.
+  const before = [store.getAgent(elder.id).color_slot, store.getAgent(newer.id).color_slot];
+  store.ensureColorSlots(org.id);
+  assert.deepEqual([store.getAgent(elder.id).color_slot, store.getAgent(newer.id).color_slot], before);
+});
+
+test("bounce fix: a saturated live palette (11 teammates) keeps legitimate ties and never churns", async () => {
+  const { openDb } = await import("../dist/db/db.js");
+  const org = store.getOrCreateOrg("color-org6");
+  const role = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+  const agents = [];
+  for (let i = 0; i < 11; i++) agents.push(store.createAgent({ orgId: org.id, roleId: role.id, name: `crew-${i}` }));
+
+  const before = agents.map((a) => store.getAgent(a.id).color_slot);
+  store.ensureColorSlots(org.id);
+  const after = agents.map((a) => store.getAgent(a.id).color_slot);
+  assert.deepEqual(after, before, "no free hue exists — nothing moves");
+  assert.equal(new Set(after).size, 10, "all ten hues stay in use");
+  void openDb;
+});
