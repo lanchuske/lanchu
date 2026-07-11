@@ -228,3 +228,32 @@ test("v2: a nudge is cancelled at the last second when delivery or a tool call r
     "a cancelled nudge is not audited, so the cooldown never blocks the next real one",
   );
 });
+
+// ── fire-time cancel (task-mrg91nt111): delivery during the sweep cancels the nudge ──
+// Evidence (builder-panel-2, 3x on 2026-07-11, pre-#49 server): the sweep
+// decided to nudge on a stale snapshot, piggyback delivered the notice while
+// the slow alive-probe ran, and the terminal still got a "you have notices"
+// wakeup pointing at an empty inbox — one wasted model turn per false nudge.
+// #49 added the last-second nudgeStillNeeded recheck; this test pins the race.
+
+test("a notice delivered (piggyback) during the alive-probe cancels the nudge — no empty-inbox wakeups", async () => {
+  const { org, sender, sleeper } = setup("nudge-race");
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "sleeper", body: "already handled" });
+  await graceElapsed();
+
+  const typed = [];
+  const r = runNudgeSweep({
+    // The race, reproduced exactly: the agent's own tool call takes delivery
+    // of the notice WHILE the sweep is busy probing the terminal.
+    alive: () => {
+      store.takeUndeliveredNotices(sleeper.id);
+      return true;
+    },
+    nudge: (ref, line) => { typed.push(line); return "tmux"; },
+  });
+
+  assert.deepEqual(r.nudged, [], "the fire-time recheck cancels the stale nudge");
+  assert.equal(typed.length, 0, "nothing is ever typed at an empty inbox");
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "agent.nudged" && e.subject_id === sleeper.id);
+  assert.equal(ev, undefined, "no phantom nudge on the record either");
+});
