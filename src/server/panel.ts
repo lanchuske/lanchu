@@ -232,6 +232,16 @@ const TEMPLATE = `<!doctype html>
   #gsvg line.flow { stroke: var(--info); stroke-opacity: .55; }
   #gsvg line.conflict, #gsvg line.bounce { stroke: var(--warn); stroke-opacity: .8; }
   #gsvg line.bounce { stroke-dasharray: 5 4; }
+  /* v2: focus mode fades everything outside the clicked node's neighborhood */
+  #gsvg { cursor: grab; }
+  #gsvg g.gnode.dim { opacity: .08; pointer-events: none; }
+  #gsvg line.dim { stroke-opacity: .04 !important; }
+  #gsvg g.focused circle { stroke: var(--fg); stroke-width: 2.5px; }
+  #gsvg text.hoverlabel { display: none; }
+  #gsvg g.gnode:hover text.hoverlabel { display: block; }
+  #gsvg g.gmore circle { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5px; }
+  .gslider { display: inline-flex; align-items: center; gap: 6px; }
+  .gslider input { width: 90px; }
   .gempty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 13px; }
   .glegend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 10px; align-items: center; }
   .glegend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -440,9 +450,12 @@ const TEMPLATE = `<!doctype html>
 
       <section class="view" id="v-graph">
         <h1 class="vhead">Org life</h1>
-        <p class="vsub">A living picture from the audit log: who talks to whom, who works where, which docs are alive. Node size = recent activity (time-decayed); amber edges are conflicts or backward moves. Click a node to jump to it.</p>
+        <p class="vsub">A living picture from the audit log: who talks to whom, who works where, which docs are alive. Node size = recent activity (time-decayed); amber edges are conflicts or backward moves. Click a node to focus its neighborhood; click it again to open it.</p>
         <div class="gwin" id="gwin">
           <button data-win="1h">1h</button><button data-win="24h" class="on">24h</button><button data-win="7d">7d</button>
+          <button id="gall" title="include retired agents, cold docs and every tiny node">show all</button>
+          <label class="gslider hint">edges ≥ <input type="range" id="gedge" min="0" max="8" step="1" value="0"></label>
+          <span class="hint" id="gcount"></span>
         </div>
         <div class="gwrap"><svg id="gsvg"></svg><div class="gempty" id="gempty" style="display:none">No activity in this window yet.</div></div>
         <div class="glegend">
@@ -454,6 +467,7 @@ const TEMPLATE = `<!doctype html>
           <span><i class="gln msg"></i> message / handoff</span>
           <span><i class="gln flow"></i> stage flow</span>
           <span><i class="gln warnl"></i> conflict / bounce</span>
+          <span class="hint">rings: agents · work areas · docs — click = focus · again = open · drag = pin · wheel = zoom · drag background = pan</span>
         </div>
       </section>
 
@@ -1667,95 +1681,165 @@ function renderAttention(orgs, agents, retirements) {
     : "";
 }
 
-// ── org-life graph: dependency-free force layout over /api/graph ──
-var gWindow = "24h", gPos = {}, gSig = "";
+// ── org-life graph v2: deterministic radial layout over /api/graph ──
+// Rings by kind (agents inner, work areas middle, docs outer): the org is
+// naturally tripartite, and fixed geometry kills the wall-pinning failure
+// mode of the old force sim outright. The default view keeps focus — live
+// agents plus the heaviest nodes; the rest folds behind "show all".
+var gWindow = "24h", gSig = "", gData = null, gShowAll = false, gFocus = null,
+    gEdgeMin = 0, gPinned = {}, gView = { x: 0, y: 0, k: 1 };
+var GEDGE_CAP = 60, GLABEL_CAP = 20, GKEEP_TOP = 12;
 function fetchGraph() {
   if (curView !== "graph") return;
-  get("/api/graph?window=" + gWindow).then(renderGraph).catch(function () {});
+  get("/api/graph?window=" + gWindow).then(function (g) {
+    var sig = gWindow + "|" + JSON.stringify(g);
+    if (sig === gSig) return; // unchanged — don't disturb hover/drag state
+    gSig = sig; gData = g; renderGraph();
+  }).catch(function () {});
 }
 function ghash(s) { var h = 9; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
-function renderGraph(g) {
+function gVisibleNodes() {
+  var nodes = gData.nodes || [];
+  if (gShowAll) return nodes.slice();
+  var keep = {};
+  nodes.forEach(function (n) { if (n.kind === "agent" && n.state !== "retired") keep[n.id] = 1; });
+  nodes.slice().sort(function (a, b) { return b.weight - a.weight; })
+    .filter(function (n) { return n.weight > 0 && !(n.kind === "agent" && n.state === "retired"); })
+    .slice(0, GKEEP_TOP).forEach(function (n) { keep[n.id] = 1; });
+  return nodes.filter(function (n) { return keep[n.id]; });
+}
+function renderGraph() {
+  if (!gData) return;
   var svg = document.getElementById("gsvg");
-  var nodes = g.nodes || [], edges = g.edges || [];
-  document.getElementById("gempty").style.display = nodes.length ? "none" : "flex";
-  if (!nodes.length) { svg.innerHTML = ""; gSig = ""; return; }
-  var sig = gWindow + "|" + JSON.stringify(g);
-  if (sig === gSig) return; // identical data — keep the current layout still
-  gSig = sig;
-  var W = svg.clientWidth || 900, H = 560;
-  // Seed unseen nodes deterministically (hash → position) so the layout is
-  // stable across refreshes; known nodes keep their place and drift smoothly.
-  nodes.forEach(function (n) {
-    if (!gPos[n.id]) {
-      var h = ghash(n.id);
-      gPos[n.id] = { x: W / 2 + ((h % 1000) / 1000 - .5) * W * .55, y: H / 2 + ((Math.floor(h / 1000) % 1000) / 1000 - .5) * H * .55 };
-    }
-  });
-  var pts = nodes.map(function (n) { return { x: gPos[n.id].x, y: gPos[n.id].y }; });
-  var idx = {}; nodes.forEach(function (n, i) { idx[n.id] = i; });
-  var springs = edges.filter(function (e) { return idx[e.from] !== undefined && idx[e.to] !== undefined; });
-  // Fruchterman–Reingold: pairwise repulsion, weighted attraction on edges,
-  // mild pull to the center, displacement capped by a cooling temperature.
-  var k = Math.sqrt((W * H) / nodes.length) * .7, temp = 70;
-  for (var it = 0; it < 130; it++) {
-    var dx = [], dy = [];
-    for (var i0 = 0; i0 < pts.length; i0++) { dx.push(0); dy.push(0); }
-    for (var i = 0; i < pts.length; i++) {
-      for (var j = i + 1; j < pts.length; j++) {
-        var rx = pts[i].x - pts[j].x, ry = pts[i].y - pts[j].y;
-        var d = Math.sqrt(rx * rx + ry * ry) || .1, f = (k * k) / d / d;
-        dx[i] += rx * f; dy[i] += ry * f; dx[j] -= rx * f; dy[j] -= ry * f;
-      }
-      dx[i] += (W / 2 - pts[i].x) * .02; dy[i] += (H / 2 - pts[i].y) * .02;
-    }
-    springs.forEach(function (e) {
-      var a = idx[e.from], b = idx[e.to];
-      var rx = pts[a].x - pts[b].x, ry = pts[a].y - pts[b].y;
-      var d = Math.sqrt(rx * rx + ry * ry) || .1;
-      var f = (d / k) * (0.6 + Math.min(1.4, e.weight));
-      dx[a] -= rx / d * f; dy[a] -= ry / d * f; dx[b] += rx / d * f; dy[b] += ry / d * f;
-    });
-    for (var m = 0; m < pts.length; m++) {
-      var len = Math.sqrt(dx[m] * dx[m] + dy[m] * dy[m]) || .1, cap = Math.min(len, temp);
-      pts[m].x = Math.max(36, Math.min(W - 36, pts[m].x + dx[m] / len * cap));
-      pts[m].y = Math.max(30, Math.min(H - 30, pts[m].y + dy[m] / len * cap));
-    }
-    temp *= .96;
-  }
-  nodes.forEach(function (n, i) { gPos[n.id] = { x: pts[i].x, y: pts[i].y }; });
+  var all = gData.nodes || [];
+  document.getElementById("gempty").style.display = all.length ? "none" : "flex";
+  if (!all.length) { svg.innerHTML = ""; document.getElementById("gcount").textContent = ""; return; }
+  var W = svg.clientWidth || 900, H = 560, cx = W / 2, cy = H / 2;
+  var visible = gVisibleNodes();
+  var vis = {}; visible.forEach(function (n) { vis[n.id] = n; });
+  var hidden = all.length - visible.length;
 
-  var out = "";
-  springs.forEach(function (e) {
-    var a = gPos[e.from], b = gPos[e.to];
-    out += '<line class="' + esc(e.kind) + '" x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) +
-      '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) +
-      '" stroke-width="' + (1 + Math.min(4, 1.6 * Math.sqrt(e.weight))).toFixed(1) + '"></line>';
+  // Radial placement: ring radius by kind, angle deterministic (hash order)
+  // so nodes keep their bearing across refreshes; a dragged node stays pinned.
+  var R3 = Math.min(W, H) / 2 - 46, RING = { agent: R3 * .38, area: R3 * .7, doc: R3 };
+  var byRing = { agent: [], area: [], doc: [] };
+  visible.forEach(function (n) { if (byRing[n.kind]) byRing[n.kind].push(n); });
+  var pos = {};
+  Object.keys(byRing).forEach(function (kind) {
+    var ring = byRing[kind].slice().sort(function (a, b) { return ghash(a.id) - ghash(b.id); });
+    ring.forEach(function (n, i) {
+      var a = (2 * Math.PI * i) / ring.length - Math.PI / 2;
+      pos[n.id] = gPinned[n.id] || { x: cx + RING[kind] * Math.cos(a), y: cy + RING[kind] * Math.sin(a) };
+    });
   });
-  nodes.forEach(function (n) {
-    var p = gPos[n.id];
+
+  // Edge hygiene: visible endpoints only, user threshold, heaviest-first cap,
+  // opacity by weight — the hairball becomes a signal.
+  var edges = (gData.edges || []).filter(function (e) { return vis[e.from] && vis[e.to] && e.weight >= gEdgeMin; })
+    .sort(function (a, b) { return b.weight - a.weight; }).slice(0, GEDGE_CAP);
+  var wMax = edges.length ? edges[0].weight : 1;
+
+  var near = null;
+  if (gFocus && vis[gFocus]) {
+    near = {}; near[gFocus] = 1;
+    edges.forEach(function (e) { if (e.from === gFocus) near[e.to] = 1; if (e.to === gFocus) near[e.from] = 1; });
+  } else gFocus = null;
+
+  var labeled = {};
+  visible.slice().sort(function (a, b) { return b.weight - a.weight; }).slice(0, GLABEL_CAP)
+    .forEach(function (n) { labeled[n.id] = 1; });
+
+  var out = '<g id="gpan" transform="translate(' + gView.x.toFixed(1) + ' ' + gView.y.toFixed(1) + ') scale(' + gView.k.toFixed(3) + ')">';
+  edges.forEach(function (e) {
+    var a = pos[e.from], b = pos[e.to];
+    var dim = near && !(near[e.from] && near[e.to]);
+    out += '<line class="' + esc(e.kind) + (dim ? " dim" : "") + '" x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) +
+      '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) +
+      '" style="stroke-opacity:' + (dim ? ".04" : (.2 + .6 * e.weight / wMax).toFixed(2)) + '"' +
+      ' stroke-width="' + (1 + Math.min(4, 1.6 * Math.sqrt(e.weight))).toFixed(1) + '"></line>';
+  });
+  visible.forEach(function (n) {
+    var p = pos[n.id];
     var r = n.kind === "agent" ? 8 + Math.min(16, 6 * Math.sqrt(n.weight)) : 5 + Math.min(10, 4 * Math.sqrt(n.weight));
     var cls = n.kind === "agent" ? "agent " + esc(n.presence || n.state || "") : (n.kind === "doc" ? "docn" : "arean");
     var label = n.label.length > 22 ? n.label.slice(0, 22) + "…" : n.label;
-    out += '<g class="gnode' + (n.state === "retired" ? " retired" : "") + '" data-id="' + esc(n.id) + '" data-kind="' + esc(n.kind) + '">' +
+    var dim = near && !near[n.id];
+    out += '<g class="gnode' + (n.state === "retired" ? " retired" : "") + (dim ? " dim" : "") + (gFocus === n.id ? " focused" : "") +
+      '" data-id="' + esc(n.id) + '" data-kind="' + esc(n.kind) + '">' +
       '<circle class="' + cls + '" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + r.toFixed(1) + '"><title>' + esc(n.label) + '</title></circle>' +
-      '<text class="glabel" x="' + p.x.toFixed(1) + '" y="' + (p.y + r + 13).toFixed(1) + '">' + esc(label) + '</text></g>';
+      '<text class="glabel' + (labeled[n.id] ? "" : " hoverlabel") + '" x="' + p.x.toFixed(1) + '" y="' + (p.y + r + 13).toFixed(1) + '">' + esc(label) + '</text></g>';
   });
+  if (hidden > 0 && !gShowAll) {
+    out += '<g class="gnode gmore" data-more="1"><circle cx="' + cx.toFixed(1) + '" cy="' + (H - 24) + '" r="12"><title>show every node, including retired agents and cold docs</title></circle>' +
+      '<text class="glabel" x="' + cx.toFixed(1) + '" y="' + (H - 4) + '">+' + hidden + ' more</text></g>';
+  }
+  out += '</g>';
   svg.innerHTML = out;
+  document.getElementById("gcount").textContent = visible.length + " of " + all.length + " nodes · " + edges.length + " edges";
 }
-// Observe-only: clicking a node just navigates to the thing it represents.
-document.getElementById("gsvg").addEventListener("click", function (e) {
-  var n = e.target.closest ? e.target.closest("g.gnode") : null; if (!n) return;
-  var kind = n.getAttribute("data-kind"), id = n.getAttribute("data-id");
+function gNavigate(kind, id) {
   if (kind === "agent") location.hash = "team";
   else if (kind === "doc") { openDocs[id.slice(4)] = true; renderDocs(lastDocs); location.hash = "docs"; }
   else location.hash = "work";
+}
+function gToggleShowAll() {
+  gShowAll = !gShowAll;
+  document.getElementById("gall").classList.toggle("on", gShowAll);
+  renderGraph();
+}
+// Pointer model: press-drag on a node pins it, press-drag on the background
+// pans, wheel zooms around the cursor, and a clean click (no movement)
+// focuses — a second click on the focused node opens it.
+var gDrag = null, gsvgEl = document.getElementById("gsvg");
+function gPoint(e) {
+  var r = gsvgEl.getBoundingClientRect();
+  return { x: (e.clientX - r.left - gView.x) / gView.k, y: (e.clientY - r.top - gView.y) / gView.k };
+}
+gsvgEl.addEventListener("mousedown", function (e) {
+  var n = e.target.closest ? e.target.closest("g.gnode") : null;
+  gDrag = { id: n && !n.hasAttribute("data-more") ? n.getAttribute("data-id") : null,
+            more: !!(n && n.hasAttribute("data-more")),
+            kind: n ? n.getAttribute("data-kind") : null,
+            x0: e.clientX, y0: e.clientY, vx: gView.x, vy: gView.y, moved: false };
+  e.preventDefault();
+});
+window.addEventListener("mousemove", function (e) {
+  if (!gDrag) return;
+  var dx = e.clientX - gDrag.x0, dy = e.clientY - gDrag.y0;
+  if (Math.abs(dx) + Math.abs(dy) > 4) gDrag.moved = true;
+  if (!gDrag.moved) return;
+  if (gDrag.id) { gPinned[gDrag.id] = gPoint(e); renderGraph(); }
+  else if (!gDrag.more) { gView.x = gDrag.vx + dx; gView.y = gDrag.vy + dy; renderGraph(); }
+});
+window.addEventListener("mouseup", function (e) {
+  if (!gDrag) return;
+  var d = gDrag; gDrag = null;
+  if (d.moved) return; // drag, not click
+  if (d.more) { gToggleShowAll(); return; }
+  if (!d.id) { if (gFocus) { gFocus = null; renderGraph(); } return; } // background clears focus
+  if (gFocus === d.id) gNavigate(d.kind, d.id); // second click opens
+  else { gFocus = d.id; renderGraph(); }
+});
+gsvgEl.addEventListener("wheel", function (e) {
+  e.preventDefault();
+  var r = gsvgEl.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  var k2 = Math.max(.4, Math.min(4, gView.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  gView.x = mx - ((mx - gView.x) / gView.k) * k2;
+  gView.y = my - ((my - gView.y) / gView.k) * k2;
+  gView.k = k2;
+  renderGraph();
+}, { passive: false });
+document.getElementById("gall").addEventListener("click", gToggleShowAll);
+document.getElementById("gedge").addEventListener("input", function (e) {
+  gEdgeMin = +e.target.value || 0;
+  renderGraph();
 });
 document.getElementById("gwin").addEventListener("click", function (e) {
   var b = e.target.closest ? e.target.closest("button[data-win]") : null; if (!b) return;
   gWindow = b.getAttribute("data-win");
-  var bs = document.querySelectorAll("#gwin button");
+  var bs = document.querySelectorAll("#gwin button[data-win]");
   for (var i = 0; i < bs.length; i++) bs[i].classList.toggle("on", bs[i] === b);
-  gSig = ""; // force a re-layout for the new window
+  gSig = ""; gPinned = {}; // new window, fresh layout
   fetchGraph();
 });
 
