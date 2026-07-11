@@ -404,6 +404,16 @@ export function createServer(): http.Server {
         return sendJson(res, 200, store.boardSnapshot(org.id));
       }
 
+      if (url.pathname === "/api/graph" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const windows: Record<string, number> = { "1h": 1, "24h": 24, "7d": 168 };
+        const wh = windows[url.searchParams.get("window") ?? "24h"] ?? 24;
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, { window_hours: wh, nodes: [], edges: [] });
+        return sendJson(res, 200, store.orgGraph(org.id, wh));
+      }
+
       if (url.pathname === "/api/reuse" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         const objective = url.searchParams.get("objective") ?? "";

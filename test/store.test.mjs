@@ -388,3 +388,44 @@ test("budgets MVP: self-reported usage accrues per role and exhausted quota bloc
   assert.equal(store.getRole(role.id).token_quota, null);
   assert.equal(store.roleBudget(store.getRole(role.id)), null);
 });
+
+test("orgGraph aggregates events into nodes and edges, flow vs bounce included", () => {
+  const org = store.getOrCreateOrg("acme-graph");
+  const project = store.getOrCreateProject(org.id, "web");
+  const role = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+  const product = store.createAgent({ orgId: org.id, roleId: role.id, objective: "steer", name: "product" });
+  const builder = store.createAgent({ orgId: org.id, roleId: role.id, objective: "build", name: "builder" });
+  const qa = store.createAgent({ orgId: org.id, roleId: role.id, objective: "verify", name: "qa" });
+
+  // product defines → builder builds → done → handed backward to qa (bounce).
+  const t = store.createTask({ projectId: project.id, orgId: org.id, agentId: product.id, title: "panel thing", tags: ["ui"] });
+  store.claimTask({ agentId: builder.id, taskId: t.id });
+  store.updateTaskStatus({ agentId: builder.id, taskId: t.id, status: "in_progress" });
+  store.updateTaskStatus({ agentId: builder.id, taskId: t.id, status: "done" });
+  store.reassignTask({ byAgentId: product.id, taskId: t.id, toAgentId: qa.id, override: true });
+  store.sendNotice({ orgId: org.id, fromAgentId: builder.id, to: "product", body: "done, PR up" });
+  store.upsertDoc({ orgId: org.id, agentId: product.id, title: "Graph notes", content: "x" });
+
+  const g = store.orgGraph(org.id, 24);
+  const edge = (from, to, kind) => g.edges.find((e) => e.from === from && e.to === to && e.kind === kind);
+
+  assert.equal(g.window_hours, 24);
+  assert.equal(g.nodes.filter((n) => n.kind === "agent").length, 3);
+  assert.ok(g.nodes.some((n) => n.id === "area:ui"), "tag becomes an area node");
+  const doc = g.nodes.find((n) => n.kind === "doc");
+  assert.equal(doc.label, "Graph notes");
+  assert.ok(edge(builder.id, product.id, "msg"), "A2A message edge");
+  assert.ok(edge(product.id, qa.id, "handoff"), "reassign edge");
+  assert.ok(edge(product.id, builder.id, "flow"), "forward flow: create → claim");
+  assert.ok(edge(builder.id, qa.id, "bounce"), "backward move: done → reassigned");
+  assert.ok(edge(product.id, doc.id, "doc"), "doc-edit edge");
+  assert.ok(g.nodes.every((n) => n.weight >= 0), "weights are non-negative");
+
+  // Retired agents disappear unless they acted inside the window.
+  store.releaseTask({ agentId: null, taskId: t.id, override: true });
+  store.retireAgent(qa.id);
+  const g2 = store.orgGraph(org.id, 24);
+  const qaNode = g2.nodes.find((n) => n.id === qa.id);
+  assert.ok(qaNode, "qa acted in the window — still on the map");
+  assert.equal(qaNode.state, "retired");
+});

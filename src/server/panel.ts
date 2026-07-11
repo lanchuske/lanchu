@@ -187,6 +187,32 @@ export function panelHtml(): string {
                 color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
   .board-wrap.overflowing .board-more { display: flex; }
 
+  /* ── org-life graph ── */
+  .gwin { display: flex; gap: 6px; margin-bottom: 12px; }
+  .gwin button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); font-weight: 600; }
+  .gwrap { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  #gsvg { display: block; width: 100%; height: 560px; }
+  #gsvg circle.agent { fill: var(--accent); }
+  #gsvg circle.agent.idle { fill: var(--faint); }
+  #gsvg circle.agent.active { stroke: var(--ok); stroke-width: 2px; }
+  #gsvg circle.docn { fill: var(--info); }
+  #gsvg circle.arean { fill: var(--warn); opacity: .75; }
+  #gsvg g.retired { opacity: .35; }
+  #gsvg g.gnode { cursor: pointer; }
+  #gsvg text.glabel { font-size: 10.5px; fill: var(--muted); text-anchor: middle; pointer-events: none; }
+  #gsvg line { stroke: var(--faint); stroke-opacity: .45; }
+  #gsvg line.msg, #gsvg line.handoff { stroke: var(--accent); stroke-opacity: .55; }
+  #gsvg line.flow { stroke: var(--info); stroke-opacity: .55; }
+  #gsvg line.conflict, #gsvg line.bounce { stroke: var(--warn); stroke-opacity: .8; }
+  #gsvg line.bounce { stroke-dasharray: 5 4; }
+  .gempty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 13px; }
+  .glegend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 10px; align-items: center; }
+  .glegend span { display: inline-flex; align-items: center; gap: 6px; }
+  .gsw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .gsw.agent { background: var(--accent); } .gsw.docn { background: var(--info); } .gsw.arean { background: var(--warn); opacity: .75; }
+  .gln { width: 18px; height: 0; border-top: 2px solid var(--faint); display: inline-block; }
+  .gln.msg { border-color: var(--accent); } .gln.flow { border-color: var(--info); } .gln.warnl { border-color: var(--warn); border-top-style: dashed; }
+
   .actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   button, select { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line);
                    background: var(--surface); color: var(--fg); cursor: pointer; transition: background .12s, border-color .12s; }
@@ -278,6 +304,7 @@ export function panelHtml(): string {
         <li data-view="projects">Projects <span class="badge" id="c-projects">0</span></li>
         <li data-view="team">Team <span class="badge" id="c-agents">0</span></li>
         <li data-view="work">Work <span class="badge" id="c-tasks">0</span></li>
+        <li data-view="graph">Org life</li>
         <li data-view="bugs">Bugs <span class="badge" id="c-bugs">0</span></li>
         <li data-view="docs">Docs <span class="badge" id="c-docs">0</span></li>
         <li data-view="activity">Activity</li>
@@ -321,6 +348,23 @@ export function panelHtml(): string {
         <div class="board-wrap" id="board-wrap">
           <div class="board" id="tasks"></div>
           <div class="board-more" id="board-more" title="More lanes off-screen — click to scroll">more →</div>
+        </div>
+      </section>
+
+      <section class="view" id="v-graph">
+        <h1 class="vhead">Org life</h1>
+        <p class="vsub">A living picture from the audit log: who talks to whom, who works where, which docs are alive. Node size = recent activity (time-decayed); amber edges are conflicts or backward moves. Click a node to jump to it.</p>
+        <div class="gwin" id="gwin">
+          <button data-win="1h">1h</button><button data-win="24h" class="on">24h</button><button data-win="7d">7d</button>
+        </div>
+        <div class="gwrap"><svg id="gsvg"></svg><div class="gempty" id="gempty" style="display:none">No activity in this window yet.</div></div>
+        <div class="glegend">
+          <span><i class="gsw agent"></i> agent</span>
+          <span><i class="gsw docn"></i> doc</span>
+          <span><i class="gsw arean"></i> work area</span>
+          <span><i class="gln msg"></i> message / handoff</span>
+          <span><i class="gln flow"></i> stage flow</span>
+          <span><i class="gln warnl"></i> conflict / bounce</span>
         </div>
       </section>
 
@@ -534,6 +578,7 @@ function showView(name) {
   if (name === "processes") refreshProcesses();
   // The board renders while hidden (scrollWidth 0) — measure when it becomes visible.
   if (name === "work") updateBoardMore();
+  if (name === "graph") fetchGraph();
 }
 document.getElementById("nav").addEventListener("click", function (e) {
   var li = e.target.closest("li[data-view]"); if (!li) return;
@@ -879,10 +924,103 @@ function renderAttention(orgs, agents) {
     : "";
 }
 
+// ── org-life graph: dependency-free force layout over /api/graph ──
+var gWindow = "24h", gPos = {}, gSig = "";
+function fetchGraph() {
+  if (curView !== "graph") return;
+  get("/api/graph?window=" + gWindow).then(renderGraph).catch(function () {});
+}
+function ghash(s) { var h = 9; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
+function renderGraph(g) {
+  var svg = document.getElementById("gsvg");
+  var nodes = g.nodes || [], edges = g.edges || [];
+  document.getElementById("gempty").style.display = nodes.length ? "none" : "flex";
+  if (!nodes.length) { svg.innerHTML = ""; gSig = ""; return; }
+  var sig = gWindow + "|" + JSON.stringify(g);
+  if (sig === gSig) return; // identical data — keep the current layout still
+  gSig = sig;
+  var W = svg.clientWidth || 900, H = 560;
+  // Seed unseen nodes deterministically (hash → position) so the layout is
+  // stable across refreshes; known nodes keep their place and drift smoothly.
+  nodes.forEach(function (n) {
+    if (!gPos[n.id]) {
+      var h = ghash(n.id);
+      gPos[n.id] = { x: W / 2 + ((h % 1000) / 1000 - .5) * W * .55, y: H / 2 + ((Math.floor(h / 1000) % 1000) / 1000 - .5) * H * .55 };
+    }
+  });
+  var pts = nodes.map(function (n) { return { x: gPos[n.id].x, y: gPos[n.id].y }; });
+  var idx = {}; nodes.forEach(function (n, i) { idx[n.id] = i; });
+  var springs = edges.filter(function (e) { return idx[e.from] !== undefined && idx[e.to] !== undefined; });
+  // Fruchterman–Reingold: pairwise repulsion, weighted attraction on edges,
+  // mild pull to the center, displacement capped by a cooling temperature.
+  var k = Math.sqrt((W * H) / nodes.length) * .7, temp = 70;
+  for (var it = 0; it < 130; it++) {
+    var dx = [], dy = [];
+    for (var i0 = 0; i0 < pts.length; i0++) { dx.push(0); dy.push(0); }
+    for (var i = 0; i < pts.length; i++) {
+      for (var j = i + 1; j < pts.length; j++) {
+        var rx = pts[i].x - pts[j].x, ry = pts[i].y - pts[j].y;
+        var d = Math.sqrt(rx * rx + ry * ry) || .1, f = (k * k) / d / d;
+        dx[i] += rx * f; dy[i] += ry * f; dx[j] -= rx * f; dy[j] -= ry * f;
+      }
+      dx[i] += (W / 2 - pts[i].x) * .02; dy[i] += (H / 2 - pts[i].y) * .02;
+    }
+    springs.forEach(function (e) {
+      var a = idx[e.from], b = idx[e.to];
+      var rx = pts[a].x - pts[b].x, ry = pts[a].y - pts[b].y;
+      var d = Math.sqrt(rx * rx + ry * ry) || .1;
+      var f = (d / k) * (0.6 + Math.min(1.4, e.weight));
+      dx[a] -= rx / d * f; dy[a] -= ry / d * f; dx[b] += rx / d * f; dy[b] += ry / d * f;
+    });
+    for (var m = 0; m < pts.length; m++) {
+      var len = Math.sqrt(dx[m] * dx[m] + dy[m] * dy[m]) || .1, cap = Math.min(len, temp);
+      pts[m].x = Math.max(36, Math.min(W - 36, pts[m].x + dx[m] / len * cap));
+      pts[m].y = Math.max(30, Math.min(H - 30, pts[m].y + dy[m] / len * cap));
+    }
+    temp *= .96;
+  }
+  nodes.forEach(function (n, i) { gPos[n.id] = { x: pts[i].x, y: pts[i].y }; });
+
+  var out = "";
+  springs.forEach(function (e) {
+    var a = gPos[e.from], b = gPos[e.to];
+    out += '<line class="' + esc(e.kind) + '" x1="' + a.x.toFixed(1) + '" y1="' + a.y.toFixed(1) +
+      '" x2="' + b.x.toFixed(1) + '" y2="' + b.y.toFixed(1) +
+      '" stroke-width="' + (1 + Math.min(4, 1.6 * Math.sqrt(e.weight))).toFixed(1) + '"></line>';
+  });
+  nodes.forEach(function (n) {
+    var p = gPos[n.id];
+    var r = n.kind === "agent" ? 8 + Math.min(16, 6 * Math.sqrt(n.weight)) : 5 + Math.min(10, 4 * Math.sqrt(n.weight));
+    var cls = n.kind === "agent" ? "agent " + esc(n.state || "") : (n.kind === "doc" ? "docn" : "arean");
+    var label = n.label.length > 22 ? n.label.slice(0, 22) + "…" : n.label;
+    out += '<g class="gnode' + (n.state === "retired" ? " retired" : "") + '" data-id="' + esc(n.id) + '" data-kind="' + esc(n.kind) + '">' +
+      '<circle class="' + cls + '" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + r.toFixed(1) + '"><title>' + esc(n.label) + '</title></circle>' +
+      '<text class="glabel" x="' + p.x.toFixed(1) + '" y="' + (p.y + r + 13).toFixed(1) + '">' + esc(label) + '</text></g>';
+  });
+  svg.innerHTML = out;
+}
+// Observe-only: clicking a node just navigates to the thing it represents.
+document.getElementById("gsvg").addEventListener("click", function (e) {
+  var n = e.target.closest ? e.target.closest("g.gnode") : null; if (!n) return;
+  var kind = n.getAttribute("data-kind"), id = n.getAttribute("data-id");
+  if (kind === "agent") location.hash = "team";
+  else if (kind === "doc") { openDocs[id.slice(4)] = true; renderDocs(lastDocs); location.hash = "docs"; }
+  else location.hash = "work";
+});
+document.getElementById("gwin").addEventListener("click", function (e) {
+  var b = e.target.closest ? e.target.closest("button[data-win]") : null; if (!b) return;
+  gWindow = b.getAttribute("data-win");
+  var bs = document.querySelectorAll("#gwin button");
+  for (var i = 0; i < bs.length; i++) bs[i].classList.toggle("on", bs[i] === b);
+  gSig = ""; // force a re-layout for the new window
+  fetchGraph();
+});
+
 var busy = false, lastSig = "";
 function refresh() {
   if (!org()) return;
   updateProcBadge();
+  fetchGraph(); // no-op unless the Org life view is open
   if (busy) return; busy = true;
   Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs")])
     .then(function (r) {
