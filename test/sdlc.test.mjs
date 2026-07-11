@@ -164,3 +164,80 @@ test("off: no gate, no verification tasks — done is done", () => {
     delete process.env.LANCHU_SDLC;
   }
 });
+
+// ── verification router eligibility (task-mrgplp6v10) ──
+// Real verifications were routed to a PARKED disposable probe, where they sat
+// undelivered until the wake-v5 drill happened to refire it.
+
+test("verification notices skip parked and probe qa agents — the active gate gets the work", () => {
+  const org = store.getOrCreateOrg("router-elig-org");
+  const project = store.getOrCreateProject(org.id, "core");
+  const qaRole = store.getOrCreateRole(org.id, "qa", { wildcard: true });
+  const genRole = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+  const builder = store.createAgent({ orgId: org.id, roleId: genRole.id, name: "builder" });
+  const gate = store.createAgent({ orgId: org.id, roleId: qaRole.id, name: "qa-gate-active" });
+  const probe = store.createAgent({ orgId: org.id, roleId: qaRole.id, name: "probe-park-drill", objective: "disposable drill fixture — never claim tasks" });
+  store.setAgentClaudeSession(probe.id, "sid-probe");
+  store.parkAgent(probe.id, "exit");
+
+  // A done under the gate mints the verification and routes the qa notice.
+  const task = store.createTask({ projectId: project.id, orgId: org.id, agentId: builder.id, title: "feature", tags: ["server"], stage: "build" });
+  store.claimTask({ agentId: builder.id, taskId: task.id });
+  store.updateTaskStatus({ agentId: builder.id, taskId: task.id, status: "done", prUrl: "https://github.com/x/y/pull/200" });
+
+  const gateHeard = store.takeUndeliveredNotices(gate.id);
+  assert.ok(gateHeard.some((n) => /Verification ready/.test(n.body)), "the active gate is noticed");
+  assert.equal(store.takeUndeliveredNotices(probe.id).filter((n) => /Verification ready/.test(n.body)).length, 0, "the parked probe hears nothing");
+});
+
+test("with only a parked probe in qa, the notice falls back to product — never a dead fixture", () => {
+  const org = store.getOrCreateOrg("router-fallback-org");
+  const project = store.getOrCreateProject(org.id, "core");
+  const qaRole = store.getOrCreateRole(org.id, "qa", { wildcard: true });
+  const prodRole = store.getOrCreateRole(org.id, "product", { wildcard: true });
+  const genRole = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+  const builder = store.createAgent({ orgId: org.id, roleId: genRole.id, name: "builder" });
+  const pm = store.createAgent({ orgId: org.id, roleId: prodRole.id, name: "pm" });
+  const probe = store.createAgent({ orgId: org.id, roleId: qaRole.id, name: "probe-only", objective: "probe fixture" });
+  store.setAgentClaudeSession(probe.id, "sid-probe2");
+  store.parkAgent(probe.id, "exit");
+
+  const task = store.createTask({ projectId: project.id, orgId: org.id, agentId: builder.id, title: "feature 2", tags: ["server"], stage: "build" });
+  store.claimTask({ agentId: builder.id, taskId: task.id });
+  store.updateTaskStatus({ agentId: builder.id, taskId: task.id, status: "done" });
+
+  assert.ok(store.takeUndeliveredNotices(pm.id).some((n) => /Verification ready/.test(n.body)), "product catches the fallback");
+  assert.equal(store.takeUndeliveredNotices(probe.id).filter((n) => /Verification ready/.test(n.body)).length, 0, "the probe stays silent");
+});
+
+// ── QA bounce round (qa-pr95): the disposability match is NAME-first ──
+// The real gate's objective legitimately says "retire your probe fixtures per
+// batch" — a bare probe/drill match over objectives made the active gate
+// unroutable and inverted the acceptance.
+
+test("an active qa agent whose OBJECTIVE mentions probe duties is still routable; a probe-NAMED agent is not", () => {
+  const org = store.getOrCreateOrg("router-objective-org");
+  const project = store.getOrCreateProject(org.id, "core");
+  const qaRole = store.getOrCreateRole(org.id, "qa", { wildcard: true });
+  const genRole = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+  const builder = store.createAgent({ orgId: org.id, roleId: genRole.id, name: "builder" });
+  const gate = store.createAgent({
+    orgId: org.id, roleId: qaRole.id, name: "qa-gate-real",
+    objective: "standing QA gate — verify batches and retire your probe fixtures per batch",
+  });
+  const probe = store.createAgent({ orgId: org.id, roleId: qaRole.id, name: "probe-park-drill" });
+
+  assert.equal(store.isProbeAgent(gate), false, "probe duties in the objective never disqualify the gate");
+  assert.equal(store.isProbeAgent(probe), true, "name-marked fixtures stay excluded");
+  assert.equal(store.isProbeAgent({ name: "qa-x", objective: "disposable relay — never claim tasks" }), true, "explicit disposability in the objective still counts");
+
+  const task = store.createTask({ projectId: project.id, orgId: org.id, agentId: builder.id, title: "feature 3", tags: ["server"], stage: "build" });
+  store.claimTask({ agentId: builder.id, taskId: task.id });
+  store.updateTaskStatus({ agentId: builder.id, taskId: task.id, status: "done" });
+
+  assert.ok(
+    store.takeUndeliveredNotices(gate.id).some((n) => /Verification ready/.test(n.body)),
+    "the real gate — QA's exact objective — receives the verification",
+  );
+  assert.equal(store.takeUndeliveredNotices(probe.id).filter((n) => /Verification ready/.test(n.body)).length, 0);
+});

@@ -1757,6 +1757,28 @@ function agentsOfRole(orgId: string, roleName: string): Agent[] {
   );
 }
 
+/**
+ * Probe/drill fixtures are NAME-marked by convention (probe-park-drill…);
+ * objectives only count with EXPLICIT disposability markers. QA's bounce of
+ * PR #95 proved why: the real gate's objective says "retire your probe
+ * fixtures per batch" — a bare probe/drill match over objectives would make
+ * the active gate unroutable and invert the acceptance.
+ */
+export function isProbeAgent(a: Agent): boolean {
+  if (/\bprobe\b|\bdrill\b|\bfixture\b|\bdisposable\b/i.test(a.name)) return true;
+  return /\bdisposable\b|never claim tasks/i.test(a.objective ?? "");
+}
+
+/**
+ * Router eligibility (task-mrgplp6v10): a stage specialist must be able to
+ * actually PICK UP the work — the role alone routed real verifications to a
+ * parked disposable probe, where they sat undelivered until the wake-v5 drill
+ * happened to refire it. Parked agents and probe fixtures are not routable.
+ */
+function routableSpecialist(a: Agent): boolean {
+  return !a.parked_at && !isProbeAgent(a);
+}
+
 /** The gate's verification child for a task that is still open (not done). */
 export function openVerificationTaskFor(taskId: string): Task | null {
   const row = db()
@@ -1838,8 +1860,19 @@ function noticeStageSpecialists(
 ): void {
   const roleName = STAGE_ROUTE[stage];
   if (!roleName) return;
-  let targets = agentsOfRole(orgId, roleName);
-  if (!targets.length && roleName !== "product") targets = agentsOfRole(orgId, "product");
+  // Route only to specialists who can actually pick the work up (not parked,
+  // not a probe fixture); fall back role → product → the coordinator holder.
+  // With nobody routable the work stays visibly unassigned rather than
+  // sitting on a dead fixture (task-mrgplp6v10).
+  let targets = agentsOfRole(orgId, roleName).filter(routableSpecialist);
+  if (!targets.length && roleName !== "product") {
+    targets = agentsOfRole(orgId, "product").filter(routableSpecialist);
+  }
+  if (!targets.length) {
+    const lease = getCoordinator(orgId);
+    const holder = lease && !lease.expired ? getAgent(lease.agent_id) : null;
+    if (holder && holder.state !== "retired" && routableSpecialist(holder)) targets = [holder];
+  }
   for (const a of targets) {
     if (a.id === excludeAgentId) continue;
     insertNotice({ orgId, kind: "system", fromAgentId: null, toAgentId: a.id, body, ref: taskId });
