@@ -447,7 +447,19 @@ const TEMPLATE = `<!doctype html>
 
       <section class="view" id="v-bugs">
         <h1 class="vhead">Bugs</h1>
-        <p class="vsub">Tasks tagged <span class="tag">bug</span>.</p>
+        <p class="vsub">Tasks tagged <span class="tag">bug</span> across their lifecycle: open → in build → fixed (QA pending) → verified. Fixed bugs carry their QA evidence and, once released, the version that ships the fix.</p>
+        <div class="gwin" id="bug-filters">
+          <select id="bug-f-state" title="Filter by lifecycle state">
+            <option value="">All states</option>
+            <option value="open">Open</option>
+            <option value="in-build">In build</option>
+            <option value="bounced">Bounced</option>
+            <option value="fixed">Fixed (QA pending)</option>
+            <option value="verified">Verified</option>
+          </select>
+          <select id="bug-f-version" title="Filter by the release that ships the fix"><option value="">All versions</option></select>
+          <select id="bug-f-area" title="Filter by area tag"><option value="">All areas</option></select>
+        </div>
         <div id="bugs"></div>
       </section>
 
@@ -956,9 +968,112 @@ function renderTasks(list, agents, archived) {
   lastBoardList = list; lastBoardOpts = opts; lastArchivedList = archived || [];
   renderBoard();
 
-  var bugs = list.filter(function (t) { return (t.tags || []).indexOf("bug") >= 0; });
-  document.getElementById("c-bugs").textContent = bugs.length;
-  document.getElementById("bugs").innerHTML = bugs.map(function (t) { return taskCard(t, opts); }).join("") || '<div class="empty">No bugs — nothing tagged "bug".</div>';
+  lastBugs = list.filter(function (t) { return (t.tags || []).indexOf("bug") >= 0; });
+  document.getElementById("c-bugs").textContent = lastBugs.length;
+  renderBugs(opts);
+}
+
+// ── Bugs view v2 (task-mrgkhi765): lifecycle + fixed-in version ──
+// A bug is not just done: open → in build → fixed (merged, QA pending) →
+// VERIFIED (QA passed, evidence linked). Bounced fixes wear their bounce count.
+var lastBugs = [], TAXONOMY = { bug: 1, extension: 1, idea: 1, process: 1 };
+function bugState(t) {
+  if (t.status === "done") return t.verified_via ? "verified" : "fixed";
+  if ((t.bounce_count || 0) > 0) return "bounced";
+  if (t.owner_agent_id) return "in-build";
+  return "open";
+}
+var BUG_STATE_META = {
+  open: ["Open", "p-available"],
+  "in-build": ["In build", "p-in_progress"],
+  bounced: ["Bounced", "p-blocked"],
+  fixed: ["Fixed · QA pending", "p-claimed"],
+  verified: ["Verified", "p-done"],
+};
+var BUG_STATE_RANK = { open: 0, bounced: 1, "in-build": 2, fixed: 3, verified: 4 };
+function bugCard(t, opts) {
+  var st = bugState(t);
+  var meta = BUG_STATE_META[st];
+  var stateChip = '<span class="pill ' + meta[1] + '">' + meta[0] + (st === "bounced" ? " ×" + t.bounce_count : "") + '</span>';
+  // FIXED IN vX.Y.Z: stamped by the release train (Work board v3 part B).
+  // Data-checked — the badge appears as soon as release_version arrives.
+  var fixedIn = t.release_version
+    ? ' <span class="pill p-done" title="the npm release that ships this fix">fixed in v' + esc(String(t.release_version)) + '</span>'
+    : "";
+  var qaRef = t.verified_via || t.verification_task_id;
+  var qa = qaRef
+    ? '<div class="meta"><span class="k">QA</span> <a class="id-link" data-kind="task" data-ref="' + esc(qaRef) + '">' +
+      (t.verified_via ? "verification passed — " : "verification open — ") + esc(qaRef) + '</a></div>'
+    : "";
+  var bounce = t.last_bounce
+    ? '<div class="meta"><span class="k">bounced</span> ' + esc(t.last_bounce.from + " → " + t.last_bounce.to) +
+      (t.last_bounce.reason ? " — " + esc(t.last_bounce.reason) : "") + (t.bounce_count > 1 ? " (×" + t.bounce_count + ")" : "") + '</div>'
+    : "";
+  var owned = !!t.owner_agent_id;
+  var pr = t.pr_url ? ' · <a class="pr-link" href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">PR ↗</a>' : "";
+  var actions = owned && t.status !== "done" && !t.archived_at
+    ? '<div class="actions"><button data-act="release" data-id="' + t.id + '">Release</button>' +
+      '<select data-reassign="' + t.id + '" title="Picking an agent reassigns this task immediately">' + opts + '</select></div>'
+    : "";
+  return '<div class="card task' + (openTasks[t.id] ? " open" : "") + '" data-task-card="' + t.id + '" title="Click to ' + (openTasks[t.id] ? "collapse" : "expand") + '">' +
+    '<div class="top"><span class="name">' + esc(t.title) + '</span>' +
+    '<span>' + stateChip + fixedIn + '</span></div>' +
+    '<div>' + (t.tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("") + '</div>' +
+    '<div class="meta">' + (owned ? '<span class="k">owner</span> ' + esc(t.owner_name || t.owner_agent_id) : "unassigned") + pr +
+    (t.done_at ? ' · <span class="k">fixed</span> ' + esc((t.done_at || "").replace("T", " ").slice(0, 16)) : "") + '</div>' +
+    qa + bounce + actions + '</div>';
+}
+function renderBugs(opts) {
+  var box = document.getElementById("bugs");
+  if (!box) return;
+  var bugs = lastBugs;
+  if (!bugs.length) { box.innerHTML = '<div class="empty">No bugs — nothing tagged "bug".</div>'; return; }
+
+  // Filter options rebuild from the data (versions appear once releases stamp them).
+  var areas = {}, versions = {};
+  bugs.forEach(function (t) {
+    (t.tags || []).forEach(function (x) { if (!TAXONOMY[x]) areas[x] = 1; });
+    if (t.release_version) versions[t.release_version] = 1;
+  });
+  fillBugFilter("bug-f-area", Object.keys(areas).sort(), "All areas");
+  fillBugFilter("bug-f-version", Object.keys(versions).sort().reverse().map(function (v) { return "v" + v; }), "All versions");
+  document.getElementById("bug-f-version").style.display = Object.keys(versions).length ? "" : "none";
+
+  var fState = (document.getElementById("bug-f-state") || {}).value || "";
+  var fVersion = ((document.getElementById("bug-f-version") || {}).value || "").replace(/^v/, "");
+  var fArea = (document.getElementById("bug-f-area") || {}).value || "";
+  var shown = bugs.filter(function (t) {
+    if (fState && bugState(t) !== fState) return false;
+    if (fVersion && String(t.release_version || "") !== fVersion) return false;
+    if (fArea && (t.tags || []).indexOf(fArea) < 0) return false;
+    return true;
+  });
+
+  // Open work first (needs eyes), then the newest-fixed on top.
+  shown.sort(function (a, b) {
+    var ra = BUG_STATE_RANK[bugState(a)], rb = BUG_STATE_RANK[bugState(b)];
+    var aOpen = ra < 3, bOpen = rb < 3;
+    if (aOpen !== bOpen) return aOpen ? -1 : 1;
+    if (aOpen) return (a.created_at || "") < (b.created_at || "") ? 1 : -1;
+    return (a.done_at || a.updated_at || "") < (b.done_at || b.updated_at || "") ? 1 : -1;
+  });
+
+  var opts2 = opts !== undefined ? opts : lastBoardOpts;
+  box.innerHTML = shown.map(function (t) { return bugCard(t, opts2); }).join("") ||
+    '<div class="empty">No bugs match the current filters.</div>';
+}
+(function () {
+  ["bug-f-state", "bug-f-version", "bug-f-area"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("change", function () { renderBugs(); });
+  });
+})();
+function fillBugFilter(id, values, allLabel) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var current = el.value;
+  var html = '<option value="">' + allLabel + '</option>' + values.map(function (v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join("");
+  if (el.getAttribute("data-opts") !== html) { el.setAttribute("data-opts", html); el.innerHTML = html; el.value = current; }
 }
 
 // The lane row scrolls sideways; when lanes continue past the viewport, show the
