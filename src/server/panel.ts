@@ -65,6 +65,10 @@ export function panelHtml(): string {
           padding: 5px 10px; margin: 0 8px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); }
   .live .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
   .live.on .pip { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
+  .orgwarn { margin: 0 8px 8px; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 9px;
+             background: var(--warn-bg); color: var(--warn); font-size: 12px; line-height: 1.45; }
+  .orgwarn code { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2);
+             border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; color: var(--fg); }
 
   .nav { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
   .nav li { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer;
@@ -240,6 +244,7 @@ export function panelHtml(): string {
       <div class="brand">Lanchu <small>control &amp; trust</small></div>
       <div class="orgfield"><span>org</span><input id="org" value="lanchu" list="orglist" autocomplete="off" placeholder="pick or switch…" /><datalist id="orglist"></datalist><button id="neworg" class="neworg" title="Create a new org">+ new</button></div>
       <span id="live" class="live"><span class="pip"></span><span id="live-t">connecting</span></span>
+      <div id="orgwarn" class="orgwarn" style="display:none"></div>
       <ul class="nav" id="nav">
         <li data-view="overview">Overview</li>
         <li data-view="projects">Projects <span class="badge" id="c-projects">0</span></li>
@@ -304,9 +309,9 @@ export function panelHtml(): string {
         <h1 class="vhead">Processes</h1>
         <p class="vsub">The local server and every agent terminal — inspect logs, stop, or restart.</p>
         <h2 class="sub-h2">Server</h2>
-        <div id="server-proc"></div>
+        <div id="server-proc"><div class="empty">loading…</div></div>
         <h2 class="sub-h2">Agent terminals</h2>
-        <div id="terminals"></div>
+        <div id="terminals"><div class="empty">loading…</div></div>
       </section>
     </main>
   </div>
@@ -477,7 +482,7 @@ function renderProjectsView(projects, tasks, agents) {
     var path = p.local_path ? '<div class="meta"><span class="k">path</span> <span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(shortPath(p.local_path)) + '</span></div>' : "";
     var br = Object.keys(branches).map(function (b) { return '<span class="branch">⌥ ' + esc(b) + '</span>'; }).join(" ");
     return '<div class="card proj-card"><div class="top"><span class="name">' + esc(p.name) + '</span>' +
-      '<span class="meta"><b>' + pts.length + '</b> tasks · <b>' + done + '</b> done · <b>' + Object.keys(owners).length + '</b> agents</span></div>' +
+      '<span class="meta"><b>' + pts.length + '</b> tasks · <b>' + done + '</b> done · <b>' + Object.keys(owners).length + '</b> contributors</span></div>' +
       repo + path + (br ? '<div class="meta"><span class="k">branches</span> ' + br + '</div>' : "") + '</div>';
   }).join("") || '<div class="empty">No projects yet. Run <code>lanchu init --org ' + esc(org()) + ' --project NAME</code> in a repo, then have an agent join.</div>';
 }
@@ -494,7 +499,7 @@ function renderAgents(list) {
       '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") + ' · <b>' + a.open_tasks + '</b> open' + branch +
       (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") + '</div>' + wt +
       (a.objective ? '<div class="meta"><span class="k">obj</span> ' + esc(a.objective) + '</div>' : "") +
-      '<div class="meta">' + esc(a.last_activity || "no activity yet") + '</div>' +
+      '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") + '</div>' +
       '<div class="hint">' + (a.state === "active" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
       '<div class="meta" style="color:var(--bad)" id="retire-msg-' + a.id + '"></div></div>';
   }).join("") || '<div class="empty">No agents yet.</div>';
@@ -504,7 +509,9 @@ function taskCard(t, opts) {
   var badge = t.stale ? '<span class="pill stale-pill">stale</span>' : (t.reserved ? '<span class="pill p-available">reserved</span>' : "");
   var owned = !!t.owner_agent_id;
   var pr = t.pr_url ? ' · <a class="pr-link" href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">PR ↗</a>' : "";
-  var actions = owned
+  // Supervisor overrides only make sense on open work — a done task has nothing
+  // to release or reassign.
+  var actions = owned && t.status !== "done"
     ? '<div class="actions"><button data-act="release" data-id="' + t.id + '">Release</button>' +
       '<select data-task="' + t.id + '">' + opts + '</select>' +
       '<button data-act="reassign" data-id="' + t.id + '">Reassign</button></div>'
@@ -717,6 +724,12 @@ function refresh() {
       if (sig === lastSig) return; // nothing changed — keep the DOM (and any open select) intact
       lastSig = sig;
       renderOrgOptions(r[4]);
+      // An unknown org renders exactly like a real-but-empty one, so say so —
+      // and point at the terminal, where orgs are actually created.
+      var known = (r[4] || []).some(function (o) { return o.name === org(); });
+      var ow = document.getElementById("orgwarn");
+      ow.style.display = known ? "none" : "block";
+      if (!known) ow.innerHTML = 'Org “' + esc(org()) + '” doesn\\'t exist. Orgs are created from the terminal — run <code>lanchu</code> in your repo.';
       renderProjects(r[0].projects);
       renderProjectsView(r[0].projects, r[0].tasks, r[0].agents);
       renderAgents(r[0].agents);

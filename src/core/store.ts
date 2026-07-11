@@ -812,6 +812,7 @@ export function releaseTask(input: {
       "UPDATE task SET status = 'available', owner_agent_id = NULL, updated_at = ? WHERE id = ?",
     )
     .run(nowIso(), input.taskId);
+  if (input.agentId) touchActivity(input.agentId, `released ${task.id}`);
   recordEvent({
     org_id: orgId,
     project_id: task.project_id,
@@ -1397,11 +1398,16 @@ function ageHours(iso: string | null): number {
 export function boardSnapshot(orgId: string): BoardSnapshot {
   // Presence is an open MCP transport, falling back to recency of activity so
   // it survives a server restart. Retired agents stay retired.
-  const rawAgents = listAgents(orgId)
+  const allAgents = listAgents(orgId);
+  const rawAgents = allAgents
     .filter((a) => a.state !== "retired")
     .map((a) => ({ ...a, state: (isPresent(a) ? "active" : "idle") as AgentState }));
   const stateById = new Map(rawAgents.map((a) => [a.id, a.state] as const));
-  const nameById = new Map(rawAgents.map((a) => [a.id, a.name] as const));
+  // Resolve owner names across ALL agents — a task finished by a since-retired
+  // agent should still show its name, not a raw id.
+  const nameById = new Map(
+    allAgents.map((a) => [a.id, a.state === "retired" ? `${a.name} (retired)` : a.name] as const),
+  );
   const roleName = new Map<string, string | null>();
   const projects = db()
     .prepare("SELECT id FROM project WHERE org_id = ?")
