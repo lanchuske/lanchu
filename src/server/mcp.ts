@@ -946,8 +946,9 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "7. Talk to teammates with message_send (audit-logged; the supervisor sees everything). Notices arrive inside your tool results — act on them and message_ack.",
           "8. If a task_claim result carries a `conflict` block, another live agent is on that surface: STOP and ask your user — stop, hand off, or park it. An `overlap` field on task_create is informational only: creating a task is fine, just route it with the overlap in mind.",
           "9. Verifying a feature ALWAYS ends with a regression test left behind (a test-only PR is fine) and a test_report of the run — the registry, not your context, is the org's memory of what is covered. Mark coverage you identified but didn't write yet as status 'planned' so the gap stays visible.",
+          "10. Idle with an empty queue means STAND BY, not goodbye: durable agents are the product's core promise. NEVER retire yourself off an ambiguous 'all clear' — retirement is the coordinator's or supervisor's call (under an active coordinator lease a self-retire only files a request).",
         ],
-        rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc.",
+        rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc. Idle means stand by — never self-retire unless explicitly told.",
         dogfooding: {
           duty:
             "While working, watch for friction in Lanchu itself — broken behavior, features that fall short, missing capabilities, unclear docs, wasted tokens — and file it as a WELL-FORMED backlog task with evidence (repro, expected vs actual). Message product when unsure how to scope. Filing beats suffering silently: the backlog is how friction gets fixed.",
@@ -1127,12 +1128,39 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "session_leave",
     {
       title: "End session",
-      description: "Ends your session; the agent goes idle (it is not deleted).",
+      description:
+        "Ends your session; the agent goes idle (it is not deleted, and it does NOT retire). " +
+        "Idle with an empty queue means STAND BY — durable agents are the point; never retire yourself unless the coordinator or supervisor explicitly says so.",
       inputSchema: {},
     },
     async () => {
       store.endSessionsForAgent(ctx.agentId);
       return text({ ok: true, state: "idle" });
+    },
+  );
+
+  registerTool(
+    "retire_resolve",
+    {
+      title: "Resolve a retirement request",
+      description:
+        "Coordinator/product only: approve or deny a teammate's pending retirement request " +
+        "(self-retirement under an active coordinator lease becomes a request instead of executing). " +
+        "Deny keeps the teammate and tells them to stand by.",
+      inputSchema: {
+        agent: z.string().describe("Name of the agent whose retirement is pending"),
+        approve: z.boolean(),
+        note: z.string().optional(),
+      },
+    },
+    async ({ agent, approve, note }) => {
+      try {
+        const target = store.findAgentByName(ctx.orgId, agent);
+        if (!target) return fail(new Error(`no agent named '${agent}'`));
+        return text(store.resolveRetirement({ agentId: target.id, byAgentId: ctx.agentId, approve, note }));
+      } catch (err) {
+        return fail(err);
+      }
     },
   );
 
