@@ -37,7 +37,7 @@ function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
 }
 /** Flags that take no value; without this list positional() would swallow the token after them. */
-const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge", "no-isolate", "no-wildcard", "no-quota", "no-model"]);
+const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge", "no-isolate", "no-wildcard", "no-quota", "no-model", "force"]);
 function positional(): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -602,13 +602,22 @@ async function cmdStats(): Promise<void> {
 }
 
 async function cmdRetire(agentId: string): Promise<void> {
-  if (!agentId) return console.log("usage: lanchu retire <agentId>");
+  if (!agentId) return console.log("usage: lanchu retire <agentId> [--force]");
   await orgOf();
-  const r = (await post("/agent/retire", { agentId })) as {
+  const r = (await post("/agent/retire", { agentId, force: hasFlag("force") })) as {
     retired: boolean;
+    requested?: boolean;
+    coordinator?: string;
     blockedBy: { id: string; title: string }[];
   };
   if (r.retired) return console.log(`Retired ${agentId}.`);
+  if (r.requested) {
+    console.log(
+      `A coordinator lease is active — retirement filed as a REQUEST for '${r.coordinator}' to resolve.`,
+    );
+    console.log("If you are the human supervisor and mean it, re-run with --force.");
+    return;
+  }
   console.log("Blocked — open tasks must be handed off first:");
   for (const t of r.blockedBy) console.log(`  • ${t.id}  ${t.title}`);
   console.log("\nUse `lanchu task reassign <id> <agent>` or `lanchu task release <id>`.");
@@ -1142,7 +1151,7 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu agents --available", "installed agent runtimes + idle teammates to reuse"],
       ['lanchu spawn ["<objective>"] [--role r] [--model m] [--no-isolate] [--dry]', "new agent in a new terminal, in its own git worktree + branch"],
       ["lanchu tile [--dry]", "arrange agent terminals into a mosaic"],
-      ["lanchu retire <agentId>", "safe retirement (handoff enforced)"],
+      ["lanchu retire <agentId> [--force]", "safe retirement (handoff enforced; --force = supervisor override of the coordinator gate)"],
       ["lanchu task release <id>", "supervisor override: release a task"],
       ["lanchu task reassign <id> <agent>", "supervisor override: reassign a task"],
       ["lanchu task archive <id> [reason…]", "supervisor override: archive a task (terminal, soft — audit stays)"],

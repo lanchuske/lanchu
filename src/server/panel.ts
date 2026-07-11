@@ -586,9 +586,17 @@ function updateContextCmds() {
 }
 
 function retire(id) {
-  post("/agent/retire", { agentId: id }).then(function (r) {
+  // The panel is the human supervisor's surface: a click IS the confirmation,
+  // so it forces through the coordinator retirement gate.
+  post("/agent/retire", { agentId: id, force: true }).then(function (r) {
     var el = document.getElementById("retire-msg-" + id);
-    if (el && r && r.retired === false) el.textContent = "blocked — " + r.blockedBy.length + " open task(s) to hand off first";
+    if (el && r && r.retired === false) el.textContent = "blocked — " + (r.blockedBy || []).length + " open task(s) to hand off first";
+  });
+}
+function resolveRetire(id, approve) {
+  post("/agent/retire/resolve", { agentId: id, approve: approve }).then(function (r) {
+    if (r && r.error) { toast(r.error, true); return; }
+    toast(approve ? "Retirement approved" : "Retirement denied — the agent stands by");
   });
 }
 function reveal(id, name) {
@@ -648,6 +656,8 @@ document.addEventListener("click", function (e) {
   if (b) {
     var act = b.getAttribute("data-act"), id = b.getAttribute("data-id"), nm = b.getAttribute("data-name") || "agent";
     if (act === "retire") retire(id);
+    else if (act === "retire-approve") resolveRetire(id, true);
+    else if (act === "retire-deny") resolveRetire(id, false);
     else if (act === "release") post("/task/release", { taskId: id });
     else if (act === "focus-term") reveal(id, nm);
     else if (act === "logs") toggleLogs(id);
@@ -1440,8 +1450,16 @@ function renderStats(board, audit) {
 // no agents and no tasks is the "phantom org" case (a name that never matched a
 // real folder); an idle agent with nothing assigned holds a seat doing nothing.
 // Cleanup reuses the actions that already exist: remove org / retire agent.
-function renderAttention(orgs, agents) {
+function renderAttention(orgs, agents, retirements) {
   var items = [];
+  // Retirement gate: self-retire requests wait here for the human/coordinator.
+  (retirements || []).forEach(function (r) {
+    items.push('<div class="card"><div class="top"><span class="name">' + esc(r.agent_name || r.agent_id) + ' wants to retire</span>' +
+      '<span><button data-act="retire-deny" data-id="' + esc(r.agent_id) + '">Deny — stand by</button> ' +
+      '<button class="danger" data-act="retire-approve" data-id="' + esc(r.agent_id) + '">Approve</button></span></div>' +
+      '<div class="meta">Requested ' + esc((r.requested_at || "").replace("T", " ").slice(0, 16)) +
+      ' under an active coordinator lease. Idle agents stand by by default — approve only if the team should really shrink.</div></div>');
+  });
   (orgs || []).forEach(function (o) {
     if (o.agents === 0 && o.tasks === 0) {
       items.push('<div class="card"><div class="top"><span class="name">org “' + esc(o.name) + '”</span>' +
@@ -1587,7 +1605,7 @@ function refresh() {
       renderRoles(r[1], r[0].agents); renderDocs(r[2]); renderAudit(r[3]); renderMemory(r[5]); renderTests(r[6]);
       renderStats(r[0], r[3]);
       renderOverview(r[0], r[3]);
-      renderAttention(r[4], r[0].agents);
+      renderAttention(r[4], r[0].agents, r[0].retirements);
       updateContextCmds();
     }).catch(function () {}).then(function () { busy = false; });
 }

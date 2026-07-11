@@ -202,10 +202,19 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   "Reserved" (idle) is **not** a status: it's a `claimed`/`in_progress` task whose owner
   is `idle`.
 - **event.type:** `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
-  `agent.retired` · `task.created` · `task.claimed` · `task.released` · `task.started` ·
+  `agent.retired` · `retire.requested` · `retire.approved` · `retire.denied` ·
+  `task.created` · `task.claimed` · `task.released` · `task.started` ·
   `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` ·
   `task.stage_changed` · `task.bounced` · `task.archived` · `task.superseded` ·
   `task.handoff` · `doc.created` · `doc.updated` · `doc.archived` · `scope.violation`.
+- **Retirement gate:** while an org's coordinator lease is live, a non-forced
+  `retireAgent` of anyone but the lease holder files `retire.requested` (notice to the
+  coordinator; visible in the panel's Needs-attention) instead of executing. The
+  coordinator/product resolves it with `retire_resolve` (MCP) — or the supervisor with
+  `POST /agent/retire/resolve`, the panel buttons, or `lanchu retire <id> --force`.
+  Deny keeps the agent and tells it to stand by. No active lease = direct retirement
+  (solo orgs). Evidence: 2026-07-11, four agents self-retired in 9s off an ambiguous
+  "all clear" broadcast.
 - **doc.lifecycle (taxonomy v2):** `living` (the org's constitution — Vision, Roadmap,
   Designs; curated, updated in place, shown first) · `record` (immutable point-in-time
   evidence — QA batch reports, incidents, feedback logs; dated, folded away in the

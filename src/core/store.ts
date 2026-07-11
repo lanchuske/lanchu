@@ -2562,10 +2562,56 @@ export function openTasksForAgent(agentId: string): Task[] {
 
 // ───────────────────────── safe retirement ─────────────────────────
 
-export function retireAgent(agentId: string): { retired: boolean; blockedBy: Task[] } {
+export interface RetireResult {
+  retired: boolean;
+  blockedBy: Task[];
+  /** Gate outcome: the retirement became a request awaiting the coordinator/supervisor. */
+  requested?: boolean;
+  coordinator?: string;
+}
+
+/**
+ * Retirement gate (task-mrg6nttd6): on 2026-07-11 an ambiguous "all clear —
+ * stand by" broadcast made all four network agents retire THEMSELVES within
+ * 9 seconds, dissolving a standing team nobody asked to dissolve. While a
+ * live coordinator lease is active, a non-override retirement of anyone but
+ * the lease holder becomes a REQUEST the coordinator (or the supervisor, via
+ * force) resolves — audited retire.requested/approved/denied. With no active
+ * lease (solo orgs), direct retirement still works.
+ */
+export function retireAgent(agentId: string, opts: { override?: boolean } = {}): RetireResult {
   const open = openTasksForAgent(agentId);
   if (open.length > 0) return { retired: false, blockedBy: open };
   const agent = getAgent(agentId);
+
+  if (!opts.override && agent && agent.state !== "retired") {
+    const lease = getCoordinator(agent.org_id);
+    if (lease && !lease.expired && lease.agent_id !== agentId) {
+      if (!pendingRetirementFor(agentId)) {
+        recordEvent({
+          org_id: agent.org_id,
+          type: "retire.requested",
+          actor_agent_id: agentId,
+          subject_kind: "agent",
+          subject_id: agentId,
+          data: { agent: agent.name, coordinator: lease.agent_name },
+        });
+        insertNotice({
+          orgId: agent.org_id,
+          kind: "system",
+          fromAgentId: null,
+          toAgentId: lease.agent_id,
+          body:
+            `Retirement requested for ${agent.name} — you hold the coordinator lease, so you decide: ` +
+            `resolve it with retire_resolve (approve or deny). Idle agents STAND BY by default; ` +
+            `the team only shrinks on purpose.`,
+          ref: agentId,
+        });
+      }
+      return { retired: false, blockedBy: [], requested: true, coordinator: lease.agent_name };
+    }
+  }
+
   endSessionsForAgent(agentId);
   setAgentState(agentId, "retired");
   // Nothing is addressed to the dead: pending notices would otherwise keep
@@ -2590,6 +2636,105 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
     releaseCoordinatorIfHeld(agent.org_id, agentId, "holder retired");
   }
   return { retired: true, blockedBy: [] };
+}
+
+export interface RetirementRequest {
+  agent_id: string;
+  agent_name: string | null;
+  requested_at: string;
+}
+
+/** The open retire.requested for one agent, if any (no later resolution, agent still alive). */
+function pendingRetirementFor(agentId: string): RetirementRequest | null {
+  const row = db()
+    .prepare(
+      `SELECT e.subject_id AS agent_id, MAX(e.created_at) AS requested_at
+       FROM event e
+       WHERE e.type = 'retire.requested' AND e.subject_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM event r
+           WHERE r.subject_id = e.subject_id AND r.id > e.id
+             AND r.type IN ('retire.approved','retire.denied','agent.retired')
+         )
+       GROUP BY e.subject_id`,
+    )
+    .get(agentId) as { agent_id: string; requested_at: string } | undefined;
+  if (!row) return null;
+  const agent = getAgent(row.agent_id);
+  if (!agent || agent.state === "retired") return null;
+  return { agent_id: row.agent_id, agent_name: agent.name, requested_at: row.requested_at };
+}
+
+/** Open retirement requests for the panel's Needs-attention (newest first). */
+export function pendingRetirements(orgId: string): RetirementRequest[] {
+  const rows = db()
+    .prepare(
+      `SELECT e.subject_id AS agent_id, MAX(e.created_at) AS requested_at
+       FROM event e
+       WHERE e.org_id = ? AND e.type = 'retire.requested'
+         AND NOT EXISTS (
+           SELECT 1 FROM event r
+           WHERE r.subject_id = e.subject_id AND r.id > e.id
+             AND r.type IN ('retire.approved','retire.denied','agent.retired')
+         )
+       GROUP BY e.subject_id ORDER BY requested_at DESC`,
+    )
+    .all(orgId) as { agent_id: string; requested_at: string }[];
+  return rows
+    .map((r) => ({ ...r, agent: getAgent(r.agent_id) }))
+    .filter((r) => r.agent && r.agent.state !== "retired")
+    .map((r) => ({ agent_id: r.agent_id, agent_name: r.agent!.name, requested_at: r.requested_at }));
+}
+
+/**
+ * The coordinator (or product, or the supervisor via override) resolves a
+ * pending retirement: approve retires for real; deny keeps the teammate and
+ * tells them to stand by. Audited either way.
+ */
+export function resolveRetirement(input: {
+  agentId: string;
+  byAgentId?: string | null;
+  approve: boolean;
+  note?: string;
+  override?: boolean;
+}): RetireResult {
+  const target = getAgent(input.agentId);
+  if (!target) throw new Error("unknown agent");
+  if (!input.override) {
+    const actor = input.byAgentId ? getAgent(input.byAgentId) : null;
+    if (!actor) throw new Error("unknown agent");
+    const lease = getCoordinator(actor.org_id);
+    const isCoordinator = !!lease && !lease.expired && lease.agent_id === actor.id;
+    const isProduct = getRole(actor.role_id)?.name === "product";
+    if (!isCoordinator && !isProduct) {
+      throw new ScopeError(
+        "Resolving a retirement needs the coordinator lease, the product role, or the supervisor.",
+      );
+    }
+  }
+
+  recordEvent({
+    org_id: target.org_id,
+    type: input.approve ? "retire.approved" : "retire.denied",
+    actor_agent_id: input.byAgentId ?? null,
+    subject_kind: "agent",
+    subject_id: target.id,
+    data: { agent: target.name, ...(input.note ? { note: input.note } : {}) },
+  });
+  if (!input.approve) {
+    insertNotice({
+      orgId: target.org_id,
+      kind: "system",
+      fromAgentId: input.byAgentId ?? null,
+      toAgentId: target.id,
+      body:
+        `Your retirement was denied${input.note ? `: ${input.note}` : ""}. ` +
+        `Stand by — idle with an empty queue means available, not done.`,
+      ref: target.id,
+    });
+    return { retired: false, blockedBy: [] };
+  }
+  return retireAgent(target.id, { override: true });
 }
 
 // ───────────────────────── coordinator lease ─────────────────────────
@@ -3185,6 +3330,8 @@ export interface BoardSnapshot {
   projects: ProjectRow[];
   landing: LandingSlot[];
   release: ReleasePressure[];
+  /** Self-retirements awaiting the coordinator/supervisor (Needs attention). */
+  retirements: RetirementRequest[];
 }
 
 export interface AuditEvent {
@@ -3864,6 +4011,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
     projects: listProjects(orgId),
     landing: projects.flatMap((p) => landingQueue(p.id)),
     release: projects.flatMap((p) => releasePressureOf(p.id) ?? []),
+    retirements: pendingRetirements(orgId),
   };
 }
 

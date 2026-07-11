@@ -98,7 +98,7 @@ export const COMMANDS: CommandSpec[] = [
     { name: "dry", desc: "print the plan without executing" },
   ] },
   { name: "tile", desc: "arrange agent terminals into a mosaic", flags: [{ name: "dry", desc: "print the plan" }] },
-  { name: "retire", desc: "safe agent retirement (handoff enforced)", arg: "agent-ids" },
+  { name: "retire", desc: "safe agent retirement (handoff enforced)", arg: "agent-ids", flags: [{ name: "force", desc: "supervisor override of the coordinator retirement gate" }] },
   { name: "task", desc: "supervisor overrides on tasks", sub: [
     { name: "release", desc: "release a task back to the pool", arg: "tasks" },
     { name: "reassign", desc: "reassign a task to an agent", arg: "tasks" },

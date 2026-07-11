@@ -673,13 +673,30 @@ export function createServer(): http.Server {
       }
 
       // ── supervisor actions ──
+      // Retirement gate: without force, an active coordinator lease turns the
+      // retire into a request the coordinator resolves (an ambiguous idle
+      // broadcast once dissolved the whole team — never again). force = the
+      // human supervisor's explicit confirmation (panel button, CLI --force).
       if (url.pathname === "/agent/retire" && req.method === "POST") {
-        const body = (await readJson(req)) as { agentId: string };
+        const body = (await readJson(req)) as { agentId: string; force?: boolean };
         const agent = store.getAgent(body.agentId);
-        const result = store.retireAgent(body.agentId);
+        const result = store.retireAgent(body.agentId, { override: body.force === true });
         // Prune the retired agent's isolated worktree; its branch stays for PR/merge.
         const worktree = result.retired ? removeAgentWorktree(agent?.worktree) : undefined;
         return sendJson(res, 200, { ...result, worktree });
+      }
+      // Resolve a pending retirement request (panel Needs-attention buttons).
+      if (url.pathname === "/agent/retire/resolve" && req.method === "POST") {
+        const body = (await readJson(req)) as { agentId: string; approve: boolean; note?: string };
+        if (!body?.agentId) return sendJson(res, 400, { error: "agentId required" });
+        try {
+          const agent = store.getAgent(body.agentId);
+          const result = store.resolveRetirement({ agentId: body.agentId, approve: body.approve === true, note: body.note, override: true });
+          const worktree = result.retired ? removeAgentWorktree(agent?.worktree) : undefined;
+          return sendJson(res, 200, { ...result, worktree });
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
       }
       if (url.pathname === "/agent/reveal" && req.method === "POST") {
         const body = (await readJson(req)) as { agentId: string };
