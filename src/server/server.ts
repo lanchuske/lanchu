@@ -426,7 +426,10 @@ export function createServer(): http.Server {
         if (!orgName) return sendJson(res, 400, { error: "org required" });
         const org = store.getOrgByName(orgName);
         if (!org) return sendJson(res, 200, []);
-        return sendJson(res, 200, store.listRoles(org.id));
+        // Budgets MVP: ship consumption with each role so the panel can show
+        // used vs quota without a second round-trip.
+        const roles = store.listRoles(org.id).map((r) => ({ ...r, used_tokens: store.roleTokenUsage(r.id) }));
+        return sendJson(res, 200, roles);
       }
 
       if (url.pathname === "/api/roles" && req.method === "POST") {
@@ -444,15 +447,20 @@ export function createServer(): http.Server {
           rmTags?: string[];
           tags?: string[];
           wildcard?: boolean;
+          quota?: number | null;
         };
         if (!body?.org || !body?.name) return sendJson(res, 400, { error: "org and name required" });
         const org = store.getOrgByName(body.org);
         if (!org) return sendJson(res, 404, { error: `no org named '${body.org}'` });
+        if (body.quota !== undefined && body.quota !== null && (!Number.isFinite(body.quota) || body.quota < 0)) {
+          return sendJson(res, 400, { error: "quota must be a non-negative number or null" });
+        }
         const role = store.updateRole(org.id, body.name, {
           addTags: body.addTags,
           rmTags: body.rmTags,
           tags: body.tags,
           wildcard: body.wildcard,
+          quota: body.quota,
         });
         if (!role) return sendJson(res, 404, { error: `no role named '${body.name}' in org '${body.org}'` });
         return sendJson(res, 200, role);

@@ -7,6 +7,7 @@ import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
 import { isAgentLive } from "./presence.js";
 import { loadSkillDefinition } from "./skills_loader.js";
 import {
+  QuotaError,
   ScopeError,
   type Agent,
   type AgentState,
@@ -201,13 +202,18 @@ export function captureWorkspace(projectId: string, agentId: string, cwd?: strin
 
 // ───────────────────────── roles ─────────────────────────
 
-function loadRole(row: {
+const ROLE_COLS = "id, org_id, name, is_wildcard, token_quota, created_at";
+
+interface RoleRow {
   id: string;
   org_id: string;
   name: string;
   is_wildcard: number;
+  token_quota: number | null;
   created_at: string;
-}): Role {
+}
+
+function loadRole(row: RoleRow): Role {
   const tags = db()
     .prepare("SELECT tag FROM role_tag WHERE role_id = ?")
     .all(row.id) as { tag: string }[];
@@ -217,6 +223,7 @@ function loadRole(row: {
     name: row.name,
     is_wildcard: row.is_wildcard === 1,
     allowed_tags: tags.map((t) => t.tag),
+    token_quota: row.token_quota ?? null,
     created_at: row.created_at,
   };
 }
@@ -227,10 +234,8 @@ export function getOrCreateRole(
   opts: { wildcard?: boolean; tags?: string[] } = {},
 ): Role {
   const existing = db()
-    .prepare("SELECT id, org_id, name, is_wildcard, created_at FROM role WHERE org_id = ? AND name = ?")
-    .get(orgId, name) as
-    | { id: string; org_id: string; name: string; is_wildcard: number; created_at: string }
-    | undefined;
+    .prepare(`SELECT ${ROLE_COLS} FROM role WHERE org_id = ? AND name = ?`)
+    .get(orgId, name) as RoleRow | undefined;
   if (existing) return loadRole(existing);
 
   const id = uuid();
@@ -261,21 +266,26 @@ export function defineRole(
 
 /**
  * Edit an existing role's scope: add/remove tags, replace the whole tag set,
- * or toggle wildcard. Returns null if the role doesn't exist (editing never
- * creates roles — that's defineRole's job). Governance surface: every change
- * is audit-logged as role.updated with the before/after scope.
+ * toggle wildcard, or set/clear the token quota (quota: null clears it).
+ * Returns null if the role doesn't exist (editing never creates roles —
+ * that's defineRole's job). Governance surface: every change is audit-logged
+ * as role.updated with the before/after scope.
  */
 export function updateRole(
   orgId: string,
   name: string,
-  opts: { addTags?: string[]; rmTags?: string[]; tags?: string[]; wildcard?: boolean },
+  opts: {
+    addTags?: string[];
+    rmTags?: string[];
+    tags?: string[];
+    wildcard?: boolean;
+    quota?: number | null;
+  },
   actorAgentId?: string | null,
 ): Role | null {
   const row = db()
-    .prepare("SELECT id, org_id, name, is_wildcard, created_at FROM role WHERE org_id = ? AND name = ?")
-    .get(orgId, name) as
-    | { id: string; org_id: string; name: string; is_wildcard: number; created_at: string }
-    | undefined;
+    .prepare(`SELECT ${ROLE_COLS} FROM role WHERE org_id = ? AND name = ?`)
+    .get(orgId, name) as RoleRow | undefined;
   if (!row) return null;
 
   const before = loadRole(row);
@@ -294,6 +304,9 @@ export function updateRole(
   if (opts.wildcard !== undefined) {
     db().prepare("UPDATE role SET is_wildcard = ? WHERE id = ?").run(opts.wildcard ? 1 : 0, before.id);
   }
+  if (opts.quota !== undefined) {
+    db().prepare("UPDATE role SET token_quota = ? WHERE id = ?").run(opts.quota, before.id);
+  }
 
   const after = getRole(before.id)!;
   recordEvent({
@@ -304,8 +317,8 @@ export function updateRole(
     subject_id: after.id,
     data: {
       role: after.name,
-      before: { wildcard: before.is_wildcard, tags: before.allowed_tags },
-      after: { wildcard: after.is_wildcard, tags: after.allowed_tags },
+      before: { wildcard: before.is_wildcard, tags: before.allowed_tags, quota: before.token_quota },
+      after: { wildcard: after.is_wildcard, tags: after.allowed_tags, quota: after.token_quota },
     },
   });
   return after;
@@ -313,23 +326,15 @@ export function updateRole(
 
 export function getRole(roleId: string): Role | null {
   const row = db()
-    .prepare("SELECT id, org_id, name, is_wildcard, created_at FROM role WHERE id = ?")
-    .get(roleId) as
-    | { id: string; org_id: string; name: string; is_wildcard: number; created_at: string }
-    | undefined;
+    .prepare(`SELECT ${ROLE_COLS} FROM role WHERE id = ?`)
+    .get(roleId) as RoleRow | undefined;
   return row ? loadRole(row) : null;
 }
 
 export function listRoles(orgId: string): Role[] {
   const rows = db()
-    .prepare("SELECT id, org_id, name, is_wildcard, created_at FROM role WHERE org_id = ? ORDER BY name")
-    .all(orgId) as {
-    id: string;
-    org_id: string;
-    name: string;
-    is_wildcard: number;
-    created_at: string;
-  }[];
+    .prepare(`SELECT ${ROLE_COLS} FROM role WHERE org_id = ? ORDER BY name`)
+    .all(orgId) as unknown as RoleRow[];
   return rows.map(loadRole);
 }
 
@@ -338,6 +343,40 @@ export function roleCoversTags(role: Role, tags: string[]): boolean {
   if (role.is_wildcard) return true;
   const allowed = new Set(role.allowed_tags);
   return tags.every((t) => allowed.has(t));
+}
+
+/**
+ * Tokens consumed by a role: the sum of what its agents self-reported via
+ * task_update (event.tokens). Self-reported MVP — true metering needs an LLM
+ * proxy and is explicitly out of scope (see ARCHITECTURE.md §8).
+ */
+export function roleTokenUsage(roleId: string): number {
+  const r = db()
+    .prepare(
+      `SELECT COALESCE(SUM(e.tokens), 0) AS used
+       FROM event e JOIN agent a ON a.id = e.actor_agent_id
+       WHERE a.role_id = ? AND e.tokens IS NOT NULL`,
+    )
+    .get(roleId) as { used: number };
+  return Number(r.used);
+}
+
+export interface RoleBudget {
+  quota: number;
+  used: number;
+  /** used/quota, capped at 1 in the panel but raw here. */
+  ratio: number;
+  exhausted: boolean;
+  /** ≥ 80% consumed — surface a warning before the hard block hits. */
+  nearing: boolean;
+}
+
+/** Budget snapshot for a role, or null when it has no quota set. */
+export function roleBudget(role: Role): RoleBudget | null {
+  if (role.token_quota === null || role.token_quota <= 0) return null;
+  const used = roleTokenUsage(role.id);
+  const ratio = used / role.token_quota;
+  return { quota: role.token_quota, used, ratio, exhausted: used >= role.token_quota, nearing: ratio >= 0.8 };
 }
 
 // ───────────────────────── agents ─────────────────────────
@@ -758,6 +797,26 @@ export function claimTask(input: {
     });
     throw new ScopeError(
       `Role '${role.name}' cannot claim task ${task.id} [${task.tags.join(", ")}].`,
+    );
+  }
+
+  // Budget gate (self-reported MVP): a role whose token quota is exhausted
+  // cannot take on new work until the quota is raised or usage is reviewed.
+  const budget = role ? roleBudget(role) : null;
+  if (role && budget?.exhausted) {
+    recordEvent({
+      org_id: agent.org_id,
+      project_id: task.project_id,
+      type: "quota.exceeded",
+      actor_agent_id: input.agentId,
+      subject_kind: "task",
+      subject_id: task.id,
+      outcome: "rejected",
+      data: { action: "claim", role: role.name, used: budget.used, quota: budget.quota },
+    });
+    throw new QuotaError(
+      `Role '${role.name}' has exhausted its token quota (${budget.used}/${budget.quota} self-reported). ` +
+        `Claim blocked — the supervisor can raise it: lanchu roles edit ${role.name} --quota <n>.`,
     );
   }
 

@@ -61,6 +61,7 @@ CREATE TABLE role (
   org_id      TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,
   is_wildcard INTEGER NOT NULL DEFAULT 0,   -- 1 = can touch any tag ('*')
+  token_quota INTEGER,                      -- self-reported token budget for the role; NULL = unlimited
   created_at  TEXT NOT NULL,
   UNIQUE (org_id, name)
 );

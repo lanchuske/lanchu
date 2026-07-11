@@ -11,7 +11,8 @@ process.env.LANCHU_STATE_DIR = dir;
 process.env.LANCHU_STALE_HOURS = "24";
 
 const store = await import("../dist/core/store.js");
-const { ScopeError } = await import("../dist/core/types.js");
+const storeTypes = await import("../dist/core/types.js");
+const { ScopeError } = storeTypes;
 const { getContext } = await import("../dist/server/context.js");
 const presence = await import("../dist/core/presence.js");
 
@@ -342,4 +343,48 @@ test("updateRole removes tags, replaces the set, toggles wildcard, and never cre
 
   assert.equal(store.updateRole(org.id, "ghost", { addTags: ["x"] }), null);
   assert.equal(store.listRoles(org.id).some((r) => r.name === "ghost"), false);
+});
+
+test("budgets MVP: self-reported usage accrues per role and exhausted quota blocks claims", () => {
+  const { org, project, role, agent } = setup("acme-budget");
+  const { QuotaError } = storeTypes;
+
+  // No quota → no budget, claims flow.
+  assert.equal(store.roleBudget(role), null);
+
+  store.updateRole(org.id, role.name, { quota: 1000 });
+  const mk = (title) =>
+    store.createTask({ projectId: project.id, orgId: org.id, agentId: agent.id, title, tags: ["ui"] });
+
+  // Self-report 850 tokens on a first task (tokens ride task_update events).
+  const t1 = mk("first");
+  store.claimTask({ agentId: agent.id, taskId: t1.id });
+  store.updateTaskStatus({ agentId: agent.id, taskId: t1.id, status: "done", tokens: 850 });
+  assert.equal(store.roleTokenUsage(role.id), 850);
+
+  // 85% consumed → nearing, not exhausted; claims still allowed.
+  const b1 = store.roleBudget(store.getRole(role.id));
+  assert.equal(b1.nearing, true);
+  assert.equal(b1.exhausted, false);
+  const t2 = mk("second");
+  store.claimTask({ agentId: agent.id, taskId: t2.id });
+  store.updateTaskStatus({ agentId: agent.id, taskId: t2.id, status: "done", tokens: 200 });
+
+  // Over quota → claim blocked with QuotaError + audited quota.exceeded.
+  const t3 = mk("third");
+  assert.throws(() => store.claimTask({ agentId: agent.id, taskId: t3.id }), QuotaError);
+  assert.equal(store.getTask(t3.id).status, "available", "blocked claim leaves the task available");
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "quota.exceeded");
+  assert.ok(ev, "quota.exceeded must be audited");
+  assert.equal(ev.outcome, "rejected");
+  assert.equal(ev.data.used, 1050);
+  assert.equal(ev.data.quota, 1000);
+
+  // Raising the quota unblocks; clearing it removes the budget entirely.
+  store.updateRole(org.id, role.name, { quota: 5000 });
+  const claimed = store.claimTask({ agentId: agent.id, taskId: t3.id });
+  assert.equal(claimed.owner_agent_id, agent.id);
+  store.updateRole(org.id, role.name, { quota: null });
+  assert.equal(store.getRole(role.id).token_quota, null);
+  assert.equal(store.roleBudget(store.getRole(role.id)), null);
 });

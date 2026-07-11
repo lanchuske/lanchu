@@ -4,7 +4,7 @@ import { z } from "zod";
 import { baseUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import * as store from "../core/store.js";
-import { ScopeError } from "../core/types.js";
+import { QuotaError, ScopeError } from "../core/types.js";
 import { ensureAgentWorktree } from "../core/worktree.js";
 import { spawnTerminal, tileTerminals } from "./cockpit.js";
 import { putContext, type SessionContext } from "./context.js";
@@ -44,7 +44,8 @@ function conflictPayload(conflicts: import("../core/store.js").WorkConflict[]) {
 
 function fail(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
-  const kind = err instanceof ScopeError ? "scope_violation" : "error";
+  const kind =
+    err instanceof ScopeError ? "scope_violation" : err instanceof QuotaError ? "quota_exceeded" : "error";
   return {
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify({ kind, message }) }],
@@ -313,11 +314,25 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           taskId: task.id,
           tags: task.tags,
         });
+        // Budget heads-up (self-reported MVP): warn before the hard block hits.
+        const me = store.getAgent(ctx.agentId);
+        const myRole = me ? store.getRole(me.role_id) : null;
+        const budget = myRole ? store.roleBudget(myRole) : null;
         // Deliver the right "hat": skills matching this task's type (tags).
         return text({
           ...task,
           applicable_skills: store.skillsForTags(ctx.orgId, task.tags),
           ...(conflicts.length ? { conflict: conflictPayload(conflicts) } : {}),
+          ...(budget?.nearing
+            ? {
+                budget_warning: {
+                  role: myRole!.name,
+                  used_tokens: budget.used,
+                  token_quota: budget.quota,
+                  message: `Your role has consumed ${Math.round(budget.ratio * 100)}% of its token quota — claims are blocked at 100%. Keep reporting tokens on task_update.`,
+                },
+              }
+            : {}),
         });
       } catch (err) {
         return fail(err);

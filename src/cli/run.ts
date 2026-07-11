@@ -34,7 +34,7 @@ function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
 }
 /** Flags that take no value; without this list positional() would swallow the token after them. */
-const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge", "no-isolate"]);
+const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge", "no-isolate", "no-wildcard", "no-quota"]);
 function positional(): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -356,10 +356,18 @@ async function cmdRolesEdit(): Promise<void> {
   };
   if (hasFlag("wildcard")) body.wildcard = true;
   if (hasFlag("no-wildcard")) body.wildcard = false;
-  const hasChange = body.addTags || body.rmTags || body.tags || body.wildcard !== undefined;
+  const quotaFlag = flag("quota");
+  if (quotaFlag !== undefined) {
+    const q = Number(quotaFlag);
+    if (!Number.isFinite(q) || q < 0) return console.log("error: --quota must be a non-negative number");
+    body.quota = q;
+  }
+  if (hasFlag("no-quota")) body.quota = null;
+  const hasChange =
+    body.addTags || body.rmTags || body.tags || body.wildcard !== undefined || body.quota !== undefined;
   if (!name || !hasChange) {
     return console.log(
-      "usage: lanchu roles edit <name> --add-tags a,b --rm-tags c | --tags x,y | --wildcard | --no-wildcard",
+      "usage: lanchu roles edit <name> --add-tags a,b --rm-tags c | --tags x,y | --wildcard | --no-wildcard | --quota <tokens> | --no-quota",
     );
   }
   const res = await api("/api/roles", {
@@ -890,6 +898,7 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu roles | stats", "list roles / local stats"],
       ["lanchu roles add <name> --tags a,b", "create a role (or --wildcard)"],
       ["lanchu roles edit <name> --add-tags a,b --rm-tags c", "edit a role's tags (--tags replaces; --wildcard/--no-wildcard)"],
+      ["lanchu roles edit <name> --quota <tokens> | --no-quota", "set/clear the role's self-reported token budget"],
       ['lanchu rules [set "<text>"]', "view / set the org's rules"],
       ['lanchu skills [add <name> --tags a,b --instructions "…"]', "skills per task type"],
       ["lanchu skills load <url|file> [--name n] [--tags a,b]", "load a reusable SKILL.md"],
