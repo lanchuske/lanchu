@@ -244,11 +244,20 @@ export function panelHtml(): string {
   .repo-chip a:hover { text-decoration: underline; }
   .repo-chip .path { color: var(--faint); font-family: var(--mono); font-size: 11.5px; }
   .repo-chip .sep { color: var(--line); }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 14px; }
-  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
-  .tile .n { font-size: 26px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-  .tile .l { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  /* compact stat row — the numbers orient, the sections below are the home */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; box-shadow: var(--shadow); }
+  .tile .n { font-size: 20px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .tile .l { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
   .tile.bad .n { color: var(--bad); }
+
+  /* ── overview: working-now strip + inline feeds ── */
+  .wnow { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+  .wnow .card { margin-bottom: 0; }
+  .conf { padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); box-shadow: inset 2px 0 0 var(--warn);
+          font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  .conf .who { color: var(--fg); font-weight: 600; }
+  .conf .time { font-family: var(--mono); font-size: 11.5px; color: var(--faint); margin-right: 6px; }
 
   /* ── processes ── */
   .proc-grid { display: flex; flex-wrap: wrap; gap: 18px; }
@@ -321,8 +330,15 @@ export function panelHtml(): string {
       <section class="view" id="v-overview">
         <h1 class="vhead">Overview</h1>
         <p class="vsub">An <b>org</b> groups everything below it: <b>projects</b> (each a repo + local folder), the <b>agents</b> working across them, and their <b>tasks</b>.</p>
-        <div class="projects" id="projects"></div>
         <div class="tiles" id="tiles"></div>
+        <h2 class="sub-h2">Working now</h2>
+        <div class="wnow" id="wnow"></div>
+        <div class="cols">
+          <div><h2 class="sub-h2">Latest activity</h2><div id="ov-audit"></div></div>
+          <div><h2 class="sub-h2">Conflicts &amp; warnings</h2><div id="ov-conflicts"></div></div>
+        </div>
+        <h2 class="sub-h2">Projects</h2>
+        <div class="projects" id="projects"></div>
         <div id="attention"></div>
       </section>
 
@@ -825,17 +841,47 @@ function renderDocs(list) {
   if (qi) qi.addEventListener("input", function () { docQuery = this.value; renderDocs(lastDocs); });
 })();
 
+function evRow(e) {
+  var when = (e.created_at || "").slice(11, 19);
+  var subj = e.subject_id ? ' <span class="id">' + esc(e.subject_id) + '</span>' : "";
+  var note = e.data && e.data.note ? ' — ' + esc(e.data.note) : "";
+  var right = (e.outcome === "rejected" ? "rejected" : "") + (e.tokens ? (e.outcome === "rejected" ? " · " : "") + e.tokens + " tok" : "");
+  return '<div class="ev' + (e.outcome === "rejected" ? " rej" : "") + '">' +
+    '<span class="time">' + when + '</span>' +
+    '<span>' + (e.actor_name ? colorChip(e.actor_name) : "") + '<span class="who">' + esc(e.actor_name || "—") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
+    '<span class="right">' + right + '</span></div>';
+}
 function renderAudit(list) {
-  document.getElementById("audit").innerHTML = list.map(function (e) {
-    var when = (e.created_at || "").slice(11, 19);
-    var subj = e.subject_id ? ' <span class="id">' + esc(e.subject_id) + '</span>' : "";
-    var note = e.data && e.data.note ? ' — ' + esc(e.data.note) : "";
-    var right = (e.outcome === "rejected" ? "rejected" : "") + (e.tokens ? (e.outcome === "rejected" ? " · " : "") + e.tokens + " tok" : "");
-    return '<div class="ev' + (e.outcome === "rejected" ? " rej" : "") + '">' +
-      '<span class="time">' + when + '</span>' +
-      '<span>' + (e.actor_name ? colorChip(e.actor_name) : "") + '<span class="who">' + esc(e.actor_name || "—") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
-      '<span class="right">' + right + '</span></div>';
-  }).join("") || '<div class="empty">No activity yet.</div>';
+  document.getElementById("audit").innerHTML = list.map(evRow).join("") || '<div class="empty">No activity yet.</div>';
+}
+
+// Overview is the supervisor's home: who is working right now (name → task →
+// branch/worktree), the freshest slice of the audit log, and any friction
+// (conflict warnings, rejected actions) — all on one screen.
+function renderOverview(board, audit) {
+  var live = board.agents.filter(function (a) { return a.state === "active"; });
+  document.getElementById("wnow").innerHTML = live.map(function (a) {
+    var task = a.active_task_title ? (a.active_task_title.length > 76 ? a.active_task_title.slice(0, 76) + "…" : a.active_task_title) : "";
+    var branch = a.branch ? '<span class="branch">⌥ ' + esc(a.branch) + '</span>' : "";
+    var wt = a.worktree ? '<div class="meta"><span class="k">wt</span> <span style="font-family:var(--mono);font-size:11px">' + esc(shortPath(a.worktree)) + '</span></div>' : "";
+    return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to focus its terminal">' +
+      '<div class="top"><span class="name"><span class="dot active"></span>' + colorChip(a.name) + esc(a.name) + '</span>' + branch + '</div>' +
+      '<div class="meta">' + (task ? '<span class="k">task</span> <span title="' + esc(a.active_task_title) + '">' + esc(task) + '</span>' : '<span class="empty-inline">no active task</span>') + '</div>' + wt + '</div>';
+  }).join("") || '<div class="empty">Nobody is working right now — agents appear here while they hold a live session.</div>';
+
+  document.getElementById("ov-audit").innerHTML = audit.slice(0, 8).map(evRow).join("") || '<div class="empty">No activity yet.</div>';
+
+  var confs = audit.filter(function (e) {
+    return e.type === "conflict.detected" || e.type === "scope.violation" || e.outcome === "rejected";
+  }).slice(0, 6);
+  document.getElementById("ov-conflicts").innerHTML = confs.map(function (e) {
+    var whom = e.type === "conflict.detected" && e.data && e.data.conflicts && e.data.conflicts.length
+      ? " overlaps " + esc(e.data.conflicts.map(function (c) { return c.with_agent; }).join(", "))
+      : "";
+    return '<div class="conf"><span class="time">' + esc((e.created_at || "").slice(11, 19)) + '</span>' +
+      '<span class="who">' + esc(e.actor_name || "—") + '</span> ' + esc(e.type) + whom +
+      (e.subject_id ? ' · <span class="id">' + esc(e.subject_id) + '</span>' : "") + '</div>';
+  }).join("") || '<div class="empty">No conflicts or rejected actions in the recent log — healthy.</div>';
 }
 
 function kv(k, v) { return '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + '</span></div>'; }
@@ -1040,6 +1086,7 @@ function refresh() {
       renderTasks(r[0].tasks, r[0].agents);
       renderRoles(r[1]); renderDocs(r[2]); renderAudit(r[3]);
       renderStats(r[0], r[3]);
+      renderOverview(r[0], r[3]);
       renderAttention(r[4], r[0].agents);
       updateContextCmds();
     }).catch(function () {}).then(function () { busy = false; });
