@@ -617,14 +617,34 @@ function closeTerm(id, name) {
     toast((r && r.closed ? "Closed " : "Cleared ") + name + "'s terminal"); refreshProcesses();
   });
 }
+// Open Logs panels are transient UI state, but the 3s processes poll rebuilds
+// the cards' HTML — so openness lives OUT of the DOM (keyed by agentId) and
+// renderProcesses re-applies it. While open, every poll re-fetches the tail:
+// the rebuild that used to close the box now powers a live-tail instead.
+var openLogs = {};
+function fetchLogs(id) {
+  authFetch("/api/agent/logs?agentId=" + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (r) {
+    var box = document.getElementById("log-" + id);
+    if (!box || !openLogs[id]) return; // closed (or gone) while the fetch flew
+    // Follow the tail only when the user is pinned to the bottom; a hand-scrolled
+    // position is theirs to keep.
+    var pinned = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+    box.querySelector("pre").textContent = (r.logs || "").trim() || "(no output captured)";
+    if (pinned) box.scrollTop = box.scrollHeight;
+  }).catch(function () {
+    var box = document.getElementById("log-" + id);
+    if (box && openLogs[id] && !box.querySelector("pre").textContent) {
+      box.querySelector("pre").textContent = "(couldn't read logs)";
+    }
+  });
+}
 function toggleLogs(id) {
   var box = document.getElementById("log-" + id); if (!box) return;
-  if (box.style.display !== "none") { box.style.display = "none"; return; }
-  box.style.display = "block"; box.querySelector("pre").textContent = "loading…";
-  authFetch("/api/agent/logs?agentId=" + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (r) {
-    box.querySelector("pre").textContent = (r.logs || "").trim() || "(no output captured)";
-    box.scrollTop = box.scrollHeight;
-  }).catch(function () { box.querySelector("pre").textContent = "(couldn't read logs)"; });
+  if (openLogs[id]) { delete openLogs[id]; box.style.display = "none"; return; }
+  openLogs[id] = true;
+  box.style.display = "block";
+  box.querySelector("pre").textContent = "loading…";
+  fetchLogs(id);
 }
 function stopServer() {
   authFetch("/server/stop", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(function () {});
@@ -1317,6 +1337,14 @@ function renderProcesses(p) {
     '</div></div>';
   var terms = p.terminals || [];
   document.getElementById("c-proc").textContent = terms.length;
+  // The rebuild wipes transient DOM state, so capture every open logbox
+  // (content + scroll) first and re-apply after — the box never blinks shut.
+  var saved = {};
+  terms.forEach(function (t) {
+    if (!openLogs[t.agentId]) return;
+    var box = document.getElementById("log-" + t.agentId);
+    if (box) saved[t.agentId] = { text: box.querySelector("pre").textContent, top: box.scrollTop };
+  });
   document.getElementById("terminals").innerHTML = terms.map(function (t) {
     return '<div class="card"><div class="top"><span class="name">' + presDot(t.presence || (t.alive ? "idle" : "off")) + esc(t.name) + '</span>' +
       '<span><button data-act="focus-term" data-id="' + t.agentId + '" data-name="' + esc(t.name) + '">Focus</button> ' +
@@ -1325,6 +1353,16 @@ function renderProcesses(p) {
       '<div class="meta"><span class="k">' + esc(t.method) + '</span> ' + esc(t.id) + ' · ' + (t.alive ? "alive" : "not running") + '</div>' +
       '<div class="logbox" id="log-' + t.agentId + '" style="display:none"><pre></pre></div></div>';
   }).join("") || '<div class="empty">No agent terminals tracked yet — spawn an agent to see it here.</div>';
+  var liveIds = {};
+  terms.forEach(function (t) { liveIds[t.agentId] = true; });
+  Object.keys(openLogs).forEach(function (id) {
+    if (!liveIds[id]) { delete openLogs[id]; return; } // terminal left the list
+    var box = document.getElementById("log-" + id);
+    if (!box) return;
+    box.style.display = "block";
+    if (saved[id]) { box.querySelector("pre").textContent = saved[id].text; box.scrollTop = saved[id].top; }
+    fetchLogs(id); // refresh the tail on every poll while open
+  });
 }
 // MCP visibility: Lanchu's own transports per agent, and the MCP servers each
 // project checkout declares (read-only, credentials never leave the server).
