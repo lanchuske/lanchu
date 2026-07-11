@@ -1228,6 +1228,14 @@ export function startServer(): Promise<http.Server> {
   } catch {
     /* reconciliation is best-effort */
   }
+  // Session freshness (task-mrgou4pl1): pre-restart sessions can't see tools
+  // this build added — tell every agent through the channel that never goes
+  // stale (piggyback notices). Broadcast-class: expires, never wakes anyone.
+  try {
+    store.noticeServerRestart(VERSION);
+  } catch {
+    /* the heads-up is best-effort */
+  }
   // Warm the runtime inventory off the startup path (each probe is capped at
   // 1.5s; deferring keeps `lanchu serve` responsive on machines with many CLIs).
   setTimeout(() => detectRuntimes({ refresh: true }), 0).unref();

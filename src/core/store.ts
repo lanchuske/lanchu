@@ -3489,6 +3489,40 @@ function loadNotice(r: Record<string, unknown>): Notice {
   };
 }
 
+/**
+ * Session freshness (task-mrgou4pl1): an MCP session's tool list is frozen at
+ * connect-time, so tools shipped by a rebuild+restart are invisible to
+ * already-connected agents until they reconnect — three separate rollouts bit
+ * live agents on 2026-07-11 (greenzone_ack twice, memory_set, test_report).
+ * The piggyback notice channel is the one thing that NEVER goes stale, so on
+ * every server start each org's non-retired agents get one expiring,
+ * informational (broadcast-class: never wakes anyone, self-expires) heads-up
+ * within their next tool call. Returns how many notices were queued.
+ */
+export function noticeServerRestart(version: string): number {
+  let queued = 0;
+  for (const org of listOrgs()) {
+    for (const a of listAgents(org.id)) {
+      if (a.state === "retired") continue;
+      insertNotice({
+        orgId: org.id,
+        kind: "system",
+        fromAgentId: null,
+        toAgentId: a.id,
+        body:
+          `Lanchu server restarted (v${version}). Tool lists are fixed per session: if an instruction ` +
+          `names a tool you can't see, your session predates this restart — reconnect to refresh, or use ` +
+          `the notice fallback (for greenzone requests, message_ack of the request counts as confirmation). ` +
+          `No action needed if everything you use works.`,
+        ref: "server-restart",
+        isBroadcast: true, // informational: expires on its own, never triggers a wake
+      });
+      queued += 1;
+    }
+  }
+  return queued;
+}
+
 function insertNotice(input: {
   orgId: string;
   kind: NoticeKind;
