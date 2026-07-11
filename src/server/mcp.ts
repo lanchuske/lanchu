@@ -5,6 +5,7 @@ import { baseUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
+import { ensureAgentWorktree } from "../core/worktree.js";
 import { spawnTerminal, tileTerminals } from "./cockpit.js";
 import { putContext, type SessionContext } from "./context.js";
 
@@ -221,7 +222,10 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ taskId, workspace }) => {
       try {
-        const task = store.claimTask({ agentId: ctx.agentId, taskId, workspace });
+        // Default the task's workspace to the agent's isolated worktree so the
+        // board shows where each task is being worked on.
+        const ws = workspace ?? store.getAgent(ctx.agentId)?.worktree ?? undefined;
+        const task = store.claimTask({ agentId: ctx.agentId, taskId, workspace: ws });
         // Deliver the right "hat": skills matching this task's type (tags).
         return text({ ...task, applicable_skills: store.skillsForTags(ctx.orgId, task.tags) });
       } catch (err) {
@@ -449,10 +453,15 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     {
       title: "Spawn a new agent",
       description:
-        "Creates a new teammate in this org and opens a terminal running Claude, already joined to Lanchu, that will ask the user which task to do. Use when the user asks to add/create a new agent. Pass `name` for a short, readable agent name; if omitted it defaults to the role name (e.g. \"product\"), not a long slug of the objective.",
-      inputSchema: { objective: z.string().optional(), role: z.string().optional(), name: z.string().optional() },
+        "Creates a new teammate in this org and opens a terminal running Claude, already joined to Lanchu, that will ask the user which task to do. The teammate gets its own git worktree + branch (.lanchu/worktrees/<agent>) so parallel agents never collide; pass isolate: false to share this directory instead. Use when the user asks to add/create a new agent. Pass `name` for a short, readable agent name; if omitted it defaults to the role name (e.g. \"product\"), not a long slug of the objective.",
+      inputSchema: {
+        objective: z.string().optional(),
+        role: z.string().optional(),
+        name: z.string().optional(),
+        isolate: z.boolean().default(true),
+      },
     },
-    async ({ objective, role, name }) => {
+    async ({ objective, role, name, isolate }) => {
       try {
         const roleName = role || "generalist";
         const roleObj = store.getOrCreateRole(ctx.orgId, roleName, roleName === "generalist" ? { wildcard: true } : {});
@@ -461,15 +470,20 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         const agent = store.createAgent({ orgId: ctx.orgId, roleId: roleObj.id, objective, name: name || roleName });
         const { token } = store.openSession(agent.id);
         store.captureWorkspace(ctx.projectId, agent.id, ctx.cwd);
+        // Isolation: dedicated worktree + branch for the new teammate (falls back
+        // to the shared directory when this isn't a git repo).
+        const wt = isolate && ctx.cwd ? ensureAgentWorktree(ctx.cwd, agent.name) : null;
+        const cwd = wt?.path ?? ctx.cwd ?? process.cwd();
+        if (wt) store.setAgentWorkspace(agent.id, { cwd: wt.path, branch: wt.branch, worktree: wt.path });
         putContext({
           token, agentId: agent.id, agentName: agent.name,
-          orgId: ctx.orgId, orgName: ctx.orgName, projectId: ctx.projectId, projectName: ctx.projectName, cwd: ctx.cwd,
+          orgId: ctx.orgId, orgName: ctx.orgName, projectId: ctx.projectId, projectName: ctx.projectName, cwd,
         });
         const prompt =
           "You are a new Lanchu teammate. Greet the user in one line, then ask which task you should do. When they answer, read org_context, then claim and work the matching task.";
-        const result = spawnTerminal({ title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd: ctx.cwd || process.cwd(), token, prompt });
+        const result = spawnTerminal({ title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd, token, prompt });
         store.setAgentTerminal(agent.id, result.ref ?? null);
-        return text({ agent: agent.name, ...result });
+        return text({ agent: agent.name, worktree: wt?.path ?? null, branch: wt?.branch ?? null, ...result });
       } catch (err) {
         return fail(err);
       }

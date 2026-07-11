@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,7 @@ import { accessKey, host, port, publicUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
+import { ensureAgentWorktree, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
 import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { getContext, putContext } from "./context.js";
@@ -122,6 +124,8 @@ interface SessionRequest {
   agentName?: string;
   client?: string;
   cwd?: string;
+  /** Give the agent its own git worktree + branch under .lanchu/worktrees (see the agent-isolation design doc). */
+  isolate?: boolean;
 }
 
 function handleSession(req: http.IncomingMessage, body: SessionRequest, res: http.ServerResponse): void {
@@ -153,8 +157,26 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
     agentName = agent.name;
   }
 
+  // Isolation: give the agent its own worktree + branch so parallel agents in
+  // the same repo never share a HEAD/index. Falls back to the shared cwd when
+  // the directory isn't a local git repo (e.g. a remote LANCHU_SERVER).
+  let cwd = body.cwd;
+  let worktree: string | null = null;
+  let branch: string | null = null;
+  if (body.isolate && body.cwd && fs.existsSync(body.cwd)) {
+    const wt = ensureAgentWorktree(body.cwd, agentName);
+    if (wt) {
+      cwd = wt.path;
+      worktree = wt.path;
+      branch = wt.branch;
+    }
+  }
+
   const { token } = store.openSession(agentId, body.client);
+  // Project repo/path from the launch dir (the main checkout); the agent's own
+  // workspace then points at its isolated worktree when one was created.
   store.captureWorkspace(project.id, agentId, body.cwd);
+  if (worktree) store.setAgentWorkspace(agentId, { cwd, branch, worktree });
   putContext({
     token,
     agentId,
@@ -163,7 +185,7 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
     orgName: org.name,
     projectId: project.id,
     projectName: project.name,
-    cwd: body.cwd,
+    cwd,
   });
 
   sendJson(res, 200, {
@@ -173,6 +195,8 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
     org: org.name,
     project: project.name,
     mcpUrl: advertisedMcpUrl(req),
+    worktree,
+    branch,
   });
 }
 
@@ -196,7 +220,15 @@ function revealAgent(agentId: string): {
 
   // No live terminal — open one for this agent where it was last working.
   const project = store.listProjects(agent.org_id)[0];
-  const cwd = agent.cwd || agent.worktree || process.cwd();
+  let cwd = agent.cwd || agent.worktree || process.cwd();
+  if (!fs.existsSync(cwd)) {
+    // Its worktree was pruned (or the dir moved) — recreate the isolated
+    // worktree from the project's main checkout instead of failing the spawn.
+    const base = project?.local_path && fs.existsSync(project.local_path) ? project.local_path : process.cwd();
+    const wt = ensureAgentWorktree(base, agent.name);
+    cwd = wt?.path ?? base;
+    if (wt) store.setAgentWorkspace(agent.id, { cwd: wt.path, branch: wt.branch, worktree: wt.path });
+  }
   const { token } = store.openSession(agent.id);
   if (project) store.captureWorkspace(project.id, agent.id, cwd);
   putContext({
@@ -409,7 +441,11 @@ export function createServer(): http.Server {
       // ── supervisor actions ──
       if (url.pathname === "/agent/retire" && req.method === "POST") {
         const body = (await readJson(req)) as { agentId: string };
-        return sendJson(res, 200, store.retireAgent(body.agentId));
+        const agent = store.getAgent(body.agentId);
+        const result = store.retireAgent(body.agentId);
+        // Prune the retired agent's isolated worktree; its branch stays for PR/merge.
+        const worktree = result.retired ? removeAgentWorktree(agent?.worktree) : undefined;
+        return sendJson(res, 200, { ...result, worktree });
       }
       if (url.pathname === "/agent/reveal" && req.method === "POST") {
         const body = (await readJson(req)) as { agentId: string };
