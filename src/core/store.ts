@@ -2819,6 +2819,14 @@ export interface NudgeCandidate {
 export function agentsNeedingNudge(orgId: string): NudgeCandidate[] {
   const graceCutoff = new Date(Date.now() - nudgeAfterMs()).toISOString();
   const cooldownCutoff = new Date(Date.now() - nudgeCooldownMs()).toISOString();
+  // State-driven (v2): nudge only on piggyback STARVATION — the agent made no
+  // MCP tool call since its oldest undelivered notice, so it never had a
+  // chance to hear it (turn ended, idle at the prompt). Any tool call after
+  // the notice means piggyback already delivered or will within the working
+  // burst — typing into that terminal would land in a busy prompt (the v1
+  // bug). tool.response fires on every MCP call (context-spend meter), which
+  // makes it the per-call liveness signal; the sweep timer is only sampling,
+  // never the decision.
   const rows = db()
     .prepare(
       `SELECT a.id AS agent_id, a.name AS agent_name, a.terminal_ref AS terminal_ref,
@@ -2829,7 +2837,11 @@ export function agentsNeedingNudge(orgId: string): NudgeCandidate[] {
          AND NOT EXISTS (
            SELECT 1 FROM event e
            WHERE e.type = 'agent.nudged' AND e.subject_id = a.id AND e.created_at >= ?)
-       GROUP BY a.id`,
+       GROUP BY a.id
+       HAVING COALESCE(
+         (SELECT MAX(t.created_at) FROM event t
+          WHERE t.actor_agent_id = a.id AND t.type = 'tool.response'), '')
+         < MIN(n.created_at)`,
     )
     .all(orgId, graceCutoff, cooldownCutoff) as Record<string, unknown>[];
   const out: NudgeCandidate[] = [];
@@ -2847,6 +2859,27 @@ export function agentsNeedingNudge(orgId: string): NudgeCandidate[] {
     }
   }
   return out;
+}
+
+/**
+ * Last-second cancel check: is the agent STILL starved right now? Delivery or
+ * any tool call between candidate selection and typing (the alive-probe can
+ * take seconds) cancels the nudge.
+ */
+export function nudgeStillNeeded(agentId: string): boolean {
+  const row = db()
+    .prepare(
+      `SELECT MIN(created_at) AS oldest FROM notice
+       WHERE to_agent_id = ? AND delivered_at IS NULL AND acked_at IS NULL`,
+    )
+    .get(agentId) as { oldest: string | null } | undefined;
+  if (!row?.oldest) return false; // delivered or acked meanwhile — cancel
+  const call = db()
+    .prepare(
+      `SELECT 1 FROM event WHERE actor_agent_id = ? AND type = 'tool.response' AND created_at >= ? LIMIT 1`,
+    )
+    .get(agentId, row.oldest);
+  return !call;
 }
 
 /** Audit one nudge (also what the cooldown checks). */

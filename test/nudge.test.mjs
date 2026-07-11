@@ -93,3 +93,54 @@ test("a dead terminal is skipped and stays un-audited (so a later sweep can retr
   const later = runNudgeSweep({ alive: () => true, nudge: () => true });
   assert.deepEqual(later.nudged, ["sleeper"]);
 });
+
+// ── v2: state-driven (piggyback starvation), not timer-driven ──
+
+test("v2 bug repro: an actively-working agent is never nudged — a tool call after the notice means piggyback handles it", async () => {
+  const { org, sender } = setup("nudge-v2-busy");
+  const sleeperId = store.findAgentByName(org.id, "sleeper").id;
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "sleeper", body: "queued while busy" });
+  // The agent keeps working: any MCP tool call records a tool.response event.
+  store.recordToolSpend(org.id, sleeperId, "task_update", 1200);
+  await graceElapsed();
+  assert.equal(
+    store.agentsNeedingNudge(org.id).length, 0,
+    "tool call after the notice → its burst delivers via piggyback; never type into a busy prompt",
+  );
+});
+
+test("v2: a tool call BEFORE the notice does not mask starvation — idle agent still gets woken", async () => {
+  const { org, sender } = setup("nudge-v2-idle");
+  const sleeperId = store.findAgentByName(org.id, "sleeper").id;
+  // Old activity, then silence: the agent's turn ended before the notice arrived.
+  store.recordToolSpend(org.id, sleeperId, "task_update", 900);
+  await new Promise((r) => setTimeout(r, 50));
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "sleeper", body: "wake up" });
+  await graceElapsed();
+  const candidates = store.agentsNeedingNudge(org.id);
+  assert.equal(candidates.length, 1, "no call since the notice → starved → nudge");
+  assert.equal(candidates[0].agent_name, "sleeper");
+});
+
+test("v2: a nudge is cancelled at the last second when delivery or a tool call races the sweep", async () => {
+  const { org, sender } = setup("nudge-v2-race");
+  const sleeperId = store.findAgentByName(org.id, "sleeper").id;
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "sleeper", body: "raced" });
+  await graceElapsed();
+  assert.equal(store.agentsNeedingNudge(org.id).length, 1, "candidate selected");
+
+  // Between the alive probe and typing, the agent wakes on its own and its
+  // tool call delivers the notice — the sweep must cancel, not type.
+  const res = runNudgeSweep({
+    alive: () => {
+      store.takeUndeliveredNotices(sleeperId); // piggyback delivery mid-sweep
+      return true;
+    },
+    nudge: () => { throw new Error("must not type — delivery already happened"); },
+  });
+  assert.deepEqual(res.nudged, []);
+  assert.equal(
+    store.listAuditEvents(org.id).some((e) => e.type === "agent.nudged"), false,
+    "a cancelled nudge is not audited, so the cooldown never blocks the next real one",
+  );
+});
