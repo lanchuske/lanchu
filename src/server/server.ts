@@ -13,7 +13,7 @@ import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
-import { closeTerminal, focusTerminal, nudgeTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
+import { claudeLiveSessionIds, closeTerminal, focusTerminal, nudgeTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { clearContexts, getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
 import { probeServers, readProjectMcpServers } from "../core/mcps.js";
@@ -80,9 +80,10 @@ function accessGate(req: http.IncomingMessage, url: URL): { ok: true } | { ok: f
   if (p === "/health") return { ok: true };
   if (p === "/" && req.method === "GET") return { ok: true };
   if (p === "/mcp" || p === "/hooks/intake") return { ok: true };
-  // Stop-hook probe: authenticated by the agent's own session token, not the
-  // panel key (same class as /mcp).
+  // Stop-hook probe and wake v5 lifecycle hooks: authenticated by the agent's
+  // own session token, not the panel key (same class as /mcp).
   if (p === "/api/agent/pending") return { ok: true };
+  if (p === "/hooks/agent/session-start" || p === "/hooks/agent/session-end") return { ok: true };
   const presented =
     bearer(req.headers.authorization ?? undefined) ??
     (typeof req.headers["x-lanchu-key"] === "string" ? (req.headers["x-lanchu-key"] as string) : null) ??
@@ -800,6 +801,23 @@ export function createServer(): http.Server {
         res.writeHead(200, { "content-type": "text/plain" });
         return res.end(String(store.undeliveredNoticeCount(ctx.agentId)));
       }
+      // Wake v5 lifecycle hooks (agent-token auth, same class as /api/agent/pending).
+      // SessionStart (startup|resume): the session id arrives with zero heuristics.
+      if (url.pathname === "/hooks/agent/session-start" && req.method === "POST") {
+        const ctx = getContext(bearer(req.headers.authorization ?? undefined) ?? "");
+        if (!ctx) return sendJson(res, 401, { error: "unauthorized" });
+        const body = (await readJson(req).catch(() => undefined)) as { session_id?: string } | undefined;
+        if (body?.session_id) store.setAgentClaudeSession(ctx.agentId, String(body.session_id));
+        return sendJson(res, 200, { ok: true });
+      }
+      // SessionEnd: the Claude session exited — park the agent (refire-able).
+      if (url.pathname === "/hooks/agent/session-end" && req.method === "POST") {
+        const ctx = getContext(bearer(req.headers.authorization ?? undefined) ?? "");
+        if (!ctx) return sendJson(res, 401, { error: "unauthorized" });
+        const body = (await readJson(req).catch(() => undefined)) as { reason?: string } | undefined;
+        store.parkAgent(ctx.agentId, body?.reason);
+        return sendJson(res, 200, { ok: true });
+      }
       // Supervisor override: abort a requested window before it executes (the
       // armed op never runs). Also the recovery path for a stuck window.
       if (url.pathname === "/greenzone/cancel" && req.method === "POST") {
@@ -1052,15 +1070,38 @@ export const NUDGE_LINE =
  * effects keep this testable without a real terminal.
  */
 export function runNudgeSweep(
-  effects: { alive?: typeof terminalAlive; nudge?: typeof nudgeTerminal } = {},
-): { nudged: string[]; expired_broadcasts: number } {
+  effects: {
+    alive?: typeof terminalAlive;
+    nudge?: typeof nudgeTerminal;
+    /** Wake v5 gates/actions, injectable for tests. */
+    liveSessions?: typeof claudeLiveSessionIds;
+    transportLive?: typeof isAgentLive;
+    refire?: (c: store.RefireCandidate, token: string) => boolean;
+  } = {},
+): { nudged: string[]; refired: string[]; expired_broadcasts: number } {
   const alive = effects.alive ?? terminalAlive;
   const nudge = effects.nudge ?? nudgeTerminal;
+  const liveSessions = effects.liveSessions ?? claudeLiveSessionIds;
+  const transportLive = effects.transportLive ?? isAgentLive;
+  const refire =
+    effects.refire ??
+    ((c: store.RefireCandidate, token: string) =>
+      spawnTerminal({
+        title: c.agent_name,
+        agentName: c.agent_name,
+        cwd: c.cwd,
+        token,
+        prompt: NUDGE_LINE,
+        model: c.model ?? undefined,
+        resumeSessionId: c.claude_session_id,
+      }).method !== "print");
   // Notice hygiene first: stale broadcasts self-expire so they never count as
   // pending inbox anywhere (sleeping agents, fixtures) — see store for why.
   const expired = store.expireBroadcastNotices();
   const nudged: string[] = [];
+  const refired: string[] = [];
   for (const org of store.listOrgs()) {
+    const handled = new Set<string>();
     for (const c of store.agentsNeedingNudge(org.id)) {
       try {
         if (!alive(c.terminal_ref)) continue;
@@ -1073,12 +1114,38 @@ export function runNudgeSweep(
         // "install tmux / check the Stop hook" and must be visible, not silent.
         store.recordNudge(org.id, c.agent_id, c.queued_notices, transport);
         nudged.push(c.agent_name);
+        handled.add(c.agent_id);
       } catch {
         /* a broken terminal must not stop the sweep */
       }
     }
+    // Wake v5 rung 3 — park & refire: parked agents with starved notices get
+    // their Claude session reopened (`claude --resume <sid> "<prompt>"`).
+    // Safety gates, both mandatory (fork risk — two processes on one session
+    // interleave into one transcript): no live MCP transport for this agent,
+    // and the session id VERIFIABLY absent from `claude agents --json`
+    // (unknown answer = fail closed, never refire blind).
+    let claudeSessions: Set<string> | null | undefined;
+    for (const c of store.agentsNeedingRefire(org.id)) {
+      try {
+        if (handled.has(c.agent_id)) continue;
+        // Gate 0: cleanly parked (SessionEnd fired), or a crashed session — the
+        // terminal is verifiably gone (builder-core-2's death had no SessionEnd).
+        if (!c.parked_at && c.terminal_ref && alive(c.terminal_ref)) continue;
+        if (transportLive(c.agent_id)) continue;
+        if (claudeSessions === undefined) claudeSessions = liveSessions();
+        if (claudeSessions === null || claudeSessions.has(c.claude_session_id)) continue;
+        if (!store.nudgeStillNeeded(c.agent_id)) continue;
+        const { token } = store.openSession(c.agent_id, "refire");
+        if (!refire(c, token)) continue;
+        store.recordNudge(org.id, c.agent_id, c.queued_notices, "runner");
+        refired.push(c.agent_name);
+      } catch {
+        /* a broken refire must not stop the sweep */
+      }
+    }
   }
-  return { nudged, expired_broadcasts: expired };
+  return { nudged, refired, expired_broadcasts: expired };
 }
 
 export function startServer(): Promise<http.Server> {

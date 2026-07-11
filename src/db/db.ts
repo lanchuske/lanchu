@@ -78,6 +78,8 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "task", "superseded_by_task_id", "TEXT REFERENCES task(id)");
   addColumn(db, "doc", "lifecycle", "TEXT NOT NULL DEFAULT 'living'");
   addColumn(db, "doc", "archived_at", "TEXT");
+  addColumn(db, "agent", "claude_session_id", "TEXT");
+  addColumn(db, "agent", "parked_at", "TEXT");
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }

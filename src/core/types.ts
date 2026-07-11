@@ -33,6 +33,7 @@ export type EventType =
   | "agent.active"
   | "agent.idle"
   | "agent.retired"
+  | "agent.parked"
   | "retire.requested"
   | "retire.approved"
   | "retire.denied"
@@ -124,6 +125,10 @@ export interface Agent {
   gh_login: string | null;
   /** The claude model tier this agent's terminal was launched with; null = harness default. */
   model: string | null;
+  /** Claude Code session id, reported by the SessionStart hook (wake v5 park & refire). */
+  claude_session_id: string | null;
+  /** Set by the SessionEnd hook when the Claude session exits: parked, refire-able. */
+  parked_at: string | null;
   created_at: string;
   retired_at: string | null;
 }
