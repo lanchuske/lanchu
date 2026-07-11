@@ -1327,10 +1327,14 @@ export function updateTaskStatus(input: {
   // SDLC done-gate (design doc "SDLC state machine"): 'done' on work that
   // never passed verification parks the item in the qa lane and spins up the
   // verification task. assist records the agent's done anyway; strict holds
-  // the status until QA passes. Verification tasks themselves are the gate's
-  // own instrument and bypass it.
+  // the status until QA passes. Verification tasks (per-task children AND
+  // batch coverage tasks) are the gate's own instrument and bypass it.
   const gated =
-    mode !== "off" && input.status === "done" && !isVerificationTask(task) && task.stage !== "done";
+    mode !== "off" &&
+    input.status === "done" &&
+    !isVerificationTask(task) &&
+    !isBatchVerificationTask(task) &&
+    task.stage !== "done";
   const effectiveStatus: TaskStatus = gated && mode === "strict" ? "in_progress" : input.status;
   // Explicit stage wins; otherwise completing a task advances its lane to done —
   // except under the gate, where the server owns the move (qa, verification pending).
@@ -1382,6 +1386,10 @@ export function updateTaskStatus(input: {
   // A completed verification resolves its parent: pass → done; FAIL… → bounce.
   if (effectiveStatus === "done" && isVerificationTask(task) && task.parent_task_id) {
     resolveVerification(getTask(input.taskId)!, input.agentId, input.note);
+  }
+  // A completed BATCH verification resolves every original its title covers.
+  if (effectiveStatus === "done" && isBatchVerificationTask(task)) {
+    resolveBatchVerification(getTask(input.taskId)!, input.agentId, input.note);
   }
   return getTask(input.taskId)!;
 }
@@ -1446,6 +1454,60 @@ export function openVerificationTaskFor(taskId: string): Task | null {
 /** Verification tasks are the gate's own instrument: linked child + marker title. */
 export function isVerificationTask(t: Task): boolean {
   return t.parent_task_id !== null && t.title.startsWith("QA: verify");
+}
+
+// ─────────────── batch verification (one QA task, many originals) ───────────────
+// QA often verifies a merge batch with ONE task covering several PRs. The
+// coverage contract: the batch task's TITLE declares what it verifies —
+// explicit task ids (task-xxxx) and/or PR numbers (#42, ranges #42-#48).
+// Completing the batch flips every covered original, except refs named in a
+// FAIL sentence of the completion note (partial failures stay unverified).
+
+export interface VerificationRefs {
+  taskIds: Set<string>;
+  prNumbers: Set<number>;
+}
+
+/** Task ids and PR numbers (singles + ranges) referenced in a piece of text. */
+export function extractVerificationRefs(text: string): VerificationRefs {
+  const taskIds = new Set<string>();
+  const prNumbers = new Set<number>();
+  for (const m of text.matchAll(/task-[a-z0-9]+/gi)) taskIds.add(m[0].toLowerCase());
+  // Ranges first (#42-#48, #15–#19), then lone numbers.
+  for (const m of text.matchAll(/#(\d+)\s*[-–—]\s*#?(\d+)/g)) {
+    const lo = Number(m[1]);
+    const hi = Number(m[2]);
+    if (hi >= lo && hi - lo <= 200) for (let n = lo; n <= hi; n++) prNumbers.add(n);
+  }
+  for (const m of text.matchAll(/#(\d+)/g)) prNumbers.add(Number(m[1]));
+  return { taskIds, prNumbers };
+}
+
+/** The PR number a task's pr_url points at (…/pull/42 → 42), or null. */
+function prNumberOf(t: Task): number | null {
+  const m = /\/(?:pull|merge_requests)\/(\d+)\b/.exec(t.pr_url ?? "");
+  return m ? Number(m[1]) : null;
+}
+
+/** A standalone QA task whose title declares coverage over other tasks/PRs. */
+export function isBatchVerificationTask(t: Task): boolean {
+  if (t.parent_task_id !== null) return false; // per-task children use the classic path
+  if (!/^qa\b/i.test(t.title) || !/verif/i.test(t.title)) return false;
+  const refs = extractVerificationRefs(t.title);
+  return refs.taskIds.size > 0 || refs.prNumbers.size > 0;
+}
+
+/** Refs named in a sentence containing FAIL — excluded from a batch's coverage. */
+function failExclusions(note: string | undefined): VerificationRefs {
+  const out: VerificationRefs = { taskIds: new Set(), prNumbers: new Set() };
+  if (!note) return out;
+  for (const sentence of note.split(/[.\n]/)) {
+    if (!/\bfail/i.test(sentence)) continue;
+    const refs = extractVerificationRefs(sentence);
+    for (const id of refs.taskIds) out.taskIds.add(id);
+    for (const n of refs.prNumbers) out.prNumbers.add(n);
+  }
+  return out;
 }
 
 /** Notice every specialist of a stage (falls back to product when the role is missing). */
@@ -1611,21 +1673,7 @@ function resolveVerification(verification: Task, qaAgentId: string, note?: strin
   if (!qaAgent) return;
   const orgId = qaAgent.org_id;
 
-  if (sdlcMode() === "strict") {
-    const qaRoleExists = agentsOfRole(orgId, "qa").length > 0;
-    const isQa = getRole(qaAgent.role_id)?.name === "qa";
-    if (qaRoleExists && !isQa) {
-      insertNotice({
-        orgId,
-        kind: "system",
-        fromAgentId: null,
-        toAgentId: qaAgentId,
-        body: `${verification.id} must be completed by the qa role in strict mode — ${parent.id} stays unverified.`,
-        ref: verification.id,
-      });
-      return;
-    }
-  }
+  if (strictModeRejectsResolver(orgId, qaAgent, verification.id, parent.id)) return;
 
   if (/^\s*fail/i.test(note ?? "")) {
     advanceStage({
@@ -1638,8 +1686,43 @@ function resolveVerification(verification: Task, qaAgentId: string, note?: strin
     return;
   }
 
-  // Pass: the verification completing is what closes the loop — the server
-  // flips the original to done (only-QA-flips, the gate's core rule).
+  flipVerifiedOriginal(parent, verification.id, orgId, qaAgentId, note);
+}
+
+/** Strict mode: orgs WITH a qa role only accept a resolution from a qa-role agent. */
+function strictModeRejectsResolver(
+  orgId: string,
+  resolver: Agent,
+  verificationId: string,
+  parentId: string,
+): boolean {
+  if (sdlcMode() !== "strict") return false;
+  const qaRoleExists = agentsOfRole(orgId, "qa").length > 0;
+  const isQa = getRole(resolver.role_id)?.name === "qa";
+  if (!qaRoleExists || isQa) return false;
+  insertNotice({
+    orgId,
+    kind: "system",
+    fromAgentId: null,
+    toAgentId: resolver.id,
+    body: `${verificationId} must be completed by the qa role in strict mode — ${parentId} stays unverified.`,
+    ref: verificationId,
+  });
+  return true;
+}
+
+/**
+ * Pass: the verification completing is what closes the loop — the server
+ * flips the original to done (only-QA-flips, the gate's core rule).
+ */
+function flipVerifiedOriginal(
+  parent: Task,
+  verificationId: string,
+  orgId: string,
+  qaAgentId: string | null,
+  note?: string,
+  opts?: { notifyOwner?: boolean },
+): void {
   const now = nowIso();
   db()
     .prepare(
@@ -1653,19 +1736,180 @@ function resolveVerification(verification: Task, qaAgentId: string, note?: strin
     actor_agent_id: qaAgentId,
     subject_kind: "task",
     subject_id: parent.id,
-    data: { via: "qa-verification", verification: verification.id, ...(note ? { note } : {}) },
+    data: { via: "qa-verification", verification: verificationId, ...(note ? { note } : {}) },
   });
   unblockDependents(parent.project_id);
-  if (parent.owner_agent_id && parent.owner_agent_id !== qaAgentId) {
+  if ((opts?.notifyOwner ?? true) && parent.owner_agent_id && parent.owner_agent_id !== qaAgentId) {
     insertNotice({
       orgId,
       kind: "system",
       fromAgentId: null,
       toAgentId: parent.owner_agent_id,
-      body: `${parent.id} passed QA verification (${verification.id}) and is done.`,
+      body: `${parent.id} passed QA verification (${verificationId}) and is done.`,
       ref: parent.id,
     });
   }
+}
+
+/**
+ * A completed BATCH verification resolves every original its title covers
+ * (see isBatchVerificationTask for the coverage contract). Refs named in a
+ * FAIL sentence of the note stay unverified; a note that STARTS with FAIL
+ * flips nothing — QA bounces the failing items individually.
+ */
+function resolveBatchVerification(batch: Task, qaAgentId: string, note?: string): void {
+  const qaAgent = getAgent(qaAgentId);
+  if (!qaAgent) return;
+  const orgId = qaAgent.org_id;
+  if (strictModeRejectsResolver(orgId, qaAgent, batch.id, batch.id)) return;
+  if (/^\s*fail/i.test(note ?? "")) return;
+
+  const covered = extractVerificationRefs(batch.title);
+  const excluded = failExclusions(note);
+  for (const orig of coveredOriginals(batch, covered, excluded)) {
+    closeOpenVerificationChild(orig, batch.id, orgId);
+    flipVerifiedOriginal(orig, batch.id, orgId, qaAgentId, note);
+  }
+}
+
+/** Project tasks awaiting verification (review/qa lane) that a coverage set names. */
+function coveredOriginals(batch: Task, covered: VerificationRefs, excluded: VerificationRefs): Task[] {
+  return listTasks(batch.project_id).filter((t) => {
+    if (t.id === batch.id || isVerificationTask(t) || isBatchVerificationTask(t)) return false;
+    if (t.stage !== "review" && t.stage !== "qa") return false;
+    const pr = prNumberOf(t);
+    const named = covered.taskIds.has(t.id) || (pr !== null && covered.prNumbers.has(pr));
+    const failed = excluded.taskIds.has(t.id) || (pr !== null && excluded.prNumbers.has(pr));
+    return named && !failed;
+  });
+}
+
+/**
+ * Startup reconciliation: heal status=done + stage=review rows (work the
+ * machine routed to review whose verification never flipped the lane —
+ * pre-batch-flip history). Verified originals (a done per-task child, or a
+ * done batch task whose coverage names them) move to stage=done; unverified
+ * ones move to stage=qa with a verification task, i.e. the state the gate
+ * would have given them. Every move is audited as task.stage_reconciled.
+ * Idempotent — after one pass there are no done/review rows left to visit.
+ */
+export function reconcileSdlcStages(): { toDone: string[]; toQa: string[] } {
+  const rows = db()
+    .prepare(`SELECT ${TASK_COLS} FROM task WHERE status = 'done' AND stage = 'review'`)
+    .all() as Record<string, unknown>[];
+  const toDone: string[] = [];
+  const toQa: string[] = [];
+  for (const row of rows) {
+    const task = loadTask(row);
+    if (isVerificationTask(task) || isBatchVerificationTask(task)) continue;
+    const orgId = orgIdForProject(task.project_id);
+    const coveredBy = verifiedBy(task);
+    const now = nowIso();
+    if (coveredBy) {
+      db().prepare("UPDATE task SET stage = 'done', updated_at = ? WHERE id = ?").run(now, task.id);
+      toDone.push(task.id);
+    } else {
+      db().prepare("UPDATE task SET stage = 'qa', updated_at = ? WHERE id = ?").run(now, task.id);
+      if (!openVerificationTaskFor(task.id)) createVerificationTask(task, orgId);
+      toQa.push(task.id);
+    }
+    recordEvent({
+      org_id: orgId,
+      project_id: task.project_id,
+      type: "task.stage_reconciled",
+      actor_agent_id: null,
+      subject_kind: "task",
+      subject_id: task.id,
+      data: {
+        from_stage: "review",
+        to_stage: coveredBy ? "done" : "qa",
+        ...(coveredBy ? { via: coveredBy } : { reason: "done without verification — verification task created" }),
+      },
+    });
+  }
+  return { toDone, toQa };
+}
+
+/**
+ * One-off curated coverage from the 2026-07-11 batch DOCS where the batch
+ * task's title under-declares: doc "QA batch 2026-07-11 b2 (PRs 20-27)"
+ * verified PR #29 (task-mrg0rmbj10) though task-mrg116op14's title only says
+ * #20–#27. Applies only while that exact row still needs reconciling.
+ */
+const DOC_VERIFIED_2026_07_11: Record<string, string> = {
+  "task-mrg0rmbj10": "task-mrg116op14",
+};
+
+/**
+ * The mirror case: the FINAL batch title names "#41 live" as method (report
+ * runs into the registry), but the doc "QA batch 2026-07-11 FINAL" records
+ * that test_report was unavailable (tool-stale session) — #41 (task-mrg09fwl3)
+ * was never actually verified. Keep it out of title-based coverage.
+ */
+const DOC_UNVERIFIED_2026_07_11 = new Set(["task-mrg09fwl3"]);
+
+/** The done verification (per-task child or covering batch) for a task, if any. */
+function verifiedBy(task: Task): string | null {
+  const child = db()
+    .prepare(
+      `SELECT id FROM task WHERE parent_task_id = ? AND title LIKE 'QA: verify%' AND status = 'done' LIMIT 1`,
+    )
+    .get(task.id) as { id: string } | undefined;
+  if (child) return child.id;
+
+  if (DOC_UNVERIFIED_2026_07_11.has(task.id)) return null;
+  const curated = DOC_VERIFIED_2026_07_11[task.id];
+  if (curated && getTask(curated)?.status === "done") return curated;
+
+  const pr = prNumberOf(task);
+  const batches = listTasks(task.project_id).filter(
+    (t) => t.status === "done" && t.id !== task.id && isBatchVerificationTask(t),
+  );
+  for (const batch of batches) {
+    const covered = extractVerificationRefs(batch.title);
+    const excluded = failExclusions(latestCompletionNote(batch.id));
+    const named = covered.taskIds.has(task.id) || (pr !== null && covered.prNumbers.has(pr));
+    const failed = excluded.taskIds.has(task.id) || (pr !== null && excluded.prNumbers.has(pr));
+    if (named && !failed) return batch.id;
+  }
+  return null;
+}
+
+/** The note attached to a task's most recent task.completed event. */
+function latestCompletionNote(taskId: string): string | undefined {
+  const row = db()
+    .prepare(
+      `SELECT data FROM event WHERE subject_id = ? AND type = 'task.completed' ORDER BY id DESC LIMIT 1`,
+    )
+    .get(taskId) as { data: string | null } | undefined;
+  if (!row?.data) return undefined;
+  try {
+    const note = (JSON.parse(row.data) as { note?: unknown }).note;
+    return typeof note === "string" ? note : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A batch flip supersedes the original's open per-task verification child. */
+function closeOpenVerificationChild(orig: Task, batchId: string, orgId: string): void {
+  const child = openVerificationTaskFor(orig.id);
+  if (!child) return;
+  const now = nowIso();
+  db()
+    .prepare(
+      "UPDATE task SET status = 'done', stage = 'done', done_at = COALESCE(done_at, ?), updated_at = ? WHERE id = ?",
+    )
+    .run(now, now, child.id);
+  recordEvent({
+    org_id: orgId,
+    project_id: child.project_id,
+    type: "task.completed",
+    actor_agent_id: null,
+    subject_kind: "task",
+    subject_id: child.id,
+    data: { via: "batch-verification", batch: batchId },
+  });
 }
 
 export function releaseTask(input: {
