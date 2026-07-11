@@ -180,6 +180,20 @@ export function panelHtml(): string {
 
   .empty { color: var(--faint); font-size: 13px; padding: 8px 2px; }
 
+  /* ── copy-paste command snippet (the panel guides; the terminal provisions) ── */
+  .cmd { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; vertical-align: middle; }
+  .cmd code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--line);
+              border-radius: 6px; padding: 3px 8px; color: var(--fg); white-space: nowrap; overflow-x: auto; }
+  button.copy { font-size: 11px; padding: 3px 8px; flex: none; }
+
+  /* ── sidebar help: how to add an org/project (always points at the terminal) ── */
+  .help { margin: 4px 8px 8px; margin-top: auto; font-size: 12px; color: var(--muted); }
+  .help summary { cursor: pointer; color: var(--accent); font-weight: 500; user-select: none; }
+  .help .body { display: flex; flex-direction: column; gap: 8px; padding: 8px 0 0; line-height: 1.5; }
+  /* the sidebar is narrow — let commands wrap there instead of overflowing */
+  .help .cmd, .orgwarn .cmd { display: inline-flex; flex-wrap: wrap; }
+  .help .cmd code, .orgwarn .cmd code { white-space: normal; word-break: break-all; }
+
   /* ── overview ── */
   .projects { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
   .repo-chip { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--line);
@@ -254,6 +268,10 @@ export function panelHtml(): string {
         <li data-view="activity">Activity</li>
         <li data-view="processes">Processes <span class="badge" id="c-proc">0</span></li>
       </ul>
+      <details class="help">
+        <summary>How do I add an org or project?</summary>
+        <div class="body" id="help-body"></div>
+      </details>
       <div class="sidefoot" id="sidestat"></div>
     </nav>
 
@@ -263,11 +281,14 @@ export function panelHtml(): string {
         <p class="vsub">An <b>org</b> groups everything below it: <b>projects</b> (each a repo + local folder), the <b>agents</b> working across them, and their <b>tasks</b>.</p>
         <div class="projects" id="projects"></div>
         <div class="tiles" id="tiles"></div>
+        <div id="attention"></div>
       </section>
 
       <section class="view" id="v-projects">
         <h1 class="vhead">Projects</h1>
-        <p class="vsub">One org can span many repos and folders — each is a <b>project</b>. Add one by running <code>lanchu init --org THIS-ORG --project NAME</code> in another checkout; its repo and path appear here once an agent joins.</p>
+        <p class="vsub">One org can span many repos and folders — each is a <b>project</b>: a repo + its local folder, so it's created from <b>inside that folder</b>, in the terminal. There, run
+          <span class="cmd"><code id="proj-cmd">lanchu init --org YOUR-ORG --project NAME</code><button class="copy" id="proj-cmd-copy" data-copy="lanchu init --org YOUR-ORG --project NAME">copy</button></span>;
+          its repo and path appear here once an agent joins.</p>
         <div id="projects-full"></div>
       </section>
 
@@ -367,6 +388,39 @@ function toast(msg, bad) {
   setTimeout(function () { t.remove(); }, 2600);
 }
 
+// ── copy-paste guidance: the panel never provisions, it hands you the command ──
+function cmdSnippet(cmd) {
+  return '<span class="cmd"><code>' + esc(cmd) + '</code><button class="copy" data-copy="' + esc(cmd) + '">copy</button></span>';
+}
+function initCmd() { return "lanchu init --org " + (org() || "YOUR-ORG") + " --project NAME"; }
+function copyCmd(btn) {
+  var txt = btn.getAttribute("data-copy") || "";
+  var done = function () { toast("Copied — paste it in your terminal"); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done, function () { fallbackCopy(txt); done(); });
+  } else { fallbackCopy(txt); done(); }
+}
+function fallbackCopy(txt) {
+  var ta = document.createElement("textarea"); ta.value = txt;
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch (e) { /* best effort */ }
+  ta.remove();
+}
+// Keep the static hints (Projects header, sidebar help) pointing at the CURRENT org.
+var lastCmdOrg = null;
+function updateContextCmds() {
+  if (org() === lastCmdOrg) return;
+  lastCmdOrg = org();
+  var cmd = initCmd();
+  var el = document.getElementById("proj-cmd"); if (el) el.textContent = cmd;
+  var cp = document.getElementById("proj-cmd-copy"); if (cp) cp.setAttribute("data-copy", cmd);
+  document.getElementById("help-body").innerHTML =
+    'In the terminal — the panel supervises existing agents; it never creates orgs or projects.' +
+    '<span>A <b>project</b> is a repo + its local folder, so it\\'s created from inside that folder:</span>' +
+    cmdSnippet(cmd) +
+    '<span>Then start a teammate from that folder with ' + cmdSnippet('lanchu spawn "your objective"') + ' — the org and project appear here once it joins.</span>';
+}
+
 function retire(id) {
   post("/agent/retire", { agentId: id }).then(function (r) {
     var el = document.getElementById("retire-msg-" + id);
@@ -384,6 +438,19 @@ function reveal(id, name) {
 function reassign(id) {
   var sel = document.querySelector('select[data-task="' + id + '"]');
   if (sel && sel.value) post("/task/reassign", { taskId: id, toAgentId: sel.value });
+}
+// Removing an org cascades to its (empty) projects, so arm the button instead of
+// a browser confirm dialog: first click asks, second click within 4s executes.
+function removeOrg(btn, name) {
+  if (!btn.getAttribute("data-armed")) {
+    btn.setAttribute("data-armed", "1");
+    btn.textContent = "Click again to remove";
+    setTimeout(function () { btn.removeAttribute("data-armed"); btn.textContent = "Remove org"; }, 4000);
+    return;
+  }
+  post("/org/delete", { name: name }).then(function (r) {
+    toast(r && r.deleted ? "Removed org “" + name + "”" : "Couldn't remove “" + name + "”", !(r && r.deleted));
+  });
 }
 function closeTerm(id, name) {
   post("/agent/terminal/close", { agentId: id }).then(function (r) {
@@ -405,6 +472,8 @@ function stopServer() {
 }
 
 document.addEventListener("click", function (e) {
+  var cp = e.target.closest ? e.target.closest("button[data-copy]") : null;
+  if (cp) { copyCmd(cp); return; }
   var b = e.target.closest ? e.target.closest("button[data-act]") : null;
   if (b) {
     var act = b.getAttribute("data-act"), id = b.getAttribute("data-id"), nm = b.getAttribute("data-name") || "agent";
@@ -416,6 +485,7 @@ document.addEventListener("click", function (e) {
     else if (act === "close-term") closeTerm(id, nm);
     else if (act === "restart-server") { post("/server/restart", {}); toast("Restarting the server…"); }
     else if (act === "stop-server") stopServer();
+    else if (act === "remove-org") removeOrg(b, id);
     return;
   }
   // Click anywhere on an agent card (but not on its controls) → reveal its terminal.
@@ -462,7 +532,7 @@ function renderProjects(list) {
     var path = p.local_path ? '<span class="path">' + esc(shortPath(p.local_path)) + '</span>' : "";
     var sep = repo && path ? '<span class="sep">·</span>' : "";
     return '<div class="repo-chip"><span class="pname">' + esc(p.name) + '</span><span class="sep">·</span>' + repo + sep + path + '</div>';
-  }).join("") || '<div class="empty">No repository captured yet — it appears when an agent joins from a git checkout.</div>';
+  }).join("") || '<div class="empty">No projects yet. A project is a repo + its local folder, so it\\'s created from inside that folder — in your terminal, run ' + cmdSnippet(initCmd()) + '</div>';
 }
 
 // Full Projects view: one card per project, with its repo/folder, task count and the branches agents are on.
@@ -483,7 +553,7 @@ function renderProjectsView(projects, tasks, agents) {
     return '<div class="card proj-card"><div class="top"><span class="name">' + esc(p.name) + '</span>' +
       '<span class="meta"><b>' + pts.length + '</b> tasks · <b>' + done + '</b> done · <b>' + Object.keys(owners).length + '</b> contributors</span></div>' +
       repo + path + (br ? '<div class="meta"><span class="k">branches</span> ' + br + '</div>' : "") + '</div>';
-  }).join("") || '<div class="empty">No projects yet. Run <code>lanchu init --org ' + esc(org()) + ' --project NAME</code> in a repo, then have an agent join.</div>';
+  }).join("") || '<div class="empty">No projects yet. A project is a repo + its local folder, so it\\'s created from inside that folder — in your terminal, run ' + cmdSnippet(initCmd()) + ' then have an agent join (it appears here with its repo and path).</div>';
 }
 
 function renderAgents(list) {
@@ -503,7 +573,7 @@ function renderAgents(list) {
       '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") + '</div>' +
       '<div class="hint">' + (a.state === "active" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
       '<div class="meta" style="color:var(--bad)" id="retire-msg-' + a.id + '"></div></div>';
-  }).join("") || '<div class="empty">No agents yet.</div>';
+  }).join("") || '<div class="empty">No agents yet. Agents are started from the terminal — inside a project folder, run ' + cmdSnippet('lanchu spawn "your objective"') + ' and supervise it from here.</div>';
 }
 
 function taskCard(t, opts) {
@@ -551,7 +621,7 @@ function renderTasks(list, agents) {
         return '<div class="lane"><div class="lane-h">' + s[1] + ' <span class="c">' + items.length + '</span></div>' +
           (items.map(function (t) { return taskCard(t, opts); }).join("") || '<div class="empty">—</div>') + '</div>';
       }).join("")
-    : '<div class="empty">No tasks yet.</div>';
+    : '<div class="empty">No tasks yet — agents break their objectives into tasks as they work; you supervise them here (release / reassign).</div>';
 
   var bugs = list.filter(function (t) { return (t.tags || []).indexOf("bug") >= 0; });
   document.getElementById("c-bugs").textContent = bugs.length;
@@ -714,6 +784,33 @@ function renderStats(board, audit) {
     (viol ? ' · <span style="color:var(--bad)"><b>' + viol + '</b> violations</span>' : "");
 }
 
+// Orphans: things that exist as records but have nobody behind them. An org with
+// no agents and no tasks is the "phantom org" case (a name that never matched a
+// real folder); an idle agent with nothing assigned holds a seat doing nothing.
+// Cleanup reuses the actions that already exist: remove org / retire agent.
+function renderAttention(orgs, agents) {
+  var items = [];
+  (orgs || []).forEach(function (o) {
+    if (o.agents === 0 && o.tasks === 0) {
+      items.push('<div class="card"><div class="top"><span class="name">org “' + esc(o.name) + '”</span>' +
+        '<button class="danger" data-act="remove-org" data-id="' + esc(o.name) + '">Remove org</button></div>' +
+        '<div class="meta">No agents and no tasks. If it\\'s a leftover — e.g. a name that never matched a real folder — remove it' +
+        (o.projects ? ' (also deletes its ' + o.projects + ' empty project record' + (o.projects > 1 ? 's' : '') + ')' : '') + '.</div></div>');
+    }
+  });
+  (agents || []).forEach(function (a) {
+    if (a.state === "idle" && a.open_tasks === 0) {
+      items.push('<div class="card"><div class="top"><span class="name"><span class="dot idle"></span>' + esc(a.name) + '</span>' +
+        '<button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></div>' +
+        '<div class="meta">No live session and nothing assigned' + (a.worktree || a.workspace ? '' : ', and no bound folder') +
+        ' — retire it, or give it work from the Work board.</div></div>');
+    }
+  });
+  document.getElementById("attention").innerHTML = items.length
+    ? '<h2 class="sub-h2">Needs attention — orphaned or idle</h2>' + items.join("")
+    : "";
+}
+
 var busy = false, lastSig = "";
 function refresh() {
   if (!org()) return;
@@ -730,13 +827,15 @@ function refresh() {
       var known = (r[4] || []).some(function (o) { return o.name === org(); });
       var ow = document.getElementById("orgwarn");
       ow.style.display = known ? "none" : "block";
-      if (!known) ow.innerHTML = 'Org “' + esc(org()) + '” doesn\\'t exist. Orgs are created from the terminal — run <code>lanchu</code> in your repo.';
+      if (!known) ow.innerHTML = 'Org “' + esc(org()) + '” doesn\\'t exist — this field only picks existing orgs; the panel never creates one. To set it up, run this inside your repo folder: ' + cmdSnippet(initCmd());
       renderProjects(r[0].projects);
       renderProjectsView(r[0].projects, r[0].tasks, r[0].agents);
       renderAgents(r[0].agents);
       renderTasks(r[0].tasks, r[0].agents);
       renderRoles(r[1]); renderDocs(r[2]); renderAudit(r[3]);
       renderStats(r[0], r[3]);
+      renderAttention(r[4], r[0].agents);
+      updateContextCmds();
     }).catch(function () {}).then(function () { busy = false; });
 }
 
