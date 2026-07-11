@@ -34,7 +34,7 @@ function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
 }
 /** Flags that take no value; without this list positional() would swallow the token after them. */
-const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge"]);
+const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge", "no-isolate"]);
 function positional(): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -495,11 +495,16 @@ async function cmdSpawn(): Promise<void> {
   const s = (await post("/session", {
     org, project, objective, cwd: process.cwd(), role: roleName, wildcard: role ? false : true,
     agentName: flag("as") || roleName,
-  })) as { token: string; agentName: string; agentId: string };
-  const result = spawnTerminal({ title: `${org}·${s.agentName}`, agentName: s.agentName, cwd: process.cwd(), token: s.token, prompt: SPAWN_PROMPT, dry: hasFlag("dry") });
+    isolate: !hasFlag("no-isolate"),
+  })) as { token: string; agentName: string; agentId: string; worktree: string | null; branch: string | null };
+  // Launch inside the agent's isolated worktree (falls back to this dir with --no-isolate
+  // or when the directory isn't a git repo).
+  const cwd = s.worktree ?? process.cwd();
+  const result = spawnTerminal({ title: `${org}·${s.agentName}`, agentName: s.agentName, cwd, token: s.token, prompt: SPAWN_PROMPT, dry: hasFlag("dry") });
   // Persist the terminal handle so the panel can re-focus this agent later.
   if (!hasFlag("dry") && result.ref) await post("/agent/terminal", { agentId: s.agentId, ref: result.ref });
   console.log(`Agent '${s.agentName}' · [${result.method}] ${result.note}`);
+  if (s.worktree) console.log(`  worktree: ${s.worktree}  (branch: ${s.branch})`);
   if (result.method === "print" || hasFlag("dry")) console.log("\nCommand:\n  " + result.command);
 }
 
@@ -810,7 +815,7 @@ const HELP_SECTIONS: HelpSection[] = [
     title: "Agents & tasks",
     rows: [
       ["lanchu agents | tasks", "list agents / tasks (JSON)"],
-      ['lanchu spawn ["<objective>"] [--role r] [--dry]', "new agent in a new terminal"],
+      ['lanchu spawn ["<objective>"] [--role r] [--no-isolate] [--dry]', "new agent in a new terminal, in its own git worktree + branch"],
       ["lanchu tile [--dry]", "arrange agent terminals into a mosaic"],
       ["lanchu retire <agentId>", "safe retirement (handoff enforced)"],
       ["lanchu task release <id>", "supervisor override: release a task"],
