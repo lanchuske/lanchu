@@ -179,6 +179,10 @@ const TEMPLATE = `<!doctype html>
             margin: 0 0 10px; padding: 0 2px; display: flex; justify-content: space-between; align-items: center; }
   .lane-h .c { color: var(--muted); background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
   .lane .empty { text-align: center; font-size: 12px; opacity: .6; }
+  /* An empty lane costs no board width: just its header, rotated content-free. */
+  .lane.slim { min-width: 0; flex: 0 0 auto; }
+  .lane.slim .lane-h { white-space: nowrap; }
+  .lane-more { width: 100%; margin-top: 6px; }
   /* task cards: clamp long titles to ~3 lines; click expands (same pattern as Docs) */
   .card.task { cursor: pointer; }
   .card.task .name { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -262,6 +266,9 @@ const TEMPLATE = `<!doctype html>
           font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
   .conf .who { color: var(--fg); font-weight: 600; }
   .conf .time { font-family: var(--mono); font-size: 11.5px; color: var(--faint); margin-right: 6px; }
+  /* Shipped rows share the conf layout but read as delivery, not warning. */
+  .conf.ship { background: var(--ok-bg); box-shadow: inset 2px 0 0 var(--ok); }
+  .conf.ship a { color: var(--accent); font-weight: 600; }
 
   /* ── processes ── */
   .proc-grid { display: flex; flex-wrap: wrap; gap: 18px; }
@@ -364,6 +371,8 @@ const TEMPLATE = `<!doctype html>
         <div class="tiles" id="tiles"></div>
         <h2 class="sub-h2">Working now</h2>
         <div class="wnow" id="wnow"></div>
+        <h2 class="sub-h2">Recently shipped</h2>
+        <div id="ov-shipped"></div>
         <div class="cols">
           <div><h2 class="sub-h2">Latest activity</h2><div id="ov-audit"></div></div>
           <div><h2 class="sub-h2">Conflicts &amp; warnings</h2><div id="ov-conflicts"></div></div>
@@ -392,6 +401,11 @@ const TEMPLATE = `<!doctype html>
       <section class="view" id="v-work">
         <h1 class="vhead">Work</h1>
         <p class="vsub">Tasks across the SDLC — definition, build, review, QA, done — with owner, PR and governance signals. Click a card to read its full title.</p>
+        <div class="gwin" id="btabs">
+          <button data-btab="open" class="on">Open <span class="c" id="bt-open">0</span></button>
+          <button data-btab="shipped">Shipped <span class="c" id="bt-shipped">0</span></button>
+          <button data-btab="all">All <span class="c" id="bt-all">0</span></button>
+        </div>
         <div class="board-wrap" id="board-wrap">
           <div class="board" id="tasks"></div>
           <div class="board-more" id="board-more" title="More lanes off-screen — click to scroll">more →</div>
@@ -620,6 +634,7 @@ document.addEventListener("click", function (e) {
     else if (act === "restart-server") { requestRestartGreenzone(); }
     else if (act === "stop-server") stopServer();
     else if (act === "remove-org") removeOrg(b, id);
+    else if (act === "show-all-done") { showAllDone = true; renderBoard(); }
     return;
   }
   // Click anywhere on an agent card (but not on its controls) → reveal its terminal.
@@ -660,6 +675,14 @@ function showView(name) {
 document.getElementById("nav").addEventListener("click", function (e) {
   var li = e.target.closest("li[data-view]"); if (!li) return;
   location.hash = li.getAttribute("data-view");
+});
+document.getElementById("btabs").addEventListener("click", function (e) {
+  var b = e.target.closest("button[data-btab]"); if (!b) return;
+  boardTab = b.getAttribute("data-btab");
+  showAllDone = false; // each visit starts compact again
+  var bs = document.querySelectorAll("#btabs button");
+  for (var i = 0; i < bs.length; i++) bs[i].classList.toggle("on", bs[i] === b);
+  renderBoard();
 });
 function routeFromHash() {
   var name = (location.hash || "#overview").slice(1);
@@ -846,24 +869,53 @@ function stageOf(t) {
   return "backlog";
 }
 
+// When a task shipped, for newest-first ordering and the "when" column.
+function doneStamp(t) { return t.done_at || t.updated_at || t.created_at || ""; }
+
+// Which lanes each board tab shows: shipped work stays one click away instead
+// of hiding at the end of the horizontal scroll (task-mrg88fqr1).
+var boardTab = "open";
+var showAllDone = false;
+var lastBoardList = [], lastBoardOpts = "";
+function renderBoard() {
+  var list = lastBoardList, opts = lastBoardOpts;
+  var byStage = {}; STAGES.forEach(function (s) { byStage[s[0]] = []; });
+  list.forEach(function (t) { byStage[stageOf(t)].push(t); });
+  byStage.done.sort(function (a, b) { return doneStamp(a) < doneStamp(b) ? 1 : -1; }); // newest first
+  document.getElementById("bt-open").textContent = list.length - byStage.done.length;
+  document.getElementById("bt-shipped").textContent = byStage.done.length;
+  document.getElementById("bt-all").textContent = list.length;
+  var stages = boardTab === "open" ? STAGES.filter(function (s) { return s[0] !== "done"; })
+    : boardTab === "shipped" ? STAGES.filter(function (s) { return s[0] === "done"; })
+    : STAGES;
+  document.getElementById("tasks").innerHTML = list.length
+    ? stages.map(function (s) {
+        var items = byStage[s[0]];
+        // An empty lane never costs board width — slim header only (unless it's
+        // the tab's sole lane, where the empty state should say something).
+        if (!items.length && stages.length > 1)
+          return '<div class="lane slim"><div class="lane-h">' + s[1] + ' <span class="c">0</span></div></div>';
+        var cards = items, more = "";
+        if (s[0] === "done" && !showAllDone && items.length > 15) {
+          cards = items.slice(0, 15);
+          more = '<button class="lane-more" data-act="show-all-done">show all (' + items.length + ')</button>';
+        }
+        return '<div class="lane"><div class="lane-h">' + s[1] + ' <span class="c">' + items.length + '</span></div>' +
+          (cards.map(function (t) { return taskCard(t, opts); }).join("") || '<div class="empty">' + (boardTab === "shipped" ? "Nothing shipped yet." : "—") + '</div>') + more + '</div>';
+      }).join("")
+    : '<div class="empty">No tasks yet — agents break their objectives into tasks as they work; you supervise them here (release / reassign).</div>';
+  updateBoardMore();
+}
+
 function renderTasks(list, agents) {
   document.getElementById("c-tasks").textContent = list.length;
   var opts = '<option value="">Reassign to…</option>' + agents.map(function (a) { return '<option value="' + a.id + '">' + esc(a.name) + '</option>'; }).join("");
-
-  var byStage = {}; STAGES.forEach(function (s) { byStage[s[0]] = []; });
-  list.forEach(function (t) { byStage[stageOf(t)].push(t); });
-  document.getElementById("tasks").innerHTML = list.length
-    ? STAGES.map(function (s) {
-        var items = byStage[s[0]];
-        return '<div class="lane"><div class="lane-h">' + s[1] + ' <span class="c">' + items.length + '</span></div>' +
-          (items.map(function (t) { return taskCard(t, opts); }).join("") || '<div class="empty">—</div>') + '</div>';
-      }).join("")
-    : '<div class="empty">No tasks yet — agents break their objectives into tasks as they work; you supervise them here (release / reassign).</div>';
+  lastBoardList = list; lastBoardOpts = opts;
+  renderBoard();
 
   var bugs = list.filter(function (t) { return (t.tags || []).indexOf("bug") >= 0; });
   document.getElementById("c-bugs").textContent = bugs.length;
   document.getElementById("bugs").innerHTML = bugs.map(function (t) { return taskCard(t, opts); }).join("") || '<div class="empty">No bugs — nothing tagged "bug".</div>';
-  updateBoardMore();
 }
 
 // The lane row scrolls sideways; when lanes continue past the viewport, show the
@@ -1121,6 +1173,17 @@ function renderOverview(board, audit) {
       '<div class="top"><span class="name"><span class="dot active"></span>' + colorChip(a.name) + esc(a.name) + '</span>' + branch + '</div>' +
       '<div class="meta">' + (task ? '<span class="k">task</span> <span title="' + esc(a.active_task_title) + '">' + esc(task) + '</span>' : '<span class="empty-inline">no active task</span>') + '</div>' + wt + '</div>';
   }).join("") || '<div class="empty">Nobody is working right now — agents appear here while they hold a live session.</div>';
+
+  // Momentum without leaving home: the last 8 shipped tasks, PR link prominent.
+  var shipped = board.tasks.filter(function (t) { return stageOf(t) === "done"; })
+    .sort(function (a, b) { return doneStamp(a) < doneStamp(b) ? 1 : -1; }).slice(0, 8);
+  document.getElementById("ov-shipped").innerHTML = shipped.map(function (t) {
+    var m = (t.pr_url || "").match(/\\/pull\\/(\\d+)/);
+    var pr = t.pr_url ? ' <a href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">' + (m ? "PR #" + m[1] : "PR") + '</a>' : "";
+    var title = t.title.length > 96 ? t.title.slice(0, 96) + "…" : t.title;
+    return '<div class="conf ship"><span class="time">' + esc(doneStamp(t).slice(5, 16).replace("T", " ")) + '</span>' +
+      '<span class="who">' + esc(t.owner_name || "—") + '</span> <span title="' + esc(t.title) + '">' + esc(title) + '</span>' + pr + '</div>';
+  }).join("") || '<div class="empty">Nothing shipped yet — done tasks land here, newest first.</div>';
 
   var confs = audit.filter(function (e) {
     return e.type === "conflict.detected" || e.type === "scope.violation" || e.outcome === "rejected";
