@@ -22,6 +22,7 @@ import {
 } from "../config.js";
 import { agentColor, ansiColorize } from "../core/colors.js";
 import { gitInfo } from "../core/git.js";
+import { detectRuntimes } from "../core/runtimes.js";
 import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
 
@@ -172,6 +173,12 @@ async function cmdDoctor(): Promise<void> {
   console.log(`auth        ${accessKey() ? "access key set (LANCHU_ACCESS_KEY)" : "none"}`);
   console.log(`on PATH     ${lanchuOnPath() ? "yes" : "no — run: lanchu install-commands  (or npm i -g lanchu)"}`);
   console.log(`server      ${(await serverUp()) ? "running" : "stopped"}`);
+  // Runtime inventory: which agent CLIs this machine could spawn (fresh probe).
+  const runtimes = detectRuntimes({ refresh: true });
+  console.log(`runtimes    ${runtimes.length ? "" : "none of the known agent CLIs found on PATH"}`);
+  for (const r of runtimes) {
+    console.log(`  ${r.cmd.padEnd(14)} ${(r.version ?? "version unknown").padEnd(28)} ${r.path}`);
+  }
 }
 
 async function cmdUpgrade(): Promise<void> {
@@ -206,6 +213,12 @@ async function cmdBoard(kind: "agents" | "tasks"): Promise<void> {
   const found = findConfig();
   if (!found) return console.log("no .lanchu/config.json here — run `lanchu init` first");
   await ensureServer();
+  // Availability view: installed runtimes + idle teammates a coordinator can reuse.
+  if (kind === "agents" && hasFlag("available")) {
+    const res = await api(`/api/available?org=${encodeURIComponent(found.config.org)}`);
+    console.log(JSON.stringify(await res.json(), null, 2));
+    return;
+  }
   const res = await api(`/api/board?org=${encodeURIComponent(found.config.org)}`);
   const board = (await res.json()) as { agents: unknown[]; tasks: unknown[] };
   console.log(JSON.stringify(kind === "agents" ? board.agents : board.tasks, null, 2));
@@ -966,6 +979,7 @@ const HELP_SECTIONS: HelpSection[] = [
     title: "Agents & tasks",
     rows: [
       ["lanchu agents | tasks", "list agents / tasks (JSON)"],
+      ["lanchu agents --available", "installed agent runtimes + idle teammates to reuse"],
       ['lanchu spawn ["<objective>"] [--role r] [--no-isolate] [--dry]', "new agent in a new terminal, in its own git worktree + branch"],
       ["lanchu tile [--dry]", "arrange agent terminals into a mosaic"],
       ["lanchu retire <agentId>", "safe retirement (handoff enforced)"],

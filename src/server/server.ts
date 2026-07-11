@@ -9,6 +9,7 @@ import { accessKey, host, port, publicUrl, reconnectGraceMs, VERSION } from "../
 import { bus } from "../core/events.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
+import { detectRuntimes } from "../core/runtimes.js";
 import { ensureAgentWorktree, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
 import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
@@ -533,6 +534,15 @@ export function createServer(): http.Server {
         return sendJson(res, 200, { ok: true, rules: store.getOrgRules(org.id) });
       }
 
+      if (url.pathname === "/api/available" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        const org = orgName ? store.getOrgByName(orgName) : null;
+        return sendJson(res, 200, {
+          runtimes: detectRuntimes(),
+          teammates: org ? store.availableTeammates(org.id) : [],
+        });
+      }
+
       if (url.pathname === "/api/memory" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
@@ -807,6 +817,9 @@ function restartServer(): void {
 
 export function startServer(): Promise<http.Server> {
   startWebhookDelivery();
+  // Warm the runtime inventory off the startup path (each probe is capped at
+  // 1.5s; deferring keeps `lanchu serve` responsive on machines with many CLIs).
+  setTimeout(() => detectRuntimes({ refresh: true }), 0).unref();
   // Recurring-function scheduler: fire due recurrings on a steady tick.
   const tick = () => {
     try {
