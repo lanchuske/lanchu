@@ -3132,6 +3132,10 @@ export interface AuditEvent {
   actor_name: string | null;
   subject_kind: string | null;
   subject_id: string | null;
+  /** resolved when the subject is an agent — the panel must never show raw ids */
+  subject_agent_name: string | null;
+  /** resolved when the subject is a memory entry — its key reads, its uuid doesn't */
+  subject_memory_key: string | null;
   workspace: string | null;
   tokens: number | null;
   outcome: string;
@@ -3148,8 +3152,11 @@ export function listAuditEvents(orgId: string, limit = 60, opts?: { includeReads
   const rows = db()
     .prepare(
       `SELECT e.id, e.type, a.name AS actor_name, e.subject_kind, e.subject_id,
+              s.name AS subject_agent_name, m.key AS subject_memory_key,
               e.workspace, e.tokens, e.outcome, e.data, e.created_at
        FROM event e LEFT JOIN agent a ON a.id = e.actor_agent_id
+                    LEFT JOIN agent s ON s.id = e.subject_id
+                    LEFT JOIN memory m ON m.id = e.subject_id
        WHERE e.org_id = ?${readFilter} ORDER BY e.id DESC LIMIT ?`,
     )
     .all(orgId, limit) as Record<string, unknown>[];
@@ -3159,6 +3166,8 @@ export function listAuditEvents(orgId: string, limit = 60, opts?: { includeReads
     actor_name: (r.actor_name as string) ?? null,
     subject_kind: (r.subject_kind as string) ?? null,
     subject_id: (r.subject_id as string) ?? null,
+    subject_agent_name: (r.subject_agent_name as string) ?? null,
+    subject_memory_key: (r.subject_memory_key as string) ?? null,
     workspace: (r.workspace as string) ?? null,
     tokens: (r.tokens as number) ?? null,
     outcome: r.outcome as string,
@@ -3779,8 +3788,11 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
     const openOwned = owned.filter((t) => isOpen(t.status));
     const wsTask = openOwned.find((t) => t.workspace) ?? owned.find((t) => t.workspace);
     // "Where is this agent right now": the task it is actively building wins
-    // over one it merely claimed.
-    const activeTask = openOwned.find((t) => t.status === "in_progress") ?? openOwned[0] ?? null;
+    // over one it merely claimed; a blocked task is parked, not active.
+    const activeTask =
+      openOwned.find((t) => t.status === "in_progress") ??
+      openOwned.find((t) => t.status === "claimed") ??
+      null;
     return {
       ...a,
       role_name: roleName.get(a.role_id) ?? null,
