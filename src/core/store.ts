@@ -3339,14 +3339,24 @@ export interface WorkConflict {
   overlap_tags: string[];
 }
 
-/** Tasks other PRESENT agents hold open whose tags overlap the given ones. */
+/**
+ * Dogfooding-DNA taxonomy tags (bug | extension | idea | process) categorize
+ * WHAT a task is, not WHERE it touches the code — two unrelated bug fixes
+ * sharing only `bug` are not a collision (task-mrg6tqic8: that false positive
+ * cost builders a hold+ask round twice in 10 minutes). Only area tags count
+ * as work surfaces for overlap; taxonomy stays for boards and filters.
+ */
+export const TAXONOMY_TAGS: ReadonlySet<string> = new Set(["bug", "extension", "idea", "process"]);
+
+/** Tasks other PRESENT agents hold open whose AREA tags overlap the given ones. */
 export function checkWorkOverlap(input: {
   orgId: string;
   agentId: string;
   tags: string[];
   excludeTaskId?: string;
 }): WorkConflict[] {
-  if (!input.tags.length) return [];
+  const surfaces = input.tags.filter((t) => !TAXONOMY_TAGS.has(t));
+  if (!surfaces.length) return [];
   const others = listAgents(input.orgId).filter(
     (a) => a.state !== "retired" && a.id !== input.agentId && isPresent(a),
   );
@@ -3355,7 +3365,7 @@ export function checkWorkOverlap(input: {
     for (const t of openTasksForAgent(other.id)) {
       if (t.id === input.excludeTaskId) continue;
       if (t.status !== "claimed" && t.status !== "in_progress") continue;
-      const overlap = t.tags.filter((tag) => input.tags.includes(tag));
+      const overlap = t.tags.filter((tag) => surfaces.includes(tag));
       if (overlap.length) {
         conflicts.push({
           with_agent: other.name,

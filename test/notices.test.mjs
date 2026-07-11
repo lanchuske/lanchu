@@ -184,6 +184,33 @@ test("no conflict when the other agent is not present, or tags don't overlap", (
   assert.equal(disjoint.length, 0);
 });
 
+test("taxonomy tags alone never conflict: two bug fixes on disjoint areas claim cleanly", () => {
+  const { org, project, alice, bob } = setup("taxonomy-org");
+
+  // Alice is live, fixing a PANEL bug.
+  presence.addLiveSession(alice.id);
+  const aliceTask = store.createTask({
+    projectId: project.id, orgId: org.id, agentId: alice.id,
+    title: "Bug: panel dot wrong color", tags: ["bug", "panel"],
+  });
+  store.claimTask({ agentId: alice.id, taskId: aliceTask.id });
+
+  // Bob starts an unrelated SERVER bug fix — shared tag is only the taxonomy `bug`.
+  const overlaps = store.checkWorkOverlap({ orgId: org.id, agentId: bob.id, tags: ["bug", "server"] });
+  assert.equal(overlaps.length, 0, "sharing only a taxonomy tag must not conflict");
+
+  // A task carrying ONLY taxonomy tags has no work surface at all.
+  const pureTaxonomy = store.checkWorkOverlap({ orgId: org.id, agentId: bob.id, tags: ["bug"] });
+  assert.equal(pureTaxonomy.length, 0);
+
+  // But a real area overlap still fires even when taxonomy tags ride along.
+  const real = store.checkWorkOverlap({ orgId: org.id, agentId: bob.id, tags: ["idea", "panel"] });
+  assert.equal(real.length, 1);
+  assert.deepEqual(real[0].overlap_tags, ["panel"], "overlap_tags reports areas only, never taxonomy");
+
+  presence.removeLiveSession(alice.id);
+});
+
 test("system notices carry no sender and ride the same channel", () => {
   const { org, bob } = setup("sys-org");
   store.systemNotice(org.id, bob.id, "Another live session is connected as this same agent.");
