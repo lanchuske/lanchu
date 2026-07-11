@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS role (
   name        TEXT NOT NULL,
   is_wildcard INTEGER NOT NULL DEFAULT 0,
   token_quota INTEGER,
+  preferred_model TEXT,
   created_at  TEXT NOT NULL,
   UNIQUE (org_id, name)
 );
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS agent (
   worktree         TEXT,
   terminal_ref     TEXT,
   color_slot       INTEGER,
+  model            TEXT,
   git_author_name  TEXT,
   git_author_email TEXT,
   gh_login         TEXT,

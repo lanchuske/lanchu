@@ -142,6 +142,8 @@ interface SessionRequest {
   cwd?: string;
   /** Give the agent its own git worktree + branch under .lanchu/worktrees (see the agent-isolation design doc). */
   isolate?: boolean;
+  /** claude model alias for the terminal (opus|sonnet|haiku…); defaults from role.preferred_model. */
+  model?: string;
   /**
    * Force a fresh agent even when agentName matches an existing teammate
    * (dedupe-on-collision: name-2, name-3…). Spawn passes this — a new teammate
@@ -198,6 +200,15 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
     agentName = agent.name;
   }
 
+  // Model routing: explicit spawn choice wins, then the role's preferred tier,
+  // then whatever the agent already ran with (respawn keeps its model).
+  {
+    const agent = store.getAgent(agentId)!;
+    const role = store.getRole(agent.role_id);
+    const model = body.model ?? agent.model ?? role?.preferred_model ?? null;
+    if (model !== agent.model) store.setAgentModel(agentId, model);
+  }
+
   // Isolation: give the agent its own worktree + branch so parallel agents in
   // the same repo never share a HEAD/index. Falls back to the shared cwd when
   // the directory isn't a local git repo (e.g. a remote LANCHU_SERVER).
@@ -245,6 +256,8 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
     // De-collided per-org color so CLI-side spawns tint with the same hue
     // the panel shows (falling back to the name hash would re-collide).
     color: store.agentColorOf(store.getAgent(agentId)!),
+    // The resolved model so CLI-side spawns launch the same tier the record says.
+    model: store.getAgent(agentId)!.model,
   });
 }
 
@@ -298,6 +311,7 @@ function revealAgent(agentId: string): {
   const result = spawnTerminal({
     title, agentName: agent.name, cwd, token, prompt,
     colorHex: store.agentColorOf(agent).hex,
+    model: agent.model ?? undefined,
   });
   store.setAgentTerminal(agent.id, result.ref ?? null);
   return { action: "opened", method: result.method };
@@ -508,10 +522,16 @@ export function createServer(): http.Server {
       }
 
       if (url.pathname === "/api/roles" && req.method === "POST") {
-        const body = (await readJson(req)) as { org: string; name: string; tags?: string[]; wildcard?: boolean };
+        const body = (await readJson(req)) as {
+          org: string; name: string; tags?: string[]; wildcard?: boolean; preferredModel?: string | null;
+        };
         if (!body?.org || !body?.name) return sendJson(res, 400, { error: "org and name required" });
         const org = store.getOrCreateOrg(body.org);
-        return sendJson(res, 200, store.defineRole(org.id, body.name, { wildcard: body.wildcard, tags: body.tags }));
+        let role = store.defineRole(org.id, body.name, { wildcard: body.wildcard, tags: body.tags });
+        if (body.preferredModel !== undefined && body.preferredModel !== null) {
+          role = store.updateRole(org.id, role.name, { preferredModel: body.preferredModel }) ?? role;
+        }
+        return sendJson(res, 200, role);
       }
 
       if (url.pathname === "/api/roles" && req.method === "PATCH") {
@@ -523,6 +543,7 @@ export function createServer(): http.Server {
           tags?: string[];
           wildcard?: boolean;
           quota?: number | null;
+          preferredModel?: string | null;
         };
         if (!body?.org || !body?.name) return sendJson(res, 400, { error: "org and name required" });
         const org = store.getOrgByName(body.org);
@@ -536,6 +557,7 @@ export function createServer(): http.Server {
           tags: body.tags,
           wildcard: body.wildcard,
           quota: body.quota,
+          preferredModel: body.preferredModel,
         });
         if (!role) return sendJson(res, 404, { error: `no role named '${body.name}' in org '${body.org}'` });
         return sendJson(res, 200, role);

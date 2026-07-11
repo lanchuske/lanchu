@@ -6,6 +6,7 @@ import { bus } from "../core/events.js";
 import { ackGreenzone, greenzoneStatus, isGreenzoneActive } from "../core/greenzone.js";
 import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
+import { sameModelTier, suggestModel } from "../core/routing.js";
 import { QuotaError, ScopeError } from "../core/types.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn } from "../core/worktree.js";
 import { spawnTerminal, tileTerminals } from "./cockpit.js";
@@ -376,11 +377,23 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         const me = store.getAgent(ctx.agentId);
         const myRole = me ? store.getRole(me.role_id) : null;
         const budget = myRole ? store.roleBudget(myRole) : null;
+        // Model routing: nag-free hint when this task's tier differs from the
+        // model this terminal runs. The agent/user decides (/model or respawn).
+        const suggestion = suggestModel(task.tags, task.stage);
+        const current = me?.model ?? null;
+        const modelHint = !sameModelTier(current, suggestion.model)
+          ? {
+              suggested: suggestion.model,
+              current,
+              message: `${suggestion.reason} — consider /model ${suggestion.model}, or finish the turn and respawn with --model ${suggestion.model} (identity, tasks and worktree survive).`,
+            }
+          : null;
         // Deliver the right "hat": skills matching this task's type (tags).
         return text({
           ...task,
           applicable_skills: store.skillsForTags(ctx.orgId, task.tags),
           ...(conflicts.length ? { conflict: conflictPayload(conflicts) } : {}),
+          ...(modelHint ? { model_hint: modelHint } : {}),
           ...(budget?.nearing
             ? {
                 budget_warning: {
@@ -787,10 +800,11 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         objective: z.string().optional(),
         role: z.string().optional(),
         name: z.string().optional(),
+        model: z.string().optional().describe("claude model alias for the new terminal (opus|sonnet|haiku); defaults from the role's preferred_model"),
         isolate: z.boolean().default(true),
       },
     },
-    async ({ objective, role, name, isolate }) => {
+    async ({ objective, role, name, model, isolate }: { objective?: string; role?: string; name?: string; model?: string; isolate: boolean }) => {
       try {
         // Coordination-class action: growing the team is the coordinator's call.
         store.assertCoordinator(ctx.orgId, ctx.agentId, "spawn_agent");
@@ -799,6 +813,9 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         // Prefer an explicit name; otherwise a tidy role-based default beats a
         // 40-char slug of the objective. Uniqueness (-2, -3…) is handled downstream.
         const agent = store.createAgent({ orgId: ctx.orgId, roleId: roleObj.id, objective, name: name || roleName });
+        // Model routing: explicit choice wins, then the role's preferred tier.
+        const launchModel = model ?? roleObj.preferred_model ?? null;
+        if (launchModel) store.setAgentModel(agent.id, launchModel);
         const { token } = store.openSession(agent.id);
         store.captureWorkspace(ctx.projectId, agent.id, ctx.cwd);
         // Isolation: dedicated worktree + branch for the new teammate (falls back
@@ -817,9 +834,10 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         const result = spawnTerminal({
           title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd, token, prompt,
           colorHex: store.agentColorOf(agent).hex,
+          model: launchModel ?? undefined,
         });
         store.setAgentTerminal(agent.id, result.ref ?? null);
-        return text({ agent: agent.name, worktree: wt?.path ?? null, branch: wt?.branch ?? null, ...result });
+        return text({ agent: agent.name, model: launchModel, worktree: wt?.path ?? null, branch: wt?.branch ?? null, ...result });
       } catch (err) {
         return fail(err);
       }

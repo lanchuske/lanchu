@@ -154,6 +154,7 @@ tasks live in `lanchu://me`, not in the prompt.
 | `lanchu roles` | Lists roles and their tags. |
 | `lanchu roles add <name> --tags ui,css` \| `--wildcard` | Creates a role. |
 | `lanchu roles edit <name> --add-tags a,b --rm-tags c` \| `--tags x,y` \| `--wildcard`/`--no-wildcard` | Edits an existing role's scope: adds/removes tags, `--tags` replaces the whole set, toggles wildcard. Audited as `role.updated`. |
+| `lanchu roles edit <name> --model <opus\|sonnet\|haiku>` \| `--no-model` | Sets/clears the role's **preferred model tier** — agents spawned with the role launch on it by default (`lanchu spawn --model` overrides per spawn). Audited in `role.updated`. |
 | `lanchu roles edit <name> --quota <tokens>` \| `--no-quota` | Sets/clears the role's **self-reported token budget**: agents report tokens on `task_update`; the panel shows consumption vs quota, claims warn at 80% and are blocked at 100% (audited as `quota.exceeded`). |
 | `lanchu rotate-tokens` | **Security**: ends every open session in the org so their tokens stop authenticating. Run after a token exposure; agents get fresh tokens when they re-register (spawn / panel reveal). Audited as `session.rotated`. |
 | `lanchu stats` | **Local** view for you (agents, tasks, orgs). Never leaves your machine. |

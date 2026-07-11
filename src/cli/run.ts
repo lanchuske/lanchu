@@ -37,7 +37,7 @@ function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
 }
 /** Flags that take no value; without this list positional() would swallow the token after them. */
-const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge", "no-isolate", "no-wildcard", "no-quota"]);
+const BOOL_FLAGS = new Set(["new", "wildcard", "dry", "uninstall", "purge", "no-isolate", "no-wildcard", "no-quota", "no-model"]);
 function positional(): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -417,7 +417,7 @@ async function cmdRolesAdd(): Promise<void> {
   const org = await orgOf();
   const t = flag("tags");
   const tags = t ? t.split(",").map((x) => x.trim()).filter(Boolean) : [];
-  const r = await post("/api/roles", { org, name, wildcard: hasFlag("wildcard"), tags });
+  const r = await post("/api/roles", { org, name, wildcard: hasFlag("wildcard"), tags, preferredModel: flag("model") });
   console.log("role:", JSON.stringify(r));
 }
 
@@ -441,11 +441,15 @@ async function cmdRolesEdit(): Promise<void> {
     body.quota = q;
   }
   if (hasFlag("no-quota")) body.quota = null;
+  const modelFlag = flag("model");
+  if (modelFlag !== undefined) body.preferredModel = modelFlag;
+  if (hasFlag("no-model")) body.preferredModel = null;
   const hasChange =
-    body.addTags || body.rmTags || body.tags || body.wildcard !== undefined || body.quota !== undefined;
+    body.addTags || body.rmTags || body.tags || body.wildcard !== undefined ||
+    body.quota !== undefined || body.preferredModel !== undefined;
   if (!name || !hasChange) {
     return console.log(
-      "usage: lanchu roles edit <name> --add-tags a,b --rm-tags c | --tags x,y | --wildcard | --no-wildcard | --quota <tokens> | --no-quota",
+      "usage: lanchu roles edit <name> --add-tags a,b --rm-tags c | --tags x,y | --wildcard | --no-wildcard | --quota <tokens> | --no-quota | --model <opus|sonnet|haiku> | --no-model",
     );
   }
   const res = await api("/api/roles", {
@@ -678,6 +682,7 @@ async function cmdSpawn(): Promise<void> {
   const s = (await post("/session", {
     org, project, objective, cwd: process.cwd(), role: roleName, wildcard: role ? false : true,
     agentName: flag("as") || roleName,
+    model: flag("model"),
     isolate: !hasFlag("no-isolate"),
     // Spawn always mints a fresh teammate: keep dedupe-on-collision instead of
     // the /session default of reusing an existing agent by name.
@@ -685,13 +690,14 @@ async function cmdSpawn(): Promise<void> {
   })) as {
     token: string; agentName: string; agentId: string; worktree: string | null; branch: string | null;
     color?: { hex: string; ansi256: number };
+    model?: string | null;
   };
   // Launch inside the agent's isolated worktree (falls back to this dir with --no-isolate
   // or when the directory isn't a git repo).
   const cwd = s.worktree ?? process.cwd();
   const result = spawnTerminal({
     title: `${org}·${s.agentName}`, agentName: s.agentName, cwd, token: s.token, prompt: SPAWN_PROMPT,
-    colorHex: s.color?.hex, dry: hasFlag("dry"),
+    colorHex: s.color?.hex, model: s.model ?? undefined, dry: hasFlag("dry"),
   });
   // Persist the terminal handle so the panel can re-focus this agent later.
   if (!hasFlag("dry") && result.ref) await post("/agent/terminal", { agentId: s.agentId, ref: result.ref });
@@ -1061,7 +1067,7 @@ const HELP_SECTIONS: HelpSection[] = [
     rows: [
       ["lanchu agents | tasks", "list agents / tasks (JSON)"],
       ["lanchu agents --available", "installed agent runtimes + idle teammates to reuse"],
-      ['lanchu spawn ["<objective>"] [--role r] [--no-isolate] [--dry]', "new agent in a new terminal, in its own git worktree + branch"],
+      ['lanchu spawn ["<objective>"] [--role r] [--model m] [--no-isolate] [--dry]', "new agent in a new terminal, in its own git worktree + branch"],
       ["lanchu tile [--dry]", "arrange agent terminals into a mosaic"],
       ["lanchu retire <agentId>", "safe retirement (handoff enforced)"],
       ["lanchu task release <id>", "supervisor override: release a task"],
@@ -1076,6 +1082,7 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu roles add <name> --tags a,b", "create a role (or --wildcard)"],
       ["lanchu roles edit <name> --add-tags a,b --rm-tags c", "edit a role's tags (--tags replaces; --wildcard/--no-wildcard)"],
       ["lanchu roles edit <name> --quota <tokens> | --no-quota", "set/clear the role's self-reported token budget"],
+      ["lanchu roles edit <name> --model <opus|sonnet|haiku>", "default model tier for agents spawned with this role"],
       ['lanchu rules [set "<text>"]', "view / set the org's rules"],
       ["lanchu rotate-tokens", "end every open session token (run after a token exposure)"],
       ["lanchu coordinator [set <agent> | clear]", "show the org's coordinator lease / supervisor grant or revoke"],
