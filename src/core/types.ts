@@ -43,7 +43,8 @@ export type EventType =
   | "agent.duplicate_session"
   | "scope.violation"
   | "quota.exceeded"
-  | "memory.written";
+  | "memory.written"
+  | "tool.response";
 
 export interface Org {
   id: string;

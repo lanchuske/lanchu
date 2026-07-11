@@ -421,6 +421,9 @@ export function panelHtml(): string {
         <div id="server-proc"><div class="empty">loading…</div></div>
         <h2 class="sub-h2">Agent terminals</h2>
         <div id="terminals"><div class="empty">loading…</div></div>
+        <h2 class="sub-h2">Context spend (24h)</h2>
+        <p class="vsub">What each MCP tool and agent put into context windows (chars ≈ 4·tokens) — the empirical loop for tuning knowledge caps and budgets.</p>
+        <div id="ctx-spend"><div class="empty">loading…</div></div>
         <h2 class="sub-h2">Lanchu MCP — live transports</h2>
         <div id="mcp-agents"><div class="empty">loading…</div></div>
         <h2 class="sub-h2">Project MCP servers</h2>
@@ -1004,12 +1007,40 @@ function renderMcps(m) {
 // Probing project MCP servers costs real HTTP round-trips, so poll it an order
 // of magnitude slower than pid/uptime.
 var mcpFetchedAt = 0;
+function fmtChars(n) {
+  n = +n || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return String(n);
+}
+function renderCtxSpend(d) {
+  var tools = (d.by_tool || []), agents = (d.by_agent || []);
+  if (!tools.length) {
+    document.getElementById("ctx-spend").innerHTML = '<div class="empty">No tool responses measured yet.</div>';
+    return;
+  }
+  function rows(list, keyName, chipped) {
+    return list.map(function (r) {
+      var label = chipped ? colorChip(r[keyName]) + esc(r[keyName]) : esc(r[keyName]);
+      return '<div class="ev"><span>' + label + '</span>' +
+        '<span class="right">' + r.calls + ' calls · ' + fmtChars(r.chars) + ' chars (~' + fmtChars(Math.round(r.chars / 4)) + ' tok)</span></div>';
+    }).join("");
+  }
+  document.getElementById("ctx-spend").innerHTML =
+    '<div class="card"><div class="meta">by tool</div>' + rows(tools, "tool", false) + '</div>' +
+    '<div class="card"><div class="meta">by agent</div>' + rows(agents, "agent", true) + '</div>';
+}
+var ctxSpendFetchedAt = 0;
 function refreshProcesses() {
   if (curView !== "processes") return;
   get("/api/processes").then(renderProcesses).catch(function () {});
   if (Date.now() - mcpFetchedAt > 15000) {
     mcpFetchedAt = Date.now();
     get("/api/mcps").then(renderMcps).catch(function () {});
+  }
+  if (Date.now() - ctxSpendFetchedAt > 15000) {
+    ctxSpendFetchedAt = Date.now();
+    get("/api/context-spend").then(renderCtxSpend).catch(function () {});
   }
 }
 // Keep the sidebar's Processes count live even while another view is open — the

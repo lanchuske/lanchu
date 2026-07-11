@@ -40,6 +40,8 @@ interface RecordEventInput {
   tokens?: number | null;
   outcome?: EventOutcome;
   data?: Record<string, unknown> | null;
+  /** High-volume telemetry: keep it on the record but off the live bus (no SSE refresh churn). */
+  silent?: boolean;
 }
 
 export function recordEvent(input: RecordEventInput): LanchuEvent {
@@ -77,9 +79,142 @@ export function recordEvent(input: RecordEventInput): LanchuEvent {
     data: input.data ?? null,
     created_at,
   };
-  bus.emitEvent(ev);
+  if (!input.silent) bus.emitEvent(ev);
   distillMemory(ev);
   return ev;
+}
+
+// ─────────────────── token-optimal knowledge access ───────────────────
+// Context is the scarce resource: what these helpers return is what enters an
+// agent's context window, so they deliver the smallest useful shape — lane-
+// filtered indexes, abstracts instead of bodies, section and delta reads, and
+// a spend meter so the caps get tuned empirically.
+
+/** ~One-line abstract of a doc: first heading + lead paragraph, tightly capped. */
+export function docAbstract(content: string, max = 220): string {
+  const lines = content.split("\n");
+  let heading = "";
+  let lead = "";
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!heading && line.startsWith("#")) {
+      heading = line.replace(/^#+\s*/, "");
+      continue;
+    }
+    if (line.startsWith("#") || line.startsWith("|") || line.startsWith("```")) continue;
+    lead = line.replace(/^[-*>]\s*/, "");
+    break;
+  }
+  const out = [heading, lead].filter(Boolean).join(" — ");
+  return out.length > max ? out.slice(0, max - 1) + "…" : out;
+}
+
+/**
+ * One markdown section by heading (case-insensitive substring): from the
+ * matching heading to the next heading of the same or higher level. Null when
+ * no heading matches.
+ */
+export function docSection(content: string, heading: string): string | null {
+  const lines = content.split("\n");
+  const needle = heading.toLowerCase();
+  let start = -1;
+  let level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(#+)\s*(.*)$/.exec(lines[i]!.trim());
+    if (m && m[2]!.toLowerCase().includes(needle)) {
+      start = i;
+      level = m[1]!.length;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  for (let i = start + 1; i < lines.length; i++) {
+    const m = /^(#+)\s/.exec(lines[i]!.trim());
+    if (m && m[1]!.length <= level) return lines.slice(start, i).join("\n").trim();
+  }
+  return lines.slice(start).join("\n").trim();
+}
+
+/** All markdown headings of a doc (for the "section not found" hint). */
+export function docHeadings(content: string): string[] {
+  return content
+    .split("\n")
+    .map((l) => /^#+\s*(.*)$/.exec(l.trim())?.[1] ?? null)
+    .filter((h): h is string => !!h);
+}
+
+export interface DocIndexEntry {
+  id: string;
+  title: string;
+  abstract: string;
+  category: string;
+  updated_at: string;
+}
+
+/**
+ * The doc index an agent should see: id + title + abstract only (never
+ * bodies). With task tags, lane-relevant docs only (tag appears in title or
+ * content); an empty match falls back to the full index rather than starving
+ * the agent of knowledge it might need.
+ */
+export function docsIndexFor(orgId: string, tags: string[] = []): DocIndexEntry[] {
+  const all = listDocs(orgId);
+  const toEntry = (d: { id: string; title: string; content: string; category: string; updated_at: string }): DocIndexEntry => ({
+    id: d.id,
+    title: d.title,
+    abstract: docAbstract(d.content),
+    category: d.category,
+    updated_at: d.updated_at,
+  });
+  if (!tags.length) return all.map(toEntry);
+  const needles = tags.map((t) => t.toLowerCase());
+  const matching = all.filter((d) => {
+    const hay = (d.title + "\n" + d.content).toLowerCase();
+    return needles.some((n) => hay.includes(n));
+  });
+  return (matching.length ? matching : all).map(toEntry);
+}
+
+/** Record what a tool call put into an agent's context (chars ≈ tokens·4). Off-bus, off-Activity; NOT event.tokens (that column is the self-reported budget). */
+export function recordToolSpend(orgId: string, agentId: string, tool: string, chars: number): void {
+  recordEvent({
+    org_id: orgId,
+    type: "tool.response",
+    actor_agent_id: agentId,
+    subject_kind: "tool",
+    subject_id: tool,
+    data: { tool, chars },
+    silent: true,
+  });
+}
+
+export interface ContextSpend {
+  by_tool: { tool: string; calls: number; chars: number }[];
+  by_agent: { agent: string; calls: number; chars: number }[];
+}
+
+/** Context-spend aggregates over a recent window, for tuning caps empirically. */
+export function contextSpend(orgId: string, hours = 24): ContextSpend {
+  const since = new Date(Date.now() - hours * 3_600_000).toISOString();
+  const by_tool = db()
+    .prepare(
+      `SELECT e.subject_id AS tool, COUNT(*) AS calls,
+              COALESCE(SUM(CAST(json_extract(e.data, '$.chars') AS INTEGER)), 0) AS chars
+       FROM event e WHERE e.org_id = ? AND e.type = 'tool.response' AND e.created_at >= ?
+       GROUP BY e.subject_id ORDER BY chars DESC`,
+    )
+    .all(orgId, since) as unknown as { tool: string; calls: number; chars: number }[];
+  const by_agent = db()
+    .prepare(
+      `SELECT COALESCE(a.name, '?') AS agent, COUNT(*) AS calls,
+              COALESCE(SUM(CAST(json_extract(e.data, '$.chars') AS INTEGER)), 0) AS chars
+       FROM event e LEFT JOIN agent a ON a.id = e.actor_agent_id
+       WHERE e.org_id = ? AND e.type = 'tool.response' AND e.created_at >= ?
+       GROUP BY a.name ORDER BY chars DESC`,
+    )
+    .all(orgId, since) as unknown as { agent: string; calls: number; chars: number }[];
+  return { by_tool, by_agent };
 }
 
 // ───────────────────────── memory ─────────────────────────
@@ -184,13 +319,16 @@ export function memoryGet(
 /**
  * The compact memories block org_context injects: the caller's own learnings
  * plus its project's and org's, highest-confidence/newest first, capped so a
- * respawned agent starts informed without burning context.
+ * respawned agent starts informed without burning context. With task tags,
+ * project/org entries are lane-filtered (tag appears in key or value); the
+ * agent's own learnings always ride along — they are its lane by definition.
  */
 export function memoriesForContext(
   orgId: string,
   agentId: string,
   projectId: string,
   cap = 15,
+  tags: string[] = [],
 ): { scope: MemoryScope; key: string; value: string }[] {
   const rows = db()
     .prepare(
@@ -198,10 +336,17 @@ export function memoriesForContext(
          (scope = 'agent' AND subject_id = ?) OR
          (scope = 'project' AND subject_id = ?) OR
          (scope = 'org' AND subject_id = ?))
-       ORDER BY confidence DESC, updated_at DESC LIMIT ?`,
+       ORDER BY confidence DESC, updated_at DESC`,
     )
-    .all(orgId, agentId, projectId, orgId, cap) as Record<string, unknown>[];
-  return rows.map(loadMemory).map((m) => ({ scope: m.scope, key: m.key, value: m.value }));
+    .all(orgId, agentId, projectId, orgId) as Record<string, unknown>[];
+  let entries = rows.map(loadMemory);
+  if (tags.length) {
+    const needles = tags.map((t) => t.toLowerCase());
+    entries = entries.filter(
+      (m) => m.scope === "agent" || needles.some((n) => (m.key + " " + m.value).toLowerCase().includes(n)),
+    );
+  }
+  return entries.slice(0, cap).map((m) => ({ scope: m.scope, key: m.key, value: m.value }));
 }
 
 // Layer 1 — event-derived learnings (deterministic, zero model tokens).
@@ -1742,9 +1887,10 @@ export interface AuditEvent {
 
 /** Recent audit/event log for an org, newest first (with actor names resolved). */
 export function listAuditEvents(orgId: string, limit = 60, opts?: { includeReads?: boolean }): AuditEvent[] {
-  // doc.read is high-volume bookkeeping: it stays on the record (provenance,
-  // graph, docReaders) but out of the default Activity feed.
-  const readFilter = opts?.includeReads ? "" : " AND e.type != 'doc.read'";
+  // doc.read and tool.response are high-volume bookkeeping: they stay on the
+  // record (provenance, graph, context-spend analytics) but out of the
+  // default Activity feed.
+  const readFilter = opts?.includeReads ? "" : " AND e.type NOT IN ('doc.read', 'tool.response')";
   const rows = db()
     .prepare(
       `SELECT e.id, e.type, a.name AS actor_name, e.subject_kind, e.subject_id,

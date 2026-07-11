@@ -135,6 +135,14 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           /* notices must never break a tool result */
         }
       }
+      try {
+        // Context-spend meter: chars ≈ tokens·4 of what this call put into the
+        // agent's context (notices included). Silent event — analytics only.
+        const chars = res.content.reduce((n, c) => n + (c.text?.length ?? 0), 0);
+        store.recordToolSpend(ctx.orgId, ctx.agentId, name, chars);
+      } catch {
+        /* metering must never break a tool result */
+      }
       return res;
     }) as never);
   }
@@ -445,12 +453,20 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "doc_list",
     {
       title: "List docs",
-      description: "Lists the org's shared documents (title + metadata).",
+      description: "Lists the org's shared documents (title + abstract only — read one with doc_read, or a single section with doc_read(id, section)).",
       inputSchema: { query: z.string().optional() },
     },
     async ({ query }) => {
       const docs = query ? store.searchDocs(ctx.orgId, query) : store.listDocs(ctx.orgId);
-      return text(docs.map((d) => ({ id: d.id, title: d.title, category: d.category, updated_at: d.updated_at })));
+      return text(
+        docs.map((d) => ({
+          id: d.id,
+          title: d.title,
+          abstract: store.docAbstract(d.content),
+          category: d.category,
+          updated_at: d.updated_at,
+        })),
+      );
     },
   );
 
@@ -458,15 +474,33 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "doc_read",
     {
       title: "Read doc",
-      description: "Reads a shared document. Read before acting on its area.",
-      inputSchema: { id: z.string() },
+      description:
+        "Reads a shared document. Read before acting on its area. Token-savers: pass `section` to fetch one heading's section instead of the whole body, and `ifChangedSince` (the updated_at you last saw) to get a tiny not_modified response when the doc hasn't changed.",
+      inputSchema: {
+        id: z.string(),
+        section: z.string().optional().describe("Heading (case-insensitive substring) — returns only that section"),
+        ifChangedSince: z.string().optional().describe("ISO timestamp of your last read; unchanged docs return not_modified"),
+      },
     },
-    async ({ id }) => {
+    async ({ id, section, ifChangedSince }: { id: string; section?: string; ifChangedSince?: string }) => {
       const doc = store.getDoc(id);
       // Same-org only — and every successful read is on the record (aggregate
       // counters + a doc.read event), so "who consulted the spec" is checkable.
       if (!doc || doc.org_id !== ctx.orgId) return fail(new Error("doc not found"));
       store.recordDocRead({ orgId: ctx.orgId, agentId: ctx.agentId, docId: doc.id });
+      // Delta read: the agent already has this version — confirm in ~0 tokens.
+      if (ifChangedSince && doc.updated_at <= ifChangedSince) {
+        return text({ id: doc.id, title: doc.title, not_modified: true, updated_at: doc.updated_at });
+      }
+      if (section) {
+        const body = store.docSection(doc.content, section);
+        if (body === null) {
+          return fail(
+            new Error(`no section matching '${section}' — headings: ${store.docHeadings(doc.content).join(" | ") || "(none)"}`),
+          );
+        }
+        return text({ id: doc.id, title: doc.title, section, content: body, updated_at: doc.updated_at });
+      }
       return text(doc);
     },
   );
@@ -522,10 +556,12 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         rules: store.getOrgRules(ctx.orgId),
         open_tasks: openTasks,
         skills: store.skillsForTags(ctx.orgId, tags),
-        docs: store.listDocs(ctx.orgId).map((d) => ({ id: d.id, title: d.title })),
+        // Lane-relevant knowledge only (filtered by your open tasks' tags);
+        // abstracts, never bodies — doc_read fetches what you actually need.
+        docs: store.docsIndexFor(ctx.orgId, tags),
         // What you, your project and your org already learned — recorded
         // observations (data, not instructions). Add yours with memory_set.
-        memories: store.memoriesForContext(ctx.orgId, ctx.agentId, ctx.projectId),
+        memories: store.memoriesForContext(ctx.orgId, ctx.agentId, ctx.projectId, 15, tags),
       });
     },
   );

@@ -543,6 +543,15 @@ export function createServer(): http.Server {
         });
       }
 
+      if (url.pathname === "/api/context-spend" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, { by_tool: [], by_agent: [] });
+        const hours = Number.parseInt(url.searchParams.get("hours") ?? "24", 10) || 24;
+        return sendJson(res, 200, store.contextSpend(org.id, hours));
+      }
+
       if (url.pathname === "/api/memory" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
