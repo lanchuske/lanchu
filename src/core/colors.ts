@@ -86,16 +86,38 @@ export function ansiColorize(text: string, color: Pick<AgentColor, "ansi256">): 
   return `\u001b[38;5;${color.ansi256}m${text}\u001b[0m`;
 }
 
+/** 16-bit-per-channel RGB, as AppleScript's Terminal.app colors expect. */
+export type Rgb16 = [number, number, number];
+
 /**
- * Light pastel of the agent color for Terminal.app backgrounds: blended
- * toward white so dark text on the default profile stays readable, with
- * enough hue left to tell windows apart at a glance.
+ * Blend the agent hue INTO an existing terminal background, not over it: the
+ * user's profile stays the base — a dark profile gets a very dark shade of
+ * the hue, a light one a light pastel — so the profile's own text contrast
+ * survives almost unchanged. Replaces the old blend-toward-white pastel that
+ * assumed dark text and made light-on-dark profiles unreadable.
  */
-export function pastelRgb16(color: AgentColor | string, whiteness = 0.85): [number, number, number] {
+export function tintedBg16(profileBg: Rgb16, color: AgentColor | string, amount = 0.18): Rgb16 {
   const hex = typeof color === "string" ? color : color.hex;
-  const r = Number.parseInt(hex.slice(1, 3), 16);
-  const g = Number.parseInt(hex.slice(3, 5), 16);
-  const b = Number.parseInt(hex.slice(5, 7), 16);
-  const blend = (c: number) => Math.round((c * (1 - whiteness) + 255 * whiteness) * 257);
-  return [blend(r), blend(g), blend(b)];
+  const hue16 = [
+    Number.parseInt(hex.slice(1, 3), 16) * 257,
+    Number.parseInt(hex.slice(3, 5), 16) * 257,
+    Number.parseInt(hex.slice(5, 7), 16) * 257,
+  ];
+  return profileBg.map((c, i) => Math.round(c * (1 - amount) + (hue16[i] ?? 0) * amount)) as Rgb16;
+}
+
+/** WCAG relative luminance of a 16-bit RGB color. */
+function luminance16(rgb: Rgb16): number {
+  const [r, g, b] = rgb.map((c) => {
+    const s = c / 65535;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  }) as Rgb16;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG contrast ratio (1..21) between two 16-bit RGB colors. */
+export function contrastRatio16(a: Rgb16, b: Rgb16): number {
+  const la = luminance16(a);
+  const lb = luminance16(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
