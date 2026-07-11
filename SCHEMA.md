@@ -208,16 +208,22 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   `task.stage_changed` · `task.bounced` · `task.archived` · `task.superseded` ·
   `task.redefined` · `task.handoff` · `doc.created` · `doc.updated` · `doc.archived` ·
   `scope.violation`.
-- **Wake v5 — park & refire:** agents report their Claude Code session lifecycle via
-  hooks installed at spawn (`SessionStart` → `POST /hooks/agent/session-start` captures
-  `claude_session_id` and clears `parked_at`; `SessionEnd` → `/session-end` parks the
-  agent, audited `agent.parked`). The wake sweep's third rung refires a parked (or
-  verifiably crashed) agent with starved notices: `claude --resume <sid> "<prompt>"`
-  in its worktree — prompt as CLI arg (a bare resume never triggers a turn). Safety
-  gates, all mandatory: parked or dead terminal, no live MCP transport, and the id
-  absent from `claude agents --json` (an unreadable answer fails CLOSED — resuming a
-  live session from a second process interleaves both into one transcript). Audited
-  `agent.nudged` with `transport: "runner"`.
+- **Wake v5.1 — push only, typing abolished:** every rung is push-based; typing into
+  a terminal is impossible by construction (no tmux paste/send-keys, no keystrokes).
+  (1) piggyback: notices ride every tool result. (2) sync Stop gate: turn-end blocks
+  (exit 2) while notices are pending. (3) asyncRewake long-poller: one background
+  Stop hook per agent (mkdir lock, dies with its parent) long-polls
+  `GET /api/agent/pending?wait=…` and exits 2 the moment a notice lands — instant
+  push into a live idle TUI, zero LLM tokens. (4) park & refire: `SessionStart` →
+  `POST /hooks/agent/session-start` captures `claude_session_id` and clears
+  `parked_at`; `SessionEnd` parks (audited `agent.parked`); the sweep refires a
+  parked (or verifiably crashed) agent with starved notices via
+  `claude --resume <sid> "<prompt>"` — prompt as CLI arg (a bare resume never
+  triggers a turn). Refire gates, all mandatory: parked or dead terminal, no live
+  MCP transport, id absent from `claude agents --json` (unknown fails CLOSED).
+  Audited `agent.nudged` with `transport: "runner"` — the only wake transport left.
+  Parking requires the claude PROCESS to end: `session_leave` only idles the MCP
+  session; `SessionEnd` never fires while the TUI lives.
 - **Definition refinement:** `task_update` with a `title` (status optional) rewrites a
   task's definition IN PLACE — only in the definition/backlog stages, only by the
   owner, the creator, the coordinator lease holder, or the supervisor

@@ -111,6 +111,23 @@ export function installStopHook(cwd: string, token: string, agentName?: string):
       `curl -sf --max-time 3 -X POST -H "Authorization: Bearer $(cat ${sq(tokenFile)} 2>/dev/null)" ` +
       `-H 'content-type: application/json' --data-binary @- ` +
       `${sq(`${baseUrl()}${endpoint}`)} >/dev/null 2>&1; exit 0`;
+    // Wake v5.1 asyncRewake rung (task-mrgpl72k9): after every turn, ONE
+    // background long-poller per agent (mkdir lock, PID-checked) watches
+    // /api/agent/pending?wait=… and exits 2 the moment a notice lands —
+    // instant push into a live idle TUI, zero keystrokes, zero LLM tokens.
+    // The loop dies with its parent (kill -0 $PPID), so a closed session
+    // never leaves an orphan poller; every curl fails open.
+    const lockDir = path.join(dir, `${slug}.rewake.lock`);
+    const rewakeCommand =
+      `[ -d ${sq(lockDir)} ] && kill -0 "$(cat ${sq(path.join(lockDir, "pid"))} 2>/dev/null)" 2>/dev/null && exit 0; ` +
+      `mkdir -p ${sq(lockDir)} && echo $$ > ${sq(path.join(lockDir, "pid"))}; ` +
+      `trap 'rm -rf ${sq(lockDir)}' EXIT; ` +
+      `while kill -0 "$PPID" 2>/dev/null; do ` +
+      `N=$(curl -sf --max-time 70 -H "Authorization: Bearer $(cat ${sq(tokenFile)} 2>/dev/null)" ` +
+      `${sq(`${baseUrl()}/api/agent/pending?wait=55000`)} 2>/dev/null); ` +
+      `case "$N" in ''|0|*[!0-9]*) : ;; ` +
+      `*) echo "You have $N Lanchu notices — run message_list now and follow the instructions." >&2; exit 2;; esac; ` +
+      `done; exit 0`;
 
     const file = path.join(cwd, ".claude", "settings.local.json");
     let settings: Record<string, unknown> = {};
@@ -122,11 +139,13 @@ export function installStopHook(cwd: string, token: string, agentName?: string):
       }
     }
     const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
-    // Idempotency: the token-file path identifies this agent's hook entries.
-    // Compare against the RAW command strings — serializing the array first
-    // (JSON.stringify) escapes Windows path backslashes, so the path never
-    // matched and every respawn appended a duplicate hook (Windows CI red).
-    const ensure = (event: string, command: string) => {
+    // Idempotency: the token-file path + a per-rung marker identify this
+    // agent's hook entries (the Stop event carries TWO rungs: the sync gate
+    // and the async rewake long-poller). Compare against the RAW command
+    // strings — serializing the array first (JSON.stringify) escapes Windows
+    // path backslashes, so the path never matched and every respawn appended
+    // a duplicate hook (Windows CI red).
+    const ensure = (event: string, command: string, marker: string, extra: Record<string, unknown> = {}) => {
       const list = (hooks[event] ??= []) as unknown[];
       const installed = list.some((entry) => {
         const entryHooks = (entry as { hooks?: unknown })?.hooks;
@@ -134,15 +153,29 @@ export function installStopHook(cwd: string, token: string, agentName?: string):
           Array.isArray(entryHooks) &&
           entryHooks.some((h) => {
             const cmd = (h as { command?: unknown })?.command;
-            return typeof cmd === "string" && cmd.includes(tokenFile);
+            return typeof cmd === "string" && cmd.includes(tokenFile) && cmd.includes(marker);
           })
         );
       });
-      if (!installed) list.push({ hooks: [{ type: "command", command }] });
+      if (!installed) list.push({ hooks: [{ type: "command", command, ...extra }] });
     };
-    ensure("Stop", stopCommand);
-    ensure("SessionStart", lifecycleCommand("/hooks/agent/session-start"));
-    ensure("SessionEnd", lifecycleCommand("/hooks/agent/session-end"));
+    // Migration: pre-v5.1 Stop entries carry the token file but no rung
+    // marker — drop them so a respawn upgrades in place instead of stacking.
+    hooks.Stop = ((hooks.Stop ?? []) as unknown[]).filter((entry) => {
+      const entryHooks = (entry as { hooks?: unknown })?.hooks;
+      if (!Array.isArray(entryHooks)) return true;
+      return !entryHooks.some((h) => {
+        const cmd = (h as { command?: unknown })?.command;
+        return typeof cmd === "string" && cmd.includes(tokenFile) && !cmd.includes(": lanchu-");
+      });
+    });
+    ensure("Stop", `: lanchu-stop-gate; ${stopCommand}`, ": lanchu-stop-gate;");
+    // asyncRewake (facts verified in the org design doc): the hook runs in the
+    // background and REWAKES the agent by exiting 2 — the push rung for live
+    // idle TUIs, replacing every typing transport.
+    ensure("Stop", `: lanchu-rewake; ${rewakeCommand}`, ": lanchu-rewake;", { async: true, asyncRewake: true });
+    ensure("SessionStart", lifecycleCommand("/hooks/agent/session-start"), "/hooks/agent/session-start");
+    ensure("SessionEnd", lifecycleCommand("/hooks/agent/session-end"), "/hooks/agent/session-end");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
     return true;
@@ -424,59 +457,11 @@ end try`]);
   return true;
 }
 
-/** How a wake reached the terminal — audited so degraded paths are visible. */
-export type WakeTransport = "tmux" | "terminal.app-keystroke-degraded";
-
-/**
- * Wake an idle agent by putting ONE fixed line into its own terminal.
- * Wake v4 transport policy: tmux paste-buffer/send-keys is the standard path
- * (scriptable, no focus stealing, works with the screen locked). The
- * Terminal.app System-Events keystroke is a LAST-RESORT fallback only — it
- * steals focus and types into the user's machine — and callers must audit it
- * as degraded (the returned transport says which path ran). The Stop hook
- * installed at spawn should make most wakes unnecessary in the first place.
- * Best-effort: returns null when the terminal can't be nudged.
- */
-export function nudgeTerminal(ref: TerminalRef, line: string): WakeTransport | null {
-  if (ref.method === "tmux") {
-    if (!terminalAlive(ref)) return null;
-    // Paste via a named buffer (safe for any chars), then submit.
-    const buf = spawnSync("tmux", ["set-buffer", "-b", "lanchu-nudge", "--", line]);
-    if (buf.status !== 0) return null;
-    const paste = spawnSync("tmux", ["paste-buffer", "-b", "lanchu-nudge", "-t", ref.id, "-d"]);
-    if (paste.status !== 0) return null;
-    return spawnSync("tmux", ["send-keys", "-t", ref.id, "Enter"]).status === 0 ? "tmux" : null;
-  }
-
-  // Terminal.app: raise the window BY ID, paste from the clipboard, restore it.
-  const osa = [
-    "set prevClip to \"\"",
-    "try",
-    "  set prevClip to the clipboard as text",
-    "end try",
-    `set the clipboard to ${asAppleStr(line)}`,
-    'tell application "Terminal"',
-    "  try",
-    `    set w to (first window whose id is ${ref.id})`,
-    "    set index of w to 1",
-    "    activate",
-    "  on error",
-    "    return false",
-    "  end try",
-    "end tell",
-    "delay 0.2",
-    'tell application "System Events" to tell process "Terminal"',
-    '  keystroke "v" using command down',
-    "  delay 0.15",
-    "  key code 36",
-    "end tell",
-    "delay 0.2",
-    "set the clipboard to prevClip",
-    "return true",
-  ].join("\n");
-  const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8", timeout: 8000 });
-  return (out.stdout ?? "").trim() === "true" ? "terminal.app-keystroke-degraded" : null;
-}
+// Wake v5.1 (task-mrgpl72k9, owner directive): the typing transports are GONE
+// — no tmux paste/send-keys, no Terminal.app System-Events keystrokes. Typing
+// into an agent's terminal is impossible by construction. Live-idle TUIs are
+// woken by the asyncRewake Stop hook (long-poll push, installed at spawn);
+// exited/crashed sessions are refired by the sweep (`claude --resume`).
 
 export interface TileResult {
   method: "tmux" | "terminal.app" | "unsupported";

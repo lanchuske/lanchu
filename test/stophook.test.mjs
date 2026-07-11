@@ -23,12 +23,19 @@ test("installStopHook writes a blocking Stop hook wired to /api/agent/pending, w
   const file = path.join(wt, ".claude", "settings.local.json");
   const settings = JSON.parse(fs.readFileSync(file, "utf8"));
   const stop = settings.hooks.Stop;
-  assert.equal(stop.length, 1);
+  // v5.1: two Stop rungs — the sync gate and the asyncRewake long-poller.
+  assert.equal(stop.length, 2);
   const command = stop[0].hooks[0].command;
   assert.equal(stop[0].hooks[0].type, "command");
   assert.match(command, /\/api\/agent\/pending/);
   assert.match(command, /exit 2/, "a pending count blocks the stop");
   assert.match(command, /message_list/, "the reason points at the inbox");
+  const rewake = stop[1].hooks[0];
+  assert.equal(rewake.async, true);
+  assert.equal(rewake.asyncRewake, true, "the long-poller rewakes by exiting 2");
+  assert.match(rewake.command, /wait=55000/, "long-polls the pending endpoint");
+  assert.match(rewake.command, /kill -0 "\$PPID"/, "the poller dies with its parent — no orphans");
+  assert.match(rewake.command, /rewake\.lock/, "one poller per agent (lock)");
 
   // The token never lands in the worktree (it could get committed): the hook
   // reads it from a user-only file in the state dir.
@@ -53,7 +60,7 @@ test("installStopHook is idempotent per agent, refreshes the token, and never cl
   const settings = JSON.parse(fs.readFileSync(file, "utf8"));
   assert.equal(settings.model, "opus", "existing settings survive");
   assert.ok(settings.hooks.PreToolUse, "other hooks survive");
-  assert.equal(settings.hooks.Stop.length, 1, "one entry per agent, however many respawns");
+  assert.equal(settings.hooks.Stop.length, 2, "one gate + one rewake per agent, however many respawns");
   const tokenFile = path.join(dir, "run", "builder-y.stop-hook-token");
   assert.equal(fs.readFileSync(tokenFile, "utf8"), "token-two", "respawn refreshes the token in place");
 
@@ -117,7 +124,7 @@ test("windows regression: idempotency survives JSON-escapable characters in the 
     installStopHook(wt, "tok-a", "builder-z");
     installStopHook(wt, "tok-b", "builder-z");
     const settings = JSON.parse(fs.readFileSync(path.join(wt, ".claude", "settings.local.json"), "utf8"));
-    assert.equal(settings.hooks.Stop.length, 1, "no duplicate hook when the path needs JSON escaping");
+    assert.equal(settings.hooks.Stop.length, 2, "no duplicate hooks when the path needs JSON escaping");
   } finally {
     process.env.LANCHU_STATE_DIR = prev;
     fs.rmSync(wt, { recursive: true, force: true });

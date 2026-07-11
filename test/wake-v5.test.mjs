@@ -109,18 +109,16 @@ test("a crashed session (no SessionEnd) refires only when its terminal is verifi
   store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "parked", body: "x" });
   await graceElapsed();
 
-  // Terminal still alive → the nudge rung owns it; refire must not fire for
-  // THIS agent (the sweep spans every org, so filter by session id).
+  // Terminal still alive → the asyncRewake hook owns it (v5.1): the sweep
+  // must not refire THIS agent (it spans every org, so filter by session id).
   const fired = [];
   let r = runNudgeSweep({
     alive: () => true,
     transportLive: () => false,
     liveSessions: () => new Set(),
-    nudge: () => "tmux",
     refire: (c) => { fired.push(c.claude_session_id); return true; },
   });
-  assert.ok(r.nudged.includes("parked"), "live terminal → classic nudge");
-  assert.ok(!fired.includes("sid-d"), "nudged agent is never double-handled by refire");
+  assert.ok(!fired.includes("sid-d"), "a live terminal is never refired — the hook owns it");
 
   // Fresh starvation, terminal dead → the crash case refires.
   store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "parked", body: "y" });
@@ -156,7 +154,8 @@ test("installStopHook installs Stop + SessionStart + SessionEnd hooks, idempoten
   assert.equal(installStopHook(wt, "tok-1", "parked"), true);
   assert.equal(installStopHook(wt, "tok-2", "parked"), true); // respawn — no duplicates
   const settings = JSON.parse(fs.readFileSync(path.join(wt, ".claude", "settings.local.json"), "utf8"));
-  for (const ev of ["Stop", "SessionStart", "SessionEnd"]) {
+  assert.equal(settings.hooks.Stop.length, 2, "Stop: sync gate + asyncRewake, exactly once each");
+  for (const ev of ["SessionStart", "SessionEnd"]) {
     assert.equal(settings.hooks[ev].length, 1, ev + " installed exactly once");
   }
   const start = settings.hooks.SessionStart[0].hooks[0].command;
