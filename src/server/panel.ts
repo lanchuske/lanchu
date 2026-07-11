@@ -704,8 +704,14 @@ function renderAgents(list) {
 var openTasks = {}; // task cards expanded by the user, kept across refreshes (like openDocs)
 function taskCard(t, opts) {
   var badge = t.stale ? '<span class="pill stale-pill">stale</span>' : (t.reserved ? '<span class="pill p-available">reserved</span>' : "");
+  // 2+ rejections = the definition itself is the problem; flag it prominently.
+  if (t.rejection_count >= 2) badge += ' <span class="pill stale-pill" title="rejected ' + t.rejection_count + ' times — fix the definition before anyone retries">needs definition</span>';
   var owned = !!t.owner_agent_id;
   var pr = t.pr_url ? ' · <a class="pr-link" href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">PR ↗</a>' : "";
+  var rej = t.last_rejection
+    ? '<div class="meta"><span class="k">rejected</span> ' + esc(t.last_rejection.reason.replace(/_/g, " ")) + ' by ' + esc(t.last_rejection.by) +
+      (t.rejection_count > 1 ? ' (×' + t.rejection_count + ')' : '') + ' — ' + esc(t.last_rejection.note) + '</div>'
+    : "";
   // Supervisor overrides only make sense on open work — a done task has nothing
   // to release or reassign. Reassign is ONE control: picking an agent acts.
   var actions = owned && t.status !== "done"
@@ -717,7 +723,7 @@ function taskCard(t, opts) {
     '<span><span class="pill p-' + esc(t.status) + '">' + esc(t.status.replace("_", " ")) + '</span> ' + badge + '</span></div>' +
     '<div>' + (t.tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("") + '</div>' +
     '<div class="meta">' + (owned ? '<span class="k">owner</span> ' + esc(t.owner_name || t.owner_agent_id) : "unassigned") +
-    (t.workspace ? ' · <span class="k">ws</span> ' + esc(t.workspace) : "") + pr + '</div>' + actions + '</div>';
+    (t.workspace ? ' · <span class="k">ws</span> ' + esc(t.workspace) : "") + pr + '</div>' + rej + actions + '</div>';
 }
 
 var STAGES = [["backlog", "Backlog"], ["definition", "Definition"], ["build", "Build"], ["review", "Review"], ["qa", "QA"], ["done", "Done"]];

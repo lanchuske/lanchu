@@ -130,7 +130,9 @@ CREATE TABLE task (
   created_at          TEXT NOT NULL,
   claimed_at          TEXT,                    -- to detect 'stale' (idle zombie)
   updated_at          TEXT NOT NULL,
-  done_at             TEXT
+  done_at             TEXT,
+  rejection_count     INTEGER NOT NULL DEFAULT 0, -- times agents bounced it back to definition; 2+ = "needs definition"
+  last_rejection      TEXT                     -- JSON {reason, note, by, at} of the latest task_reject
 );
 
 CREATE TABLE task_tag (
@@ -194,8 +196,12 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   is `idle`.
 - **event.type:** `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
   `agent.retired` · `task.created` · `task.claimed` · `task.released` · `task.started` ·
-  `task.completed` · `task.blocked` · `task.reassigned` · `task.handoff` ·
+  `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` · `task.handoff` ·
   `doc.created` · `doc.updated` · `scope.violation`.
+- **task_reject reason:** `out_of_scope` · `underspecified` · `missing_docs` ·
+  `blocked_dependency` · `other`. A rejection releases the task, bounces its stage to
+  `definition`, increments `rejection_count`, stores `last_rejection`, and notifies the
+  creator and the product role.
 - **event.outcome:** `applied` (it was applied) · `rejected` (it was blocked; e.g. `scope.violation`).
 
 ---

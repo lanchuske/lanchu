@@ -21,7 +21,9 @@ const INSTRUCTIONS = [
   "Lanchu rejects and records it. Tool results may carry a `notices` block — messages from",
   "teammates, conflict warnings or system notes: read them, act or reply (message_send),",
   "and acknowledge with message_ack. If a result carries a `conflict` block, STOP and ask",
-  "your user before proceeding. If unsure how to proceed, call the help tool.",
+  "your user before proceeding. If a claimed task turns out underspecified or outside your",
+  "competence, don't guess — task_reject with the reason. If unsure how to proceed, call",
+  "the help tool.",
 ].join(" ");
 
 function text(obj: unknown) {
@@ -56,6 +58,20 @@ function overlapPayload(conflicts: import("../core/store.js").WorkConflict[]) {
       "expect the full conflict warning if someone claims it while the overlap is live.",
     conflicts,
   };
+}
+
+/**
+ * Definition-of-Ready nudge (soft, advisory): long prose with no doc link or
+ * acceptance criteria tends to come back via task_reject. Never blocks.
+ * Exported for tests.
+ */
+export function definitionHint(title: string): string | undefined {
+  const referencesSpec = /https?:\/\/|lanchu:\/\/|\bdocs?\b|acceptance|criteri/i.test(title);
+  if (title.length <= 200 || referencesSpec) return undefined;
+  return (
+    "This task is long prose with no doc link or acceptance criteria. " +
+    "Consider linking a design doc or stating acceptance criteria — underspecified tasks get bounced back by task_reject."
+  );
 }
 
 function fail(err: unknown) {
@@ -284,7 +300,12 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           tags,
           excludeTaskId: task.id,
         });
-        return text(overlaps.length ? { ...task, overlap: overlapPayload(overlaps) } : task);
+        const hint = definitionHint(title);
+        return text({
+          ...task,
+          ...(overlaps.length ? { overlap: overlapPayload(overlaps) } : {}),
+          ...(hint ? { definition_hint: hint } : {}),
+        });
       } catch (err) {
         return fail(err);
       }
@@ -405,6 +426,34 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     async ({ taskId }) => {
       try {
         return text(store.releaseTask({ agentId: ctx.agentId, taskId }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "task_reject",
+    {
+      title: "Reject task",
+      description:
+        "Bounce a task back to the definition lane with an explicit reason (audited; the creator and the product role are notified). " +
+        "Use it when a claimed task turns out underspecified, missing docs, or outside your competence — don't guess.",
+      inputSchema: {
+        taskId: z.string(),
+        reason: z.enum(["out_of_scope", "underspecified", "missing_docs", "blocked_dependency", "other"]),
+        note: z.string().describe("What's missing or wrong — concrete enough for the definer to fix it."),
+      },
+    },
+    async ({ taskId, reason, note }) => {
+      try {
+        const task = store.rejectTask({ agentId: ctx.agentId, taskId, reason, note });
+        return text({
+          task,
+          ...(task.rejection_count >= 2
+            ? { flag: `needs definition — rejected ${task.rejection_count} times` }
+            : {}),
+        });
       } catch (err) {
         return fail(err);
       }
@@ -751,12 +800,12 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "3. Claim a task with task_claim before working it — this prevents duplication. Use task_check_scope if unsure it's yours.",
           "4. Report progress with task_update (in_progress, then done). 'done' unblocks dependent tasks.",
           "5. Keep shared knowledge current with doc_read / doc_update.",
-          "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release.",
+          "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release. If a claimed task turns out underspecified, missing docs, or outside your competence, don't guess — task_reject with the reason: it bounces to the definition lane and notifies whoever can fix the spec.",
           "7. Talk to teammates with message_send (audit-logged; the supervisor sees everything). Notices arrive inside your tool results — act on them and message_ack.",
           "8. If a task_claim result carries a `conflict` block, another live agent is on that surface: STOP and ask your user — stop, hand off, or park it. An `overlap` field on task_create is informational only: creating a task is fine, just route it with the overlap in mind.",
         ],
         rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc.",
-        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, session_leave.",
+        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_reject, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, session_leave.",
       }),
   );
 
