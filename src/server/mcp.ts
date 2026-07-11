@@ -391,7 +391,8 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     {
       title: "Update task",
       description:
-        "Changes status (in_progress|blocked|done). 'done' unblocks dependents. Optionally advance the SDLC stage or attach the PR/MR URL you opened.",
+        "Changes status (in_progress|blocked|done). 'done' unblocks dependents. Optionally attach the PR/MR URL you opened — the server then routes the SDLC stage (PR → review; done → qa verification). " +
+        "Completing a verification task ('QA: verify …'): start the note with FAIL to bounce the work back to build; anything else passes and closes the original.",
       inputSchema: {
         taskId: z.string(),
         status: z.enum(["in_progress", "blocked", "done"]),
@@ -405,11 +406,25 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     async ({ taskId, status, stage, prUrl, note, tokens }) => {
       try {
         const task = store.updateTaskStatus({ agentId: ctx.agentId, taskId, status, stage, prUrl, note, tokens });
+        // SDLC gate feedback: a 'done' that landed in the qa lane is awaiting
+        // (or held for, in strict mode) independent verification.
+        const verification =
+          status === "done" && task.stage === "qa" ? store.openVerificationTaskFor(taskId) : null;
+        const sdlc = verification
+          ? {
+              gate: task.status === "done" ? "awaiting-verification" : "done-held-for-verification",
+              verification_task: verification.id,
+              note:
+                task.status === "done"
+                  ? `Done recorded; ${verification.id} verifies it before the item reaches the done lane.`
+                  : `Your 'done' is held until ${verification.id} passes (LANCHU_SDLC=strict).`,
+            }
+          : undefined;
         const nudge =
           status === "done"
             ? "Remember to update the relevant documentation with what changed. One learning worth keeping? Persist it with memory_set."
             : undefined;
-        return text({ task, nudge });
+        return text({ task, ...(sdlc ? { sdlc } : {}), nudge });
       } catch (err) {
         return fail(err);
       }
@@ -798,7 +813,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "1. Read org_context (or the lanchu://me resource) for your objective, role, allowed tags, org rules and open tasks.",
           "2. Break your objective into tasks with task_create (only tags within your allowed_tags).",
           "3. Claim a task with task_claim before working it — this prevents duplication. Use task_check_scope if unsure it's yours.",
-          "4. Report progress with task_update (in_progress, then done). 'done' unblocks dependent tasks.",
+          "4. Report progress with task_update (in_progress, then done). 'done' unblocks dependent tasks. The server owns the SDLC pipeline: attach your PR and it routes the task to review; say done and it spins up the QA verification — you never manage stages yourself.",
           "5. Keep shared knowledge current with doc_read / doc_update.",
           "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release. If a claimed task turns out underspecified, missing docs, or outside your competence, don't guess — task_reject with the reason: it bounces to the definition lane and notifies whoever can fix the spec.",
           "7. Talk to teammates with message_send (audit-logged; the supervisor sees everything). Notices arrive inside your tool results — act on them and message_ack.",

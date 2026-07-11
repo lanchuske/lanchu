@@ -101,6 +101,20 @@ export function reconnectGraceMs(): number {
   return Number.isFinite(n) && n >= 0 ? n : 120_000;
 }
 
+/**
+ * SDLC state-machine rollout (design doc "SDLC state machine"):
+ * off    — no pipeline involvement (solo use);
+ * assist — the server routes stages, auto-creates QA verification and notices
+ *          specialists, but never blocks an agent's status change (default);
+ * strict — gates enforced: 'done' on unverified work is held until the
+ *          verification task passes.
+ */
+export type SdlcMode = "off" | "assist" | "strict";
+export function sdlcMode(): SdlcMode {
+  const m = (process.env.LANCHU_SDLC ?? "assist").trim().toLowerCase();
+  return m === "off" || m === "strict" ? m : "assist";
+}
+
 // ── local settings (opt-in preferences; never leaves the machine) ──
 export interface Settings {
   notifyUpdates?: boolean;
