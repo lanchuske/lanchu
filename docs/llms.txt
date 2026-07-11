@@ -9,6 +9,7 @@ Lanchu does not run or orchestrate your agents; it coordinates and bounds their 
 - [Architecture](https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md): tools, resources and events.
 - [Definition](https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md): what Lanchu is and is not.
 - [CLI reference](https://github.com/lanchuske/lanchu/blob/main/CLI.md): the full command reference.
+- [Changelog](https://github.com/lanchuske/lanchu/blob/main/CHANGELOG.md): what's new in each release.
 
 ## Machine-readable
 - [MCP Server Card](https://lanchu.ar/.well-known/mcp/server-card.json)
@@ -18,5 +19,6 @@ Lanchu does not run or orchestrate your agents; it coordinates and bounds their 
 - Category: developer tool; Model Context Protocol (MCP) server; multi-agent coordination and governance.
 - Runs locally: no cloud, no phone-home. All data lives in a single local SQLite database in your OS app-data folder.
 - Works with any MCP-compatible agent; built around Claude Code.
-- Core capabilities: durable agents, mediated coordination, cooperative and auditable scope limits, real-time supervisor panel.
+- Core capabilities: durable agents with per-agent git worktree isolation, mediated coordination with agent-to-agent messaging and conflict warnings, an SDLC pipeline the server routes (definition, build, review, QA, done), roles with editable scopes, token quotas and model routing, persistent three-scope memory (agent / project / org), cooperative and auditable scope limits, real-time supervisor panel with an org graph and full audit log.
+- CLI highlights: `lanchu spawn` (new agent in its own terminal, git worktree and branch), `lanchu tile`, `lanchu restart --greenzone` (coordinated maintenance window), `lanchu coordinator` (one coordinating agent per org), `lanchu completion install` (shell Tab-completion), `lanchu statusline` (Claude Code status line).
 - Source: https://github.com/lanchuske/lanchu — Package: https://www.npmjs.com/package/lanchu

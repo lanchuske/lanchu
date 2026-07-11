@@ -91,7 +91,7 @@
   <h2>How to see things</h2>
   <table>
     <tr><th>Command</th><th>Shows</th></tr>
-    <tr><td><code>lanchu panel</code></td><td>Opens the live dashboard: agents, tasks, roles, docs, and the audit log.</td></tr>
+    <tr><td><code>lanchu panel</code></td><td>Opens the live dashboard — Overview (who's working right now), Team, Work board, Org life (a graph of the org built from the audit log), Docs, Memory, Tests, Activity, and Processes.</td></tr>
     <tr><td><code>lanchu agents</code></td><td>Who's active, their role and what they're on.</td></tr>
     <tr><td><code>lanchu tasks</code></td><td>The task board (flags stale tasks).</td></tr>
     <tr><td><code>lanchu stats</code></td><td>A quick local summary.</td></tr>
@@ -111,6 +111,19 @@
      <code>/lanchu spawn "write the docs"</code> or <code>/lanchu tile</code> — these are
      <em>your</em> controls (opening the panel, spawning a teammate, arranging terminals),
      separate from what the agent does.</p>
+
+  <h2>Grow and steer the team</h2>
+  <table>
+    <tr><th>Command</th><th>Does</th></tr>
+    <tr><td><code>lanchu spawn "&lt;objective&gt;"</code></td><td>Launches a new agent in a new terminal, in its own git worktree and branch — parallel work can't collide. <code>--role</code> and <code>--model</code> pick its lane and model tier.</td></tr>
+    <tr><td><code>lanchu tile</code></td><td>Arranges the agent terminals into a mosaic on your screen.</td></tr>
+    <tr><td><code>lanchu coordinator</code></td><td>Shows (or grants) the org's coordinator lease — one coordinating agent per org, enforced.</td></tr>
+    <tr><td><code>lanchu restart --greenzone</code></td><td>Restarts the server safely: every agent confirms a safe point first.</td></tr>
+    <tr><td><code>lanchu completion install</code></td><td>Tab-completion in your shell for commands, flags and live agent/task names.</td></tr>
+  </table>
+  <p class="note">Agents also keep a persistent memory (their own, the project's and the org's)
+     and share documentation through Lanchu — everything they learn survives their sessions and
+     is visible in the panel.</p>
 
   <h2>How to update</h2>
   <ul>
@@ -139,7 +152,7 @@ lanchu uninstall --purge   # also deletes all local Lanchu data</code></pre>
     <li><a href="https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md">What Lanchu is (and isn't)</a></li>
     <li><a href="https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md">Tools, resources and events</a></li>
     <li><a href="https://github.com/lanchuske/lanchu/blob/main/CLI.md">Full command reference</a></li>
-    <li><a href="https://github.com/lanchuske/lanchu/releases">Changelog — what's new in each release</a></li>
+    <li><a href="https://github.com/lanchuske/lanchu/blob/main/CHANGELOG.md">Changelog — what's new in each release</a></li>
   </ul>
 </main>
 </body>
