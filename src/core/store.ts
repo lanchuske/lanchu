@@ -3622,6 +3622,22 @@ export function noticeServerRestart(version: string): number {
   return queued;
 }
 
+/**
+ * Agents in an org whose notices with the given ref are still UNDELIVERED
+ * since a point in time. The greenzone's delivery-aware extension reads this:
+ * an undelivered request notice means the agent never had a chance to confirm.
+ */
+export function undeliveredNoticeAgents(orgId: string, ref: string, sinceIso: string): Set<string> {
+  const rows = db()
+    .prepare(
+      `SELECT DISTINCT to_agent_id FROM notice
+       WHERE org_id = ? AND ref = ? AND created_at >= ?
+         AND delivered_at IS NULL AND acked_at IS NULL`,
+    )
+    .all(orgId, ref, sinceIso) as { to_agent_id: string }[];
+  return new Set(rows.map((r) => r.to_agent_id));
+}
+
 function insertNotice(input: {
   orgId: string;
   kind: NoticeKind;
