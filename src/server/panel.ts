@@ -330,6 +330,7 @@ export function panelHtml(): string {
         <li data-view="bugs">Bugs <span class="badge" id="c-bugs">0</span></li>
         <li data-view="docs">Docs <span class="badge" id="c-docs">0</span></li>
         <li data-view="memory">Memory <span class="badge" id="c-memory">0</span></li>
+        <li data-view="tests">Tests <span class="badge" id="c-tests">0</span></li>
         <li data-view="activity">Activity</li>
         <li data-view="processes">Processes <span class="badge" id="c-proc">0</span></li>
       </ul>
@@ -415,6 +416,12 @@ export function panelHtml(): string {
         <h1 class="vhead">Memory</h1>
         <p class="vsub">Persistent learnings in three scopes — org, project, agent — each with provenance: who or what wrote it, and when. Event-derived entries are distilled automatically from the audit log; agents add their own with <code>memory_set</code>. Read-only here.</p>
         <div id="memory"></div>
+      </section>
+
+      <section class="view" id="v-tests">
+        <h1 class="vhead">Tests</h1>
+        <p class="vsub">The org's QA registry — suites and cases with last status, pass-rate history and coverage gaps. Agents and CI record runs with <code>test_report</code>; the safety net grows on the record, not in anyone's context.</p>
+        <div id="tests"></div>
       </section>
 
       <section class="view" id="v-activity">
@@ -982,6 +989,37 @@ function renderMemory(list) {
   }).join("") || '<div class="empty">No memories yet. They accrue automatically from events (merged PRs, conflict hot zones, role changes) and from agents\\' own <code>memory_set</code> calls.</div>';
 }
 
+// QA registry: suites → cases with last status, pass-rate history and gaps.
+function renderTests(suites) {
+  suites = suites || [];
+  var totalCases = suites.reduce(function (n, s) { return n + s.cases.length; }, 0);
+  document.getElementById("c-tests").textContent = totalCases;
+  document.getElementById("tests").innerHTML = suites.map(function (s) {
+    var badges = '<span class="badge">' + s.cases.length + ' case' + (s.cases.length === 1 ? "" : "s") + '</span>' +
+      (s.failing ? ' <span class="pill p-blocked">' + s.failing + ' failing</span>' : "") +
+      (s.planned_gaps ? ' <span class="pill p-available">' + s.planned_gaps + ' planned</span>' : "");
+    var rows = s.cases.map(function (c) {
+      var dot = c.planned ? "unknown" : c.last_status === "pass" ? "active" : c.last_status === "fail" ? "bad" : "unknown";
+      var rate = c.recent_runs
+        ? ' · <span class="k">pass rate</span> <b>' + c.recent_passes + '/' + c.recent_runs + '</b>'
+        : "";
+      var last = c.last_ran_at
+        ? ' · <span class="k">last</span> ' + esc(c.last_status) +
+          (c.last_duration_ms != null ? " in " + c.last_duration_ms + "ms" : "") +
+          (c.last_commit ? ' @ <span class="id">' + esc(String(c.last_commit).slice(0, 7)) + '</span>' : "") +
+          (c.last_ran_by ? " by " + esc(c.last_ran_by) : "") +
+          " " + esc((c.last_ran_at || "").replace("T", " ").slice(5, 16))
+        : "";
+      var gap = c.planned ? ' <span class="pill p-available" title="identified coverage, not written yet">planned — not implemented</span>' : "";
+      return '<div class="meta trow"><span class="dot ' + dot + '"></span> <b>' + esc(c.name) + '</b>' + gap + rate + last + '</div>';
+    }).join("");
+    return '<div class="card"><div class="top"><span class="name">' + esc(s.name) + '</span><span>' + badges + '</span></div>' +
+      rows +
+      (s.last_ran_at ? '<div class="hint">suite last ran ' + esc((s.last_ran_at || "").replace("T", " ").slice(0, 16)) + '</div>' : "") +
+      '</div>';
+  }).join("") || '<div class="empty">No test runs recorded yet. After running a suite, an agent (or CI) records it with <code>test_report({ suite, commit, cases: [{ name, status, durationMs }] })</code> — cases marked <code>planned</code> register coverage gaps.</div>';
+}
+
 // One source renders both audit surfaces so expand-on-click stays in sync.
 function renderAuditRows() {
   document.getElementById("audit").innerHTML = lastAudit.map(evRow).join("") || '<div class="empty">No activity yet.</div>';
@@ -1272,7 +1310,7 @@ function refresh() {
   updateProcBadge();
   fetchGraph(); // no-op unless the Org life view is open
   if (busy) return; busy = true;
-  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs"), get("/api/memory")])
+  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs"), get("/api/memory"), get("/api/tests")])
     .then(function (r) {
       var sig = JSON.stringify(r);
       if (sig === lastSig) return; // nothing changed — keep the DOM (and any open select) intact
@@ -1293,7 +1331,7 @@ function refresh() {
       // id → title lookups for the activity rows, before anything renders them.
       evTaskTitles = {}; (r[0].tasks || []).forEach(function (t) { evTaskTitles[t.id] = t.title; });
       evDocTitles = {}; (r[2] || []).forEach(function (d) { evDocTitles[d.id] = d.title; });
-      renderRoles(r[1], r[0].agents); renderDocs(r[2]); renderAudit(r[3]); renderMemory(r[5]);
+      renderRoles(r[1], r[0].agents); renderDocs(r[2]); renderAudit(r[3]); renderMemory(r[5]); renderTests(r[6]);
       renderStats(r[0], r[3]);
       renderOverview(r[0], r[3]);
       renderAttention(r[4], r[0].agents);

@@ -463,6 +463,14 @@ export function createServer(): http.Server {
         return sendJson(res, 200, { agents: store.mcpAgentStatus(org.id), projects });
       }
 
+      if (url.pathname === "/api/tests" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
+        return sendJson(res, 200, store.testRegistry(org.id));
+      }
+
       if (url.pathname === "/api/reuse" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         const objective = url.searchParams.get("objective") ?? "";

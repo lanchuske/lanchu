@@ -48,6 +48,7 @@ export type EventType =
   | "scope.violation"
   | "quota.exceeded"
   | "memory.written"
+  | "test.reported"
   | "tool.response";
 
 export interface Org {
