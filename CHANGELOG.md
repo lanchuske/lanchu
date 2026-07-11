@@ -2,6 +2,22 @@
 
 Notable changes to [lanchu](https://www.npmjs.com/package/lanchu). Numbers reference pull requests in this repository.
 
+## 0.5.13 — 2026-07-11
+
+Cycle 3: the org heals itself.
+
+- Wake v5 — park & refire: agents park on session end and the server revives them with `claude --resume` when new work arrives; keystroke injection is gone from the codebase (#81).
+- Task lifecycle: `archived` terminal state + `task_supersede` — probes and tombstones leave the board, never the audit trail (#67); definitions mature in place with audited title editing (#79, pending).
+- Conflict detection: taxonomy tags (bug|extension|idea|process) no longer count as work surfaces — the false-positive class is gone (#68).
+- Presence dots tell the truth: working / idle-online / off, consistent across all six panel surfaces (#70).
+- Self-retirement gate: agents can no longer retire without coordinator approval — org rule 10 (#76).
+- Bugs view v2: lifecycle state, QA evidence links, fixed-in version (#73, #74).
+- Docs taxonomy v2: living docs vs records, two-section view, archive hygiene (#71).
+- Memory view v2: scope filters, search, provenance-distinct distilled entries, audited delete (#77).
+- Org-life graph v2: deterministic radial layout, focus mode, edge hygiene (#80).
+- Panel polish: truthful Working-now, shipped feed hygiene, zero raw UUIDs in Activity (#72, #83); logs box no longer self-closes and live-tails while open (#75); branding mark in tab and sidebar (#78).
+- Duplicate-session detection verifies before flagging — restart reconnects never false-flag (#82).
+
 ## 0.5.12 — 2026-07-11
 
 Cycle 2: the org runs itself.
