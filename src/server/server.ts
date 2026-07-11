@@ -311,10 +311,18 @@ export function createServer(): http.Server {
         if (!body?.name) return sendJson(res, 400, { error: "name required" });
         return sendJson(res, 200, store.deleteOrg(body.name));
       }
+      if (url.pathname === "/org/create" && req.method === "POST") {
+        const body = (await readJson(req)) as { name: string };
+        const name = (body?.name ?? "").trim();
+        if (!name) return sendJson(res, 400, { error: "name required" });
+        const org = store.getOrCreateOrg(name); // the one explicit create path (besides /session)
+        return sendJson(res, 200, { id: org.id, name: org.name });
+      }
       if (url.pathname === "/api/board" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, { agents: [], tasks: [], projects: [] });
         return sendJson(res, 200, store.boardSnapshot(org.id));
       }
 
@@ -322,7 +330,8 @@ export function createServer(): http.Server {
         const orgName = url.searchParams.get("org");
         const objective = url.searchParams.get("objective") ?? "";
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
         return sendJson(res, 200, store.findReuseCandidates(org.id, objective));
       }
 
@@ -337,7 +346,8 @@ export function createServer(): http.Server {
       if (url.pathname === "/api/roles" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
         return sendJson(res, 200, store.listRoles(org.id));
       }
 
@@ -351,7 +361,8 @@ export function createServer(): http.Server {
       if (url.pathname === "/api/org/rules" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, { rules: "" });
         return sendJson(res, 200, { rules: store.getOrgRules(org.id) });
       }
       if (url.pathname === "/api/org/rules" && req.method === "POST") {
@@ -366,14 +377,16 @@ export function createServer(): http.Server {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
         const limit = Number.parseInt(url.searchParams.get("limit") ?? "60", 10) || 60;
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
         return sendJson(res, 200, store.listAuditEvents(org.id, limit));
       }
 
       if (url.pathname === "/api/docs" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
         const docs = store.listDocs(org.id).map((d) => ({
           id: d.id,
           title: d.title,
@@ -389,8 +402,8 @@ export function createServer(): http.Server {
       if (url.pathname === "/events" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
-        return handleEvents(org.id, res);
+        const org = store.getOrgByName(orgName);
+        return handleEvents(org?.id ?? "", res);
       }
 
       // ── supervisor actions ──
@@ -412,8 +425,8 @@ export function createServer(): http.Server {
       if (url.pathname === "/api/processes" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
-        const terminals = store.listTerminals(org.id).map((t) => ({
+        const org = store.getOrgByName(orgName);
+        const terminals = (org ? store.listTerminals(org.id) : []).map((t) => ({
           agentId: t.agentId,
           name: t.name,
           method: t.ref.method,
@@ -472,7 +485,8 @@ export function createServer(): http.Server {
       if (url.pathname === "/api/skills" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
         return sendJson(res, 200, store.listSkills(org.id));
       }
       if (url.pathname === "/api/skills" && req.method === "POST") {
@@ -511,7 +525,8 @@ export function createServer(): http.Server {
       if (url.pathname === "/api/webhooks" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
         const hooks = store.listWebhooks(org.id).map((w) => ({ ...w, secret: w.secret ? "set" : null }));
         return sendJson(res, 200, hooks);
       }
@@ -532,7 +547,8 @@ export function createServer(): http.Server {
       if (url.pathname === "/api/recurring" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
-        const org = store.getOrCreateOrg(orgName);
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
         return sendJson(res, 200, store.listRecurring(org.id));
       }
       if (url.pathname === "/api/recurring" && req.method === "POST") {
