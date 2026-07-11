@@ -126,6 +126,12 @@ interface SessionRequest {
   cwd?: string;
   /** Give the agent its own git worktree + branch under .lanchu/worktrees (see the agent-isolation design doc). */
   isolate?: boolean;
+  /**
+   * Force a fresh agent even when agentName matches an existing teammate
+   * (dedupe-on-collision: name-2, name-3…). Spawn passes this — a new teammate
+   * wants a fresh identity. Plain joins leave it unset and reuse by name.
+   */
+  create?: boolean;
 }
 
 function handleSession(req: http.IncomingMessage, body: SessionRequest, res: http.ServerResponse): void {
@@ -135,11 +141,30 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
   let agentId: string;
   let agentName: string;
 
+  // A plain join with a known agentName reuses that durable agent instead of
+  // minting a dedupe (product-2…): the raw endpoint can't ask reuse-or-create
+  // like the wizard does, so reuse is the default and create:true opts out.
+  const byName =
+    !body.reuseAgentId && body.agentName && !body.create
+      ? store.findAgentByName(org.id, body.agentName)
+      : null;
+
   if (body.reuseAgentId) {
     const agent = store.getAgent(body.reuseAgentId);
     if (!agent) return sendJson(res, 404, { error: "agent not found" });
     agentId = agent.id;
     agentName = agent.name;
+  } else if (byName && byName.state !== "retired") {
+    agentId = byName.id;
+    agentName = byName.name;
+    store.recordEvent({
+      org_id: org.id,
+      type: "agent.reused",
+      actor_agent_id: byName.id,
+      subject_kind: "agent",
+      subject_id: byName.id,
+      data: { name: byName.name, via: "session" },
+    });
   } else {
     const roleName = body.role ?? "general";
     const wildcard = body.wildcard ?? (body.roleTags?.length ? false : true);
