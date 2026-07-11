@@ -103,3 +103,24 @@ test("GET /api/agent/pending: bare unheard-count under the agent's own token; 40
     server.close();
   }
 });
+
+test("windows regression: idempotency survives JSON-escapable characters in the token-file path", () => {
+  // On Windows the token path contains backslashes; the old check serialized
+  // the hooks array first (JSON.stringify escapes \ to \\), never matched the
+  // raw path, and every respawn appended a duplicate hook. A backslash is a
+  // legal POSIX filename character, so this reproduces the bug on any OS.
+  const prev = process.env.LANCHU_STATE_DIR;
+  const weird = path.join(os.tmpdir(), "lanchu-hook-esc-" + process.pid, "state\\dir");
+  process.env.LANCHU_STATE_DIR = weird;
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), "lanchu-hook-wt3-"));
+  try {
+    installStopHook(wt, "tok-a", "builder-z");
+    installStopHook(wt, "tok-b", "builder-z");
+    const settings = JSON.parse(fs.readFileSync(path.join(wt, ".claude", "settings.local.json"), "utf8"));
+    assert.equal(settings.hooks.Stop.length, 1, "no duplicate hook when the path needs JSON escaping");
+  } finally {
+    process.env.LANCHU_STATE_DIR = prev;
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.rmSync(path.dirname(weird), { recursive: true, force: true });
+  }
+});
