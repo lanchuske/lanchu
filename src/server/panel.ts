@@ -171,6 +171,17 @@ export function panelHtml(): string {
             margin: 0 0 10px; padding: 0 2px; display: flex; justify-content: space-between; align-items: center; }
   .lane-h .c { color: var(--muted); background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
   .lane .empty { text-align: center; font-size: 12px; opacity: .6; }
+  /* task cards: clamp long titles to ~3 lines; click expands (same pattern as Docs) */
+  .card.task { cursor: pointer; }
+  .card.task .name { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .card.task.open .name { -webkit-line-clamp: unset; }
+  .card.task.open { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  /* the lane row scrolls sideways — show that more lanes exist off-screen */
+  .board-wrap { position: relative; }
+  .board-more { position: absolute; top: 0; bottom: 8px; right: 0; display: none; align-items: center;
+                padding: 0 6px 0 46px; background: linear-gradient(to right, transparent, var(--bg) 62%);
+                color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
+  .board-wrap.overflowing .board-more { display: flex; }
 
   .actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   button, select { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--line);
@@ -302,8 +313,11 @@ export function panelHtml(): string {
 
       <section class="view" id="v-work">
         <h1 class="vhead">Work</h1>
-        <p class="vsub">Tasks across the SDLC — definition, build, review, QA, done — with owner, PR and governance signals.</p>
-        <div class="board" id="tasks"></div>
+        <p class="vsub">Tasks across the SDLC — definition, build, review, QA, done — with owner, PR and governance signals. Click a card to read its full title.</p>
+        <div class="board-wrap" id="board-wrap">
+          <div class="board" id="tasks"></div>
+          <div class="board-more" id="board-more" title="More lanes off-screen — click to scroll">more →</div>
+        </div>
       </section>
 
       <section class="view" id="v-bugs">
@@ -435,10 +449,6 @@ function reveal(id, name) {
     else toast("Couldn't reveal " + name + (r.reason ? " — " + r.reason : ""), true);
   });
 }
-function reassign(id) {
-  var sel = document.querySelector('select[data-task="' + id + '"]');
-  if (sel && sel.value) post("/task/reassign", { taskId: id, toAgentId: sel.value });
-}
 // Removing an org cascades to its (empty) projects, so arm the button instead of
 // a browser confirm dialog: first click asks, second click within 4s executes.
 function removeOrg(btn, name) {
@@ -479,7 +489,6 @@ document.addEventListener("click", function (e) {
     var act = b.getAttribute("data-act"), id = b.getAttribute("data-id"), nm = b.getAttribute("data-name") || "agent";
     if (act === "retire") retire(id);
     else if (act === "release") post("/task/release", { taskId: id });
-    else if (act === "reassign") reassign(id);
     else if (act === "focus-term") reveal(id, nm);
     else if (act === "logs") toggleLogs(id);
     else if (act === "close-term") closeTerm(id, nm);
@@ -494,8 +503,20 @@ document.addEventListener("click", function (e) {
     if (card) { reveal(card.getAttribute("data-agent"), card.getAttribute("data-name")); return; }
     // Click a doc card → expand/collapse its content (remembered across refreshes).
     var doc = e.target.closest(".card.doc[data-doc]");
-    if (doc) { openDocs[doc.getAttribute("data-doc")] = doc.classList.toggle("open"); }
+    if (doc) { openDocs[doc.getAttribute("data-doc")] = doc.classList.toggle("open"); return; }
+    // Click a task card → expand/collapse its clamped title (same pattern).
+    var tc = e.target.closest(".card.task[data-task-card]");
+    if (tc) { openTasks[tc.getAttribute("data-task-card")] = tc.classList.toggle("open"); }
   }
+});
+
+// Reassign is a single control: choosing an agent in the select acts immediately.
+document.addEventListener("change", function (e) {
+  var sel = e.target;
+  if (!sel || !sel.getAttribute || !sel.getAttribute("data-reassign") || !sel.value) return;
+  var name = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : "agent";
+  post("/task/reassign", { taskId: sel.getAttribute("data-reassign"), toAgentId: sel.value })
+    .then(function () { toast("Reassigned to " + name); });
 });
 
 // ── views / router ──
@@ -507,6 +528,8 @@ function showView(name) {
   var views = document.querySelectorAll(".view");
   for (var j = 0; j < views.length; j++) views[j].classList.toggle("on", views[j].id === "v-" + name);
   if (name === "processes") refreshProcesses();
+  // The board renders while hidden (scrollWidth 0) — measure when it becomes visible.
+  if (name === "work") updateBoardMore();
 }
 document.getElementById("nav").addEventListener("click", function (e) {
   var li = e.target.closest("li[data-view]"); if (!li) return;
@@ -576,18 +599,19 @@ function renderAgents(list) {
   }).join("") || '<div class="empty">No agents yet. Agents are started from the terminal — inside a project folder, run ' + cmdSnippet('lanchu spawn "your objective"') + ' and supervise it from here.</div>';
 }
 
+var openTasks = {}; // task cards expanded by the user, kept across refreshes (like openDocs)
 function taskCard(t, opts) {
   var badge = t.stale ? '<span class="pill stale-pill">stale</span>' : (t.reserved ? '<span class="pill p-available">reserved</span>' : "");
   var owned = !!t.owner_agent_id;
   var pr = t.pr_url ? ' · <a class="pr-link" href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">PR ↗</a>' : "";
   // Supervisor overrides only make sense on open work — a done task has nothing
-  // to release or reassign.
+  // to release or reassign. Reassign is ONE control: picking an agent acts.
   var actions = owned && t.status !== "done"
     ? '<div class="actions"><button data-act="release" data-id="' + t.id + '">Release</button>' +
-      '<select data-task="' + t.id + '">' + opts + '</select>' +
-      '<button data-act="reassign" data-id="' + t.id + '">Reassign</button></div>'
+      '<select data-reassign="' + t.id + '" title="Picking an agent reassigns this task immediately">' + opts + '</select></div>'
     : "";
-  return '<div class="card"><div class="top"><span class="name">' + esc(t.title) + '</span>' +
+  return '<div class="card task' + (openTasks[t.id] ? " open" : "") + '" data-task-card="' + t.id + '" title="Click to ' + (openTasks[t.id] ? "collapse" : "expand") + '">' +
+    '<div class="top"><span class="name">' + esc(t.title) + '</span>' +
     '<span><span class="pill p-' + esc(t.status) + '">' + esc(t.status.replace("_", " ")) + '</span> ' + badge + '</span></div>' +
     '<div>' + (t.tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("") + '</div>' +
     '<div class="meta">' + (owned ? '<span class="k">owner</span> ' + esc(t.owner_name || t.owner_agent_id) : "unassigned") +
@@ -611,7 +635,7 @@ function stageOf(t) {
 
 function renderTasks(list, agents) {
   document.getElementById("c-tasks").textContent = list.length;
-  var opts = '<option value="">reassign to…</option>' + agents.map(function (a) { return '<option value="' + a.id + '">' + esc(a.name) + '</option>'; }).join("");
+  var opts = '<option value="">Reassign to…</option>' + agents.map(function (a) { return '<option value="' + a.id + '">' + esc(a.name) + '</option>'; }).join("");
 
   var byStage = {}; STAGES.forEach(function (s) { byStage[s[0]] = []; });
   list.forEach(function (t) { byStage[stageOf(t)].push(t); });
@@ -626,6 +650,15 @@ function renderTasks(list, agents) {
   var bugs = list.filter(function (t) { return (t.tags || []).indexOf("bug") >= 0; });
   document.getElementById("c-bugs").textContent = bugs.length;
   document.getElementById("bugs").innerHTML = bugs.map(function (t) { return taskCard(t, opts); }).join("") || '<div class="empty">No bugs — nothing tagged "bug".</div>';
+  updateBoardMore();
+}
+
+// The lane row scrolls sideways; when lanes continue past the viewport, show the
+// "more →" affordance (and hide it once the user reaches the end).
+function updateBoardMore() {
+  var wrap = document.getElementById("board-wrap"), b = document.getElementById("tasks");
+  if (!wrap || !b) return;
+  wrap.classList.toggle("overflowing", b.scrollLeft + b.clientWidth < b.scrollWidth - 4);
 }
 
 function renderRoles(list) {
@@ -850,6 +883,11 @@ function connect() {
   refresh();
 }
 document.getElementById("org").addEventListener("change", connect);
+document.getElementById("tasks").addEventListener("scroll", updateBoardMore);
+window.addEventListener("resize", updateBoardMore);
+document.getElementById("board-more").addEventListener("click", function () {
+  document.getElementById("tasks").scrollBy({ left: 320, behavior: "smooth" });
+});
 // No creation here by design: the panel observes and guides; orgs (like every
 // entity) are created from the terminal. Unknown names get the #orgwarn hint.
 setInterval(refresh, 10000);
