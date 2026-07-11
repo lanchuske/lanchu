@@ -661,7 +661,15 @@ document.getElementById("nav").addEventListener("click", function (e) {
   var li = e.target.closest("li[data-view]"); if (!li) return;
   location.hash = li.getAttribute("data-view");
 });
-function routeFromHash() { showView((location.hash || "#overview").slice(1)); }
+function routeFromHash() {
+  var name = (location.hash || "#overview").slice(1);
+  if (name === "orglife") name = "graph"; // the nav label is "Org life" but the view is #graph — accept the guessable hash
+  // A typo'd or stale hash would toggle every view off (blank content area) —
+  // fall back to overview and normalize the URL without adding a history entry.
+  if (!document.getElementById("v-" + name)) name = "overview";
+  if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+  showView(name);
+}
 window.addEventListener("hashchange", routeFromHash);
 
 // ── renders ──
@@ -1139,7 +1147,7 @@ function renderProcesses(p) {
     '<span><button data-act="restart-server">Restart</button> <button class="danger" data-act="stop-server">Stop</button></span></div>' +
     '<div class="proc-grid" style="margin-top:12px">' +
       kv("pid", s.pid) + kv("uptime", fmtUptime(s.uptimeSec)) + kv("port", s.port) +
-      kv("version", "v" + s.version) + kv("memory", s.memMB + " MB") + kv("node", s.node) + kv("platform", s.platform) +
+      kv("running build", "v" + s.version) + kv("memory", s.memMB + " MB") + kv("node", s.node) + kv("platform", s.platform) +
     '</div></div>';
   var terms = p.terminals || [];
   document.getElementById("c-proc").textContent = terms.length;
