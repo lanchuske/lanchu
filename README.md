@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="https://lanchu.ar/panel-demo.gif" width="880" alt="The Lanchu panel walking through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task.">
+  <img src="https://lanchu.ar/lanchu-demo.gif" width="880" alt="Running 'npx lanchu' starts a short guided wizard that sets up the org, agent and role and connects Claude; then the panel walks through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task.">
 </p>
 
 ---

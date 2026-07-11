@@ -222,13 +222,6 @@
   @media (prefers-color-scheme: dark) {
     .shot { box-shadow: 0 1px 2px rgba(0,0,0,.5), 0 20px 46px -20px rgba(0,0,0,.7); }
   }
-  .shot .chrome { display: flex; align-items: center; gap: 12px; padding: 9px 13px;
-          border-bottom: 1px solid var(--line); background: var(--code-bg); }
-  .shot .dots { display: flex; gap: 6px; flex: none; }
-  .shot .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; }
-  .shot .addr { flex: 1; text-align: center; font: 12px/1 var(--mono); color: var(--muted);
-          background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
-          padding: 5px 10px; max-width: 240px; margin: 0 auto; }
   .shot .win { display: block; background: #0d1117; }
   .shot .win img { display: block; width: 100%; height: auto; }
   .shotcap { text-align: center; color: var(--muted); font-size: 13px; margin: 13px 0 0; }
@@ -279,18 +272,14 @@
   </header>
 
   <figure class="shot-wrap">
-    <div class="shot" role="img" aria-label="The Lanchu panel: a live local dashboard listing the team of agents, their roles, and how many tasks each has open.">
-      <div class="chrome">
-        <div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
-        <span class="addr">127.0.0.1:4319</span>
-      </div>
+    <div class="shot">
       <div class="win">
-        <img src="panel-demo.gif" width="1200" height="720"
-             alt="The Lanchu panel walking through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task."
+        <img src="lanchu-demo.gif" width="1200" height="760"
+             alt="Running 'npx lanchu' starts a short guided wizard that sets up the org, agent and role and connects Claude; then the panel walks through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task."
              loading="lazy" decoding="async" />
       </div>
     </div>
-    <figcaption class="shotcap">The panel — a live, local view of every agent, role and task. Runs at <code>127.0.0.1:4319</code>; nothing leaves your machine.</figcaption>
+    <figcaption class="shotcap">One command runs the wizard; the panel gives you a live, local view of every agent, role and task. Runs at <code>127.0.0.1:4319</code>; nothing leaves your machine.</figcaption>
   </figure>
 
   <div class="stats" id="stats" aria-label="Project stats (live)">
