@@ -166,6 +166,7 @@ const TEMPLATE = `<!doctype html>
   .dot.unknown { background: var(--faint); }
   /* tri-state presence: working pulses green, idle is amber, off is a gray hollow */
   .dot.working { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); animation: dotpulse 2.2s ease-in-out infinite; }
+  .dot.parked { background: var(--faint); } /* gray FILLED — off stays hollow */
   .dot.off { background: transparent; border: 2px solid var(--faint); }
   @keyframes dotpulse { 50% { box-shadow: 0 0 0 5px var(--ok-bg); } }
   .preslegend { color: var(--faint); font-size: 12px; margin: -6px 0 12px; }
@@ -250,6 +251,7 @@ const TEMPLATE = `<!doctype html>
   #gsvg circle.agent { fill: var(--accent); }
   /* node ring = the same presence tri-state as every dot */
   #gsvg circle.agent.working { stroke: var(--ok); stroke-width: 2.5px; }
+  #gsvg circle.agent.parked { fill: var(--faint); }
   #gsvg circle.agent.idle { stroke: var(--warn); stroke-width: 2px; }
   #gsvg circle.agent.off { fill: var(--faint); stroke: var(--line); stroke-width: 2px; }
   #gsvg circle.docn { fill: var(--info); }
@@ -277,9 +279,10 @@ const TEMPLATE = `<!doctype html>
   .glegend span { display: inline-flex; align-items: center; gap: 6px; }
   .gsw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .gsw.agent { background: var(--accent); } .gsw.docn { background: var(--info); } .gsw.arean { background: var(--warn); opacity: .75; }
-  /* agent-ring swatches: the same presence tri-state as the dots */
+  /* agent-ring swatches: the same presence states as the dots */
   .gsw.ringw { background: var(--accent); box-shadow: 0 0 0 2px var(--ok); }
   .gsw.ringi { background: var(--accent); box-shadow: 0 0 0 2px var(--warn); }
+  .gsw.ringp { background: var(--faint); }
   .gsw.ringo { background: var(--faint); box-shadow: 0 0 0 2px var(--line); }
   .gln { width: 18px; height: 0; border-top: 2px solid var(--faint); display: inline-block; }
   .gln.msg { border-color: var(--accent); } .gln.flow { border-color: var(--info); } .gln.warnl { border-color: var(--warn); border-top-style: dashed; }
@@ -457,7 +460,7 @@ const TEMPLATE = `<!doctype html>
       <section class="view" id="v-team">
         <h1 class="vhead">Team</h1>
         <p class="vsub">Agents in this org. Click a card to focus its terminal — or open a fresh one if it's closed.</p>
-        <div class="preslegend"><span class="dot working"></span>working — recent MCP call · <span class="dot idle"></span>idle — online, no recent calls · <span class="dot off"></span>off — no transport or terminal</div>
+        <div class="preslegend"><span class="dot working"></span>working — recent MCP call · <span class="dot idle"></span>idle — online, no recent calls · <span class="dot parked"></span>parked — refires on new work · <span class="dot off"></span>off — no transport or terminal</div>
         <div id="agents"></div>
         <h2 class="sub-h2">Roles</h2>
         <div id="roles"></div>
@@ -491,6 +494,7 @@ const TEMPLATE = `<!doctype html>
         <div class="glegend">
           <span><i class="gsw ringw"></i> working</span>
           <span><i class="gsw ringi"></i> idle</span>
+          <span><i class="gsw ringp"></i> parked</span>
           <span><i class="gsw ringo"></i> off</span>
           <span><i class="gsw docn"></i> doc</span>
           <span><i class="gsw arean"></i> work area</span>
@@ -938,6 +942,7 @@ function colorChip(name) {
 var PRESENCE_TIP = {
   working: "working — MCP tool call within the working window (~2 min)",
   idle: "idle — online (transport or terminal) but no recent calls",
+  parked: "parked — will auto-refire on new work",
   off: "off — no transport and no alive terminal; click to reopen"
 };
 function presDot(p) {
@@ -993,7 +998,8 @@ function renderAgents(list) {
       gh +
       '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") +
       ' · <a class="id-link" data-kind="memories" data-ref="' + esc(a.name) + '" title="this agent\\'s learnings in the Memory view">memories</a></div>' +
-      '<div class="hint">' + (a.presence !== "off" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
+      '<div class="hint">' + (a.presence === "parked" ? "◍ parked — refires on new work (click to reopen now)"
+        : a.presence !== "off" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
       '<div class="meta" style="color:var(--bad)" id="retire-msg-' + a.id + '"></div></div>';
   }).join("") || '<div class="empty">No agents yet. Agents are started from the terminal — inside a project folder, run ' + cmdSnippet('lanchu spawn "your objective"') + ' and supervise it from here.</div>';
 }
@@ -1602,8 +1608,10 @@ function renderOverview(board, audit) {
   // "Working now" means WORKING ON SOMETHING: fresh MCP calls AND an active
   // task. Everyone else who is reachable collapses into the Online chip row.
   var working = board.agents.filter(function (a) { return a.presence === "working" && a.active_task_id; });
+  // Parked agents are dormant capacity, not online — they live on the Team
+  // view with their gray-filled dot until the sweep refires them.
   var online = board.agents.filter(function (a) {
-    return a.presence !== "off" && !(a.presence === "working" && a.active_task_id);
+    return a.presence !== "off" && a.presence !== "parked" && !(a.presence === "working" && a.active_task_id);
   });
   document.getElementById("wnow").innerHTML = working.map(function (a) {
     var task = a.active_task_title.length > 76 ? a.active_task_title.slice(0, 76) + "…" : a.active_task_title;

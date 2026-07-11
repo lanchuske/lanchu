@@ -1,11 +1,13 @@
 export type AgentState = "active" | "idle" | "retired";
 
 /**
- * Display presence, tri-state: "working" = online with a fresh MCP call
+ * Display presence: "working" = online with a fresh MCP call
  * (workingWindowMs), "idle" = reachable (live transport or alive terminal)
- * but quiet, "off" = no transport and no alive terminal — needs reattach.
+ * but quiet, "parked" = the claude session exited cleanly and is
+ * refire-able (wake v5 — the sweep revives it on new work), "off" = no
+ * transport, no alive terminal, not parked — needs manual reattach.
  */
-export type PresenceState = "working" | "idle" | "off";
+export type PresenceState = "working" | "idle" | "parked" | "off";
 
 export type TaskStatus =
   | "available"

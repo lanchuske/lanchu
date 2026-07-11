@@ -968,6 +968,12 @@ export function isWorkingRecently(agent: Agent): boolean {
 export function presenceOf(agent: Agent): PresenceState {
   if (agent.state === "retired") return "off";
   if (isAgentLive(agent.id)) return isWorkingRecently(agent) ? "working" : "idle";
+  // Parked (wake v5): the claude PROCESS exited cleanly and the session is
+  // refire-able. It outranks terminal-aliveness — the Terminal window often
+  // stays open at a shell prompt after claude exits, and window-alive is not
+  // agent-reachable. A live transport above outranks parked defensively
+  // (SessionStart clears parked_at on resume anyway).
+  if (agent.parked_at) return "parked";
   const termAlive = agentTerminalAlive(agent.id);
   if (termAlive === true) return isWorkingRecently(agent) ? "working" : "idle";
   if (termAlive === false) return "off";

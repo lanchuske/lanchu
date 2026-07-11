@@ -151,3 +151,44 @@ test("boardSnapshot, graph and mcpAgentStatus carry presence", () => {
   if (node) assert.equal(node.presence, "working");
   presence.removeLiveSession(agent.id);
 });
+
+// ── presence v3: PARKED (wake v5 park & refire) ──
+
+test("a parked agent reads parked — even with a Terminal window still open at a shell prompt", () => {
+  const { agent } = setup("pres-parked1");
+  store.setAgentTerminal(agent.id, { method: "tmux", id: "%alive-parked" });
+  store.setTerminalAliveProbe((ref) => ref.id.startsWith("%alive")); // window alive ≠ agent reachable
+  store.touchSeen(agent.id);
+  store.parkAgent(agent.id);
+  assert.equal(store.presenceOf(fresh(agent.id)), "parked");
+});
+
+test("a live transport outranks a stale parked flag; SessionStart clears it for real", () => {
+  const { agent } = setup("pres-parked2");
+  store.parkAgent(agent.id);
+  presence.addLiveSession(agent.id);
+  store.touchSeen(agent.id);
+  assert.equal(store.presenceOf(fresh(agent.id)), "working", "live transport wins over parked_at");
+  presence.removeLiveSession(agent.id);
+  assert.equal(store.presenceOf(fresh(agent.id)), "parked", "transport gone — parked again");
+  store.setAgentClaudeSession(agent.id, "sess-123"); // the refire path
+  store.touchSeen(agent.id);
+  assert.equal(store.presenceOf(fresh(agent.id)), "working", "refired agent flips to working");
+});
+
+test("parked beats off; retired beats parked", () => {
+  const { agent } = setup("pres-parked3");
+  store.setTerminalAliveProbe(() => false);
+  store.setAgentTerminal(agent.id, { method: "tmux", id: "%dead-parked" });
+  store.parkAgent(agent.id);
+  assert.equal(store.presenceOf(fresh(agent.id)), "parked", "dead terminal + parked flag = parked, not off");
+  store.setAgentState(agent.id, "retired");
+  assert.equal(store.presenceOf(fresh(agent.id)), "off");
+});
+
+test("boardSnapshot carries parked presence", () => {
+  const { org, agent } = setup("pres-parked4");
+  store.parkAgent(agent.id);
+  const onBoard = store.boardSnapshot(org.id).agents.find((a) => a.id === agent.id);
+  assert.equal(onBoard.presence, "parked");
+});

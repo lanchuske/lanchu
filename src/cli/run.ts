@@ -812,9 +812,10 @@ async function cmdTile(): Promise<void> {
   for (const a of b.agents) {
     // Same hue as the terminal border and panel chip — one identity everywhere.
     // The board carries the de-collided slot; the hash is only the offline fallback.
-    // Glyph = the panel's presence tri-state: ● working · ◐ idle · ○ off.
+    // Glyph = the panel's presence states: ● working · ◐ idle · ◍ parked · ○ off.
     const glyph = a.presence === "working" ? "●"
       : a.presence === "idle" ? "◐"
+      : a.presence === "parked" ? "◍"
       : a.presence === "off" ? "○"
       : a.state === "active" ? "●" : "○"; // pre-v2 server fallback
     const dot = ansiColorize(glyph, a.color ?? agentColor(a.name));
