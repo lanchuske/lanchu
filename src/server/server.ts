@@ -292,7 +292,9 @@ function revealAgent(agentId: string): {
   });
   const prompt =
     "You are resuming as a Lanchu teammate. Read the lanchu://me resource for your objective, " +
-    "role and open tasks, then continue working them, reporting progress with task_update.";
+    "role and open tasks, then continue working them, reporting progress with task_update. " +
+    "While you work, watch for friction in Lanchu itself and file it with task_create using the " +
+    "taxonomy tags (bug | extension | idea | process) plus evidence — the help tool has the details.";
   const result = spawnTerminal({
     title, agentName: agent.name, cwd, token, prompt,
     colorHex: store.agentColorOf(agent).hex,

@@ -23,8 +23,11 @@ const INSTRUCTIONS = [
   "teammates, conflict warnings or system notes: read them, act or reply (message_send),",
   "and acknowledge with message_ack. If a result carries a `conflict` block, STOP and ask",
   "your user before proceeding. If a claimed task turns out underspecified or outside your",
-  "competence, don't guess — task_reject with the reason. If unsure how to proceed, call",
-  "the help tool.",
+  "competence, don't guess — task_reject with the reason. While working, watch for friction",
+  "in Lanchu itself — broken behavior, features that fall short, missing capabilities,",
+  "workflow friction — and file it as a well-formed backlog task: category tag (bug |",
+  "extension | idea | process) + area tags + evidence (repro, expected vs actual); message",
+  "product when unsure how to scope. If unsure how to proceed, call the help tool.",
 ].join(" ");
 
 function text(obj: unknown) {
@@ -808,7 +811,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           orgId: ctx.orgId, orgName: ctx.orgName, projectId: ctx.projectId, projectName: ctx.projectName, cwd,
         });
         const prompt =
-          "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work.";
+          "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work. While you work, watch for friction in Lanchu itself and file it with task_create using the taxonomy tags (bug | extension | idea | process) plus area tags and evidence — the help tool has the details.";
         const result = spawnTerminal({
           title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd, token, prompt,
           colorHex: store.agentColorOf(agent).hex,
@@ -863,6 +866,18 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "9. Verifying a feature ALWAYS ends with a regression test left behind (a test-only PR is fine) and a test_report of the run — the registry, not your context, is the org's memory of what is covered. Mark coverage you identified but didn't write yet as status 'planned' so the gap stays visible.",
         ],
         rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc.",
+        dogfooding: {
+          duty:
+            "While working, watch for friction in Lanchu itself — broken behavior, features that fall short, missing capabilities, unclear docs, wasted tokens — and file it as a WELL-FORMED backlog task with evidence (repro, expected vs actual). Message product when unsure how to scope. Filing beats suffering silently: the backlog is how friction gets fixed.",
+          taxonomy: {
+            bug: "broken behavior (something that worked as designed no longer does, or never did)",
+            extension: "an existing feature falls short of a real need",
+            idea: "a new capability worth having",
+            process: "workflow friction (coordination, hand-offs, wasted tokens)",
+          },
+          example:
+            'task_create({ title: "Bug: panel Docs search misses body matches — repro: type X in the filter; expected: doc Y listed; actual: empty", tags: ["bug", "panel"] })',
+        },
         tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_reject, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, test_report, session_leave.",
       }),
   );
