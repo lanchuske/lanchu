@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mcpUrl } from "../config.js";
+import { agentColor, pastelRgb16 } from "../core/colors.js";
 
 /**
  * Multi-agent "cockpit": open a terminal running a new Claude agent already
@@ -93,6 +94,13 @@ export function spawnTerminal(input: {
     spawnSync("tmux", ["select-layout", "-t", TMUX_SESSION, "tiled"]);
     spawnSync("tmux", ["set-option", "-p", "-t", TMUX_SESSION, "pane-border-status", "top"]);
     if (paneId) spawnSync("tmux", ["select-pane", "-t", paneId, "-T", input.title]);
+    if (paneId && input.agentName) {
+      // Stable per-agent identity: tint this pane's border with the agent's
+      // color (same hue as the panel chip). Best-effort — per-pane style
+      // options need tmux >= 3.2; older tmux just ignores the call.
+      const color = agentColor(input.agentName);
+      spawnSync("tmux", ["set-option", "-p", "-t", paneId, "pane-border-style", `fg=${color.hex}`]);
+    }
     if (paneId) plan.ref = { method: "tmux", id: paneId };
     return plan;
   }
@@ -118,6 +126,17 @@ export function spawnTerminal(input: {
     const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8" });
     const winId = (out.stdout ?? "").trim();
     if (/^\d+$/.test(winId)) plan.ref = { method: "terminal.app", id: winId };
+    if (/^\d+$/.test(winId) && input.agentName) {
+      // Same identity in Terminal.app: a light pastel of the agent's color as
+      // the window background (blended toward white so dark text on the
+      // default profile stays readable). Best-effort.
+      const [r, g, b] = pastelRgb16(agentColor(input.agentName));
+      spawnSync("osascript", ["-e", [
+        'tell application "Terminal" to try',
+        `  set background color of selected tab of (first window whose id is ${winId}) to {${r}, ${g}, ${b}}`,
+        "end try",
+      ].join("\n")]);
+    }
     return plan;
   }
 
