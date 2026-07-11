@@ -779,6 +779,33 @@ export function findReuseCandidates(
   return scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score);
 }
 
+export interface AvailableTeammate {
+  name: string;
+  role: string;
+  last_activity: string | null;
+  last_activity_at: string | null;
+  worktree: string | null;
+  open_tasks: number;
+}
+
+/**
+ * Durable agents currently idle (no live session) and not retired — the ones
+ * a coordinator can reuse instead of spawning a duplicate. Same idleness
+ * criterion as findReuseCandidates.
+ */
+export function availableTeammates(orgId: string): AvailableTeammate[] {
+  return listAgents(orgId)
+    .filter((a) => a.state !== "retired" && !isPresent(a))
+    .map((a) => ({
+      name: a.name,
+      role: getRole(a.role_id)?.name ?? "—",
+      last_activity: a.last_activity,
+      last_activity_at: a.last_activity_at,
+      worktree: a.worktree,
+      open_tasks: openTasksForAgent(a.id).length,
+    }));
+}
+
 // ───────────────────────── sessions ─────────────────────────
 
 export function openSession(agentId: string, client?: string): { id: string; token: string } {

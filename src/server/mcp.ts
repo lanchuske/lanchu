@@ -4,6 +4,7 @@ import { z } from "zod";
 import { baseUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import * as store from "../core/store.js";
+import { detectRuntimes } from "../core/runtimes.js";
 import { QuotaError, ScopeError } from "../core/types.js";
 import { ensureAgentWorktree } from "../core/worktree.js";
 import { spawnTerminal, tileTerminals } from "./cockpit.js";
@@ -523,6 +524,21 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         memories: store.memoriesForContext(ctx.orgId, ctx.agentId, ctx.projectId),
       });
     },
+  );
+
+  registerTool(
+    "agents_available",
+    {
+      title: "What can work right now",
+      description:
+        "Availability in both senses: (1) agent RUNTIMES installed on this machine (claude, codex, gemini…) with version and path — what a future spawn could use; (2) idle TEAMMATES in this org (durable agents with no live session) a coordinator can reuse instead of spawning a duplicate.",
+      inputSchema: {},
+    },
+    async () =>
+      text({
+        runtimes: detectRuntimes(),
+        teammates: store.availableTeammates(ctx.orgId),
+      }),
   );
 
   registerTool(

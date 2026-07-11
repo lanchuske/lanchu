@@ -146,6 +146,7 @@ tasks live in `lanchu://me`, not in the prompt.
 |---------|----------|
 | `lanchu init --org <name> [--project <name>] [--force]` | Binds this directory to an org/project (writes `.lanchu/config.json`). `--org` is required (no silent default); the project name defaults from the checkout (repo root / remote / folder) and drift warns; rebinding an already-bound directory needs `--force`. |
 | `lanchu agents` (alias `ls`) | Lists agents: status, role, task count, last activity. |
+| `lanchu agents --available` | Availability in both senses: agent **runtimes** installed on this machine (claude, codex, gemini… with version+path) and idle **teammates** in the org a coordinator can reuse instead of spawning duplicates. |
 | `lanchu tasks` | Lists tasks: status, owner, tags, workspace. Flags the **stale** ones (idle owner with no changes ≥ threshold). |
 | `lanchu task release <id>` | **Supervisor override**: releases a task back to the pool even if it has an owner. Audited. Escape hatch for *stale* tasks without retiring the agent. |
 | `lanchu task reassign <id> <agent>` | **Supervisor override**: reassigns a task to another agent. Audited. |
@@ -158,7 +159,7 @@ tasks live in `lanchu://me`, not in the prompt.
 | `lanchu panel` (alias `open`) | Opens the web panel in the browser. |
 | `lanchu serve` | Runs the server in the foreground (normally it auto-starts). |
 | `lanchu stop` | Stops the background server. |
-| `lanchu doctor` | Checks the environment: Node version, free port, config, DB. |
+| `lanchu doctor` | Checks the environment: Node version, free port, config, DB — plus the agent-runtime inventory found on PATH. |
 
 ---
 
