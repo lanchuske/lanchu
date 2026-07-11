@@ -212,6 +212,15 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   verification completing flips the original to done (a note starting `FAIL`
   bounces it back to `build` instead — audited as `task.bounced`, counter on the
   task). strict additionally holds the agent's `done` until verification passes.
+- **Coordinator lease (`coordinator` table, one row per org):** coordination is a
+  leasable resource, not a role — at most ONE coordinating agent per org.
+  `coordinator_acquire` grants when the lease is free/expired or its holder has no
+  live transport, and fails while a live holder's lease is current; `renewed_at +
+  ttl_seconds` is the expiry, renewed by use. Coordination-class actions
+  (broadcast `to:'*'`, `spawn_agent`) are lease-gated; peer collaboration (1:1
+  messages, own-task handoffs) never is. Holder retirement auto-releases. Audited
+  as `coordinator.acquired` / `coordinator.released` / `coordinator.handoff` /
+  `coordinator.expired`. Supervisor override: `lanchu coordinator set/clear`.
 - **event.outcome:** `applied` (it was applied) · `rejected` (it was blocked; e.g. `scope.violation`).
 
 ---

@@ -478,6 +478,29 @@ async function cmdRotateTokens(): Promise<void> {
   console.log("agents re-register through the launcher on their next connect (lanchu spawn / panel reveal).");
 }
 
+/** Coordinator lease: show the holder, or supervisor-override it (set/clear). */
+async function cmdCoordinator(): Promise<void> {
+  const org = await orgOf();
+  const sub = positional()[1];
+  if (sub === "set") {
+    const name = positional()[2];
+    if (!name) return console.log("usage: lanchu coordinator set <agent>");
+    const r = (await post("/coordinator", { org, set: name })) as { error?: string; coordinator?: { agent_name: string } };
+    return console.log(r.error ?? `coordinator lease granted to '${r.coordinator?.agent_name}' (supervisor override)`);
+  }
+  if (sub === "clear") {
+    const r = (await post("/coordinator", { org, clear: true })) as { error?: string };
+    return console.log(r.error ?? "coordinator lease cleared");
+  }
+  const c = (await (await api(`/api/coordinator?org=${encodeURIComponent(org)}`)).json()) as {
+    agent_name?: string; acquired_at?: string; expired?: boolean; live?: boolean;
+  };
+  if (!c?.agent_name) return console.log("no coordinator — the lease is free (agents take it with coordinator_acquire)");
+  console.log(
+    `coordinator: ${c.agent_name}${c.expired ? " (lease EXPIRED)" : c.live ? "" : " (idle)"} · since ${c.acquired_at}`,
+  );
+}
+
 async function cmdSkills(): Promise<void> {
   const org = await orgOf();
   const sub = positional()[1];
@@ -1055,6 +1078,7 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu roles edit <name> --quota <tokens> | --no-quota", "set/clear the role's self-reported token budget"],
       ['lanchu rules [set "<text>"]', "view / set the org's rules"],
       ["lanchu rotate-tokens", "end every open session token (run after a token exposure)"],
+      ["lanchu coordinator [set <agent> | clear]", "show the org's coordinator lease / supervisor grant or revoke"],
       ['lanchu skills [add <name> --tags a,b --instructions "…"]', "skills per task type"],
       ["lanchu skills load <url|file> [--name n] [--tags a,b]", "load a reusable SKILL.md"],
       ["lanchu skills reload <id> | rm <id>", "re-fetch a loaded skill / remove one"],
@@ -1178,6 +1202,8 @@ async function main(): Promise<void> {
       return cmdRules();
     case "rotate-tokens":
       return cmdRotateTokens();
+    case "coordinator":
+      return cmdCoordinator();
     case "skills":
       return cmdSkills();
     case "webhooks":

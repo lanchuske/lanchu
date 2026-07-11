@@ -792,6 +792,8 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ objective, role, name, isolate }) => {
       try {
+        // Coordination-class action: growing the team is the coordinator's call.
+        store.assertCoordinator(ctx.orgId, ctx.agentId, "spawn_agent");
         const roleName = role || "generalist";
         const roleObj = store.getOrCreateRole(ctx.orgId, roleName, roleName === "generalist" ? { wildcard: true } : {});
         // Prefer an explicit name; otherwise a tidy role-based default beats a
@@ -929,11 +931,77 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ to, text: body, ref }) => {
       try {
+        // Broadcasts steer the whole org — coordinator-only. 1:1 stays free.
+        if (to === "*") store.assertCoordinator(ctx.orgId, ctx.agentId, "broadcast (to:'*')");
         return text(store.sendNotice({ orgId: ctx.orgId, fromAgentId: ctx.agentId, to, body, ref }));
       } catch (err) {
         return fail(err);
       }
     },
+  );
+
+  registerTool(
+    "coordinator_acquire",
+    {
+      title: "Acquire the coordinator lease",
+      description:
+        "Take (or renew) the org's coordinator lease — at most ONE coordinating agent at a time. Grants when the lease is free, expired, or its holder is idle; fails while a live holder's lease is current. " +
+        "Coordination-class actions (broadcasts, spawn_agent) require it; peer collaboration (1:1 messages, own-task handoffs) never does.",
+      inputSchema: {
+        ttlSeconds: z.number().optional().describe("Lease TTL; defaults to 3600. Using coordination actions renews it."),
+      },
+    },
+    async ({ ttlSeconds }) => {
+      try {
+        return text({ coordinator: store.coordinatorAcquire({ orgId: ctx.orgId, agentId: ctx.agentId, ttlSeconds }) });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "coordinator_release",
+    {
+      title: "Release the coordinator lease",
+      description: "Give the lease back to the pool (holder-only).",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        store.coordinatorRelease({ orgId: ctx.orgId, agentId: ctx.agentId });
+        return text({ released: true });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "coordinator_handoff",
+    {
+      title: "Hand off the coordinator lease",
+      description:
+        "Planned transition: pass the lease to a named teammate (e.g. product hands to the maintainer for a release window). Holder-only; the receiver is noticed.",
+      inputSchema: { toAgent: z.string() },
+    },
+    async ({ toAgent }) => {
+      try {
+        return text({ coordinator: store.coordinatorHandoff({ orgId: ctx.orgId, fromAgentId: ctx.agentId, toAgentName: toAgent }) });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "coordinator_status",
+    {
+      title: "Coordinator status",
+      description: "Who currently holds the org's coordinator lease (if anyone), with lease age and expiry.",
+      inputSchema: {},
+    },
+    async () => text({ coordinator: store.getCoordinator(ctx.orgId) ?? null }),
   );
 
   registerTool(

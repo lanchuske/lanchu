@@ -739,6 +739,26 @@ export function createServer(): http.Server {
         clearContexts();
         return sendJson(res, 200, result);
       }
+      // Coordinator lease: read state for the panel; supervisor grant/revoke.
+      if (url.pathname === "/api/coordinator" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        return sendJson(res, 200, (org && store.getCoordinator(org.id)) ?? { state: "none" });
+      }
+      if (url.pathname === "/coordinator" && req.method === "POST") {
+        const body = (await readJson(req)) as { org: string; set?: string; clear?: boolean };
+        if (!body?.org) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(body.org);
+        if (!org) return sendJson(res, 404, { error: `no org named '${body.org}'` });
+        try {
+          if (body.clear) return sendJson(res, 200, { coordinator: store.coordinatorOverride(org.id, null) });
+          if (!body.set) return sendJson(res, 400, { error: "set (agent name) or clear required" });
+          return sendJson(res, 200, { coordinator: store.coordinatorOverride(org.id, body.set) });
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
       if (url.pathname === "/task/release" && req.method === "POST") {
         const body = (await readJson(req)) as { taskId: string };
         return sendJson(res, 200, store.releaseTask({ agentId: null, taskId: body.taskId, override: true }));
