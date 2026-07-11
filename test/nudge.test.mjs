@@ -39,7 +39,7 @@ test("v5.1: a starved LIVE terminal is never touched by the sweep — the asyncR
   // The starvation diagnostic still sees the candidate…
   assert.equal(store.agentsNeedingNudge(org.id).length, 1, "starved candidate visible to diagnostics");
   // …but the sweep does nothing to a live terminal: no refire, no typing rung at all.
-  const r = runNudgeSweep({
+  const r = await runNudgeSweep({
     alive: () => true, // the TUI is open
     transportLive: () => false,
     liveSessions: () => new Set(),
@@ -58,7 +58,7 @@ test("v5.1: the same starved agent with a DEAD terminal refires — transport ru
   await graceElapsed();
 
   const fired = [];
-  const r = runNudgeSweep({
+  const r = await runNudgeSweep({
     alive: () => false,
     transportLive: () => false,
     liveSessions: () => new Set(),
@@ -131,7 +131,7 @@ test("a broadcast never wakes anyone and self-expires after the TTL", async () =
   const old = new Date(Date.now() - 31 * 60_000).toISOString();
   raw.prepare("UPDATE notice SET created_at = ? WHERE org_id = ? AND is_broadcast = 1").run(old, org.id);
   raw.close();
-  const sweep = runNudgeSweep({ alive: () => true, liveSessions: () => new Set(), refire: () => false });
+  const sweep = await runNudgeSweep({ alive: () => true, liveSessions: () => new Set(), refire: () => false });
   assert.ok(sweep.expired_broadcasts >= 1, "stale broadcast expired");
   assert.equal(store.unackedNoticeCount(sleeperId), 0, "expiry acks the broadcast");
   assert.ok(store.listAuditEvents(org.id).some((e) => e.type === "notice.expired"), "expiry is on the record");

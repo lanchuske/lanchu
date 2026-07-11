@@ -63,6 +63,41 @@ function dropSession(sid: string): void {
 }
 
 /**
+ * Zombie transport refcount (task-mrgqz4p05): a hard-killed `claude` process
+ * fires neither `onsessionclosed` nor `transport.onclose` — no clean close,
+ * no open SSE stream to watch die — so `forgetSession` never runs and
+ * `isAgentLive` stays stuck true forever, permanently blocking park & refire.
+ * The SessionEnd hook is external proof the process actually ended (the CLI
+ * itself reported exiting), so drop every session this agent still holds
+ * right here instead of waiting on a transport event that will never fire.
+ */
+function forgetSessionsForAgent(agentId: string): void {
+  for (const sid of [...sessionAgent].filter(([, aid]) => aid === agentId).map(([sid]) => sid)) {
+    dropSession(sid);
+  }
+}
+
+/**
+ * Backstop for the crash-without-SessionEnd case (builder-core-2, 2026-07-11:
+ * the process died with no hook firing at all, so parkAgent is never even
+ * called). `isAgentLive` is a pure in-memory refcount with no independent
+ * liveness check — reuse the duplicate-session ping precedent (`pingProbe`)
+ * to verify a session that CLAIMS to be live actually answers before trusting
+ * it. Ping over a blind TTL: a long-idle-but-genuinely-connected agent must
+ * never be reaped just for being quiet, and a failed ping is unambiguous.
+ * Returns true only if it reaped at least one dead session (a signal to the
+ * caller that the transport-live gate should be re-evaluated as clear).
+ */
+async function reapZombieTransport(agentId: string): Promise<boolean> {
+  const sids = [...sessionAgent].filter(([, aid]) => aid === agentId).map(([sid]) => sid);
+  if (!sids.length) return false;
+  const answers = await Promise.all(sids.map((sid) => pingProbe(sid)));
+  if (answers.some(Boolean)) return false; // at least one really answered — genuinely live
+  for (const sid of sids) dropSession(sid);
+  return true;
+}
+
+/**
  * Verify-then-flag (task-mrgmbqyv2): a duplicate OUTSIDE the startup grace
  * window used to flag immediately — but clients also reconnect lazily,
  * minutes after a restart or a transport hiccup, leaving their previous
@@ -901,6 +936,12 @@ export function createServer(): http.Server {
         if (!ctx) return sendJson(res, 401, { error: "unauthorized" });
         const body = (await readJson(req).catch(() => undefined)) as { reason?: string } | undefined;
         store.parkAgent(ctx.agentId, body?.reason);
+        // Proactive forget (task-mrgqz4p05): SessionEnd is proof the process
+        // ended — don't wait on a transport-close event a hard-killed client
+        // may never send. This is also what makes presenceOf's "parked
+        // outranks aliveness" (#92) mean anything for a clean park: without
+        // it isAgentLive stays true and presence never falls through to it.
+        forgetSessionsForAgent(ctx.agentId);
         return sendJson(res, 200, { ok: true });
       }
       // Supervisor override: abort a requested window before it executes (the
@@ -1183,18 +1224,23 @@ export const NUDGE_LINE =
  * guard rails (queued-only, cooldown) are in agentsNeedingNudge; injectable
  * effects keep this testable without a real terminal.
  */
-export function runNudgeSweep(
+export async function runNudgeSweep(
   effects: {
     alive?: typeof terminalAlive;
     /** Wake v5 gates/actions, injectable for tests. */
     liveSessions?: typeof claudeLiveSessionIds;
     transportLive?: typeof isAgentLive;
+    /** Zombie-transport backstop (task-mrgqz4p05): challenges a transportLive
+     * "true" with a real ping before trusting it. Returns true if it reaped a
+     * dead session (the caller should treat the transport as clear now). */
+    reapIfZombie?: (agentId: string) => Promise<boolean>;
     refire?: (c: store.RefireCandidate, token: string) => boolean;
   } = {},
-): { refired: string[]; expired_broadcasts: number } {
+): Promise<{ refired: string[]; expired_broadcasts: number }> {
   const alive = effects.alive ?? terminalAlive;
   const liveSessions = effects.liveSessions ?? claudeLiveSessionIds;
   const transportLive = effects.transportLive ?? isAgentLive;
+  const reapIfZombie = effects.reapIfZombie ?? reapZombieTransport;
   const refire =
     effects.refire ??
     ((c: store.RefireCandidate, token: string) =>
@@ -1227,7 +1273,7 @@ export function runNudgeSweep(
         // terminal is verifiably gone (builder-core-2's death had no SessionEnd).
         // A LIVE terminal is the asyncRewake hook's territory: never touched here.
         if (!c.parked_at && c.terminal_ref && alive(c.terminal_ref)) continue;
-        if (transportLive(c.agent_id)) continue;
+        if (transportLive(c.agent_id) && !(await reapIfZombie(c.agent_id))) continue;
         if (claudeSessions === undefined) claudeSessions = liveSessions();
         if (claudeSessions === null || claudeSessions.has(c.claude_session_id)) continue;
         if (!store.nudgeStillNeeded(c.agent_id)) continue;
@@ -1279,11 +1325,9 @@ export function startServer(): Promise<http.Server> {
   // Auto-wake: queued A2A messages must not wait for a tool call that never
   // comes. Same cadence as the recurring tick.
   setInterval(() => {
-    try {
-      runNudgeSweep();
-    } catch {
+    runNudgeSweep().catch(() => {
       /* keep the server alive */
-    }
+    });
   }, 30_000).unref();
   // Landing queue + release pressure: detect queued PRs that hit origin/main
   // and notice whose turn it is; measure merged-but-unreleased debt and queue
