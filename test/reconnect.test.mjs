@@ -11,7 +11,7 @@ process.env.LANCHU_STATE_DIR = dir;
 delete process.env.LANCHU_ACCESS_KEY;
 delete process.env.LANCHU_RECONNECT_GRACE_MS;
 
-const { createServer } = await import("../dist/server/server.js");
+const { createServer, setSessionPingProbe } = await import("../dist/server/server.js");
 const store = await import("../dist/core/store.js");
 const presence = await import("../dist/core/presence.js");
 
@@ -73,13 +73,17 @@ test("regression: a reconnect within the grace window replaces the old session �
   assert.equal(store.takeUndeliveredNotices(agentId).length, 0, "no alarming notice for a reconnect");
 });
 
-test("two terminals at steady state (past the grace window) still flag a duplicate session", async () => {
+const settled = () => new Promise((r) => setTimeout(r, 60));
+
+test("two REAL terminals at steady state (the old session answers the ping) still flag a duplicate", async () => {
   process.env.LANCHU_RECONNECT_GRACE_MS = "0"; // the window has passed
+  setSessionPingProbe(async () => true); // the other terminal is alive and answers
   try {
     const { token, agentId } = await join("two-terminals");
 
     await initialize(token);
     await initialize(token);
+    await settled(); // verification is async — the flag lands within a tick of the ping
     assert.equal(presence.liveSessionCount(agentId), 2, "both terminals stay counted");
 
     const org = store.getOrgByName("reconnect-org");
@@ -87,10 +91,36 @@ test("two terminals at steady state (past the grace window) still flag a duplica
       (e) => e.type === "agent.duplicate_session" && e.subject_id === agentId,
     );
     assert.ok(dup, "duplicate session is audited");
+    assert.equal(dup.data.verified_by_ping, true, "the accusation carries its evidence");
     const heard = store.takeUndeliveredNotices(agentId);
     assert.equal(heard.length, 1);
     assert.match(heard[0].body, /Another live session/);
   } finally {
     delete process.env.LANCHU_RECONNECT_GRACE_MS;
+    setSessionPingProbe(null);
+  }
+});
+
+test("regression (task-mrgmbqyv2): a LAZY reconnect past the grace window — dead old session — replaces silently", async () => {
+  process.env.LANCHU_RECONNECT_GRACE_MS = "0"; // minutes after the restart
+  setSessionPingProbe(async () => false); // the old session is a half-open ghost
+  try {
+    const { token, agentId } = await join("lazy-reconnect");
+
+    const first = await initialize(token);
+    const second = await initialize(token);
+    assert.notEqual(second, first);
+    await settled();
+    assert.equal(presence.liveSessionCount(agentId), 1, "the ghost is replaced, not counted");
+
+    const org = store.getOrgByName("reconnect-org");
+    const dup = store.listAuditEvents(org.id).find(
+      (e) => e.type === "agent.duplicate_session" && e.subject_id === agentId,
+    );
+    assert.equal(dup, undefined, "no duplicate flag without ping evidence");
+    assert.equal(store.takeUndeliveredNotices(agentId).length, 0, "no alarming notice for a reconnect");
+  } finally {
+    delete process.env.LANCHU_RECONNECT_GRACE_MS;
+    setSessionPingProbe(null);
   }
 });
