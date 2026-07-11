@@ -343,11 +343,14 @@ export function createServer(): http.Server {
         if (!body?.name) return sendJson(res, 400, { error: "name required" });
         return sendJson(res, 200, store.deleteOrg(body.name));
       }
+      // Explicit create path for the CLI/automation only (besides /session).
+      // No panel UI calls this: the panel observes and guides, provisioning
+      // happens in the terminal — see the "Panel philosophy" design doc.
       if (url.pathname === "/org/create" && req.method === "POST") {
         const body = (await readJson(req)) as { name: string };
         const name = (body?.name ?? "").trim();
         if (!name) return sendJson(res, 400, { error: "name required" });
-        const org = store.getOrCreateOrg(name); // the one explicit create path (besides /session)
+        const org = store.getOrCreateOrg(name);
         return sendJson(res, 200, { id: org.id, name: org.name });
       }
       if (url.pathname === "/api/board" && req.method === "GET") {
