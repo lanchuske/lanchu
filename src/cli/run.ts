@@ -614,16 +614,26 @@ async function cmdRetire(agentId: string): Promise<void> {
   console.log("\nUse `lanchu task reassign <id> <agent>` or `lanchu task release <id>`.");
 }
 
-async function cmdTask(sub: string, id: string, toAgent?: string): Promise<void> {
+async function cmdTask(sub: string, id: string, extra?: string[]): Promise<void> {
   await orgOf();
   if (sub === "release") {
     if (!id) return console.log("usage: lanchu task release <id>");
     console.log(JSON.stringify(await post("/task/release", { taskId: id }), null, 2));
   } else if (sub === "reassign") {
+    const toAgent = extra?.[0];
     if (!id || !toAgent) return console.log("usage: lanchu task reassign <id> <agentId>");
     console.log(JSON.stringify(await post("/task/reassign", { taskId: id, toAgentId: toAgent }), null, 2));
+  } else if (sub === "archive") {
+    if (!id) return console.log("usage: lanchu task archive <id> [reason…]");
+    const reason = extra?.length ? extra.join(" ") : undefined;
+    console.log(JSON.stringify(await post("/task/archive", { taskId: id, reason }), null, 2));
+  } else if (sub === "supersede") {
+    const newId = extra?.[0];
+    if (!id || !newId) return console.log("usage: lanchu task supersede <oldId> <newId> [note…]");
+    const note = extra && extra.length > 1 ? extra.slice(1).join(" ") : undefined;
+    console.log(JSON.stringify(await post("/task/supersede", { oldTaskId: id, newTaskId: newId, note }), null, 2));
   } else {
-    console.log("usage: lanchu task <release|reassign> ...");
+    console.log("usage: lanchu task <release|reassign|archive|supersede> ...");
   }
 }
 
@@ -1128,6 +1138,8 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu retire <agentId>", "safe retirement (handoff enforced)"],
       ["lanchu task release <id>", "supervisor override: release a task"],
       ["lanchu task reassign <id> <agent>", "supervisor override: reassign a task"],
+      ["lanchu task archive <id> [reason…]", "supervisor override: archive a task (terminal, soft — audit stays)"],
+      ["lanchu task supersede <old> <new> [note…]", "supervisor override: archive old with a link to its successor"],
     ],
   },
   {
@@ -1303,7 +1315,7 @@ async function main(): Promise<void> {
       return cmdRetire(positional()[1] ?? "");
     case "task": {
       const p = positional();
-      return cmdTask(p[1] ?? "", p[2] ?? "", p[3]);
+      return cmdTask(p[1] ?? "", p[2] ?? "", p.slice(3));
     }
     default: {
       // Anything else is treated as an objective. Guided wizard unless flags/non-TTY.

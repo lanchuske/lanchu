@@ -833,6 +833,29 @@ export function createServer(): http.Server {
           store.reassignTask({ taskId: body.taskId, toAgentId: body.toAgentId, override: true }),
         );
       }
+      if (url.pathname === "/task/archive" && req.method === "POST") {
+        const body = (await readJson(req)) as { taskId: string; reason?: string };
+        if (!body?.taskId) return sendJson(res, 400, { error: "taskId required" });
+        try {
+          return sendJson(res, 200, store.archiveTask({ taskId: body.taskId, reason: body.reason, override: true }));
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
+      if (url.pathname === "/task/supersede" && req.method === "POST") {
+        const body = (await readJson(req)) as { oldTaskId: string; newTaskId: string; note?: string };
+        if (!body?.oldTaskId || !body?.newTaskId)
+          return sendJson(res, 400, { error: "oldTaskId and newTaskId required" });
+        try {
+          return sendJson(
+            res,
+            200,
+            store.supersedeTask({ oldTaskId: body.oldTaskId, newTaskId: body.newTaskId, note: body.note, override: true }),
+          );
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
       // ── skills (per task type) ──
       if (url.pathname === "/api/skills" && req.method === "GET") {
         const orgName = url.searchParams.get("org");

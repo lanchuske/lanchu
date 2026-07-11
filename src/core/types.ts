@@ -37,6 +37,8 @@ export type EventType =
   | "task.stage_changed"
   | "task.stage_reconciled"
   | "task.bounced"
+  | "task.archived"
+  | "task.superseded"
   | "pr.merged"
   | "task.handoff"
   | "doc.created"
@@ -161,6 +163,13 @@ export interface Task {
   /** Backward SDLC moves so far; 2+ flags the item "needs attention". */
   bounce_count: number;
   last_bounce: TaskBounce | null;
+  /** Terminal archive (soft-delete): hidden from the board and every open-work
+   *  query, never hard-deleted (audit integrity). Orthogonal to status, which
+   *  keeps its last value as the historical record. */
+  archived_at: string | null;
+  archived_reason: string | null;
+  /** When archived because newer work replaces it, the successor task. */
+  superseded_by_task_id: string | null;
 }
 
 export interface LanchuEvent {
