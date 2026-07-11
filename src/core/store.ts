@@ -1944,10 +1944,20 @@ export function checkWorkOverlap(input: {
 }
 
 /**
- * Detect overlaps for a task an agent just created/claimed; when found, notify
- * the other agents (conflict notices) and audit-log one conflict.detected.
- * Warn-only by design — resolution (stop / handoff / backlog) is the user's call.
+ * Detect overlaps for a task an agent just started working (claim or
+ * create-and-claim); when found, notify the other agents (conflict notices)
+ * and audit-log one conflict.detected. Warn-only by design — resolution
+ * (stop / handoff / backlog) is the user's call.
+ *
+ * Merely CREATING a task is not starting work: callers on that path should
+ * use checkWorkOverlap directly and surface it as informational, or the
+ * warning fatigue trains agents to ignore real conflicts.
+ *
+ * A given task-pair only notifies + audits once per server session; the
+ * conflicts are still returned so the caller keeps showing the warning.
  */
+const warnedConflictPairs = new Set<string>();
+
 export function warnWorkConflicts(input: {
   orgId: string;
   agentId: string;
@@ -1962,7 +1972,13 @@ export function warnWorkConflicts(input: {
   });
   if (!conflicts.length) return [];
   const me = getAgent(input.agentId);
-  for (const c of conflicts) {
+  const fresh = conflicts.filter((c) => {
+    const key = `${input.agentId}:${input.taskId}:${c.their_task_id}`;
+    if (warnedConflictPairs.has(key)) return false;
+    warnedConflictPairs.add(key);
+    return true;
+  });
+  for (const c of fresh) {
     const other = findAgentByName(input.orgId, c.with_agent);
     if (!other) continue;
     insertNotice({
@@ -1976,14 +1992,16 @@ export function warnWorkConflicts(input: {
       ref: input.taskId,
     });
   }
-  recordEvent({
-    org_id: input.orgId,
-    type: "conflict.detected",
-    actor_agent_id: input.agentId,
-    subject_kind: "task",
-    subject_id: input.taskId,
-    data: { conflicts: conflicts as unknown as Record<string, unknown>[] },
-  });
+  if (fresh.length) {
+    recordEvent({
+      org_id: input.orgId,
+      type: "conflict.detected",
+      actor_agent_id: input.agentId,
+      subject_kind: "task",
+      subject_id: input.taskId,
+      data: { conflicts: fresh as unknown as Record<string, unknown>[] },
+    });
+  }
   return conflicts;
 }
 

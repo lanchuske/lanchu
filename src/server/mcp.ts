@@ -42,6 +42,21 @@ function conflictPayload(conflicts: import("../core/store.js").WorkConflict[]) {
   };
 }
 
+/**
+ * Informational overlap on create-WITHOUT-claim: filing a task is not starting
+ * work, so no STOP instruction and no notice to the busy agent — just a heads-up
+ * the creator can use when routing the task. The full conflict block fires on
+ * task_claim, where work actually starts.
+ */
+function overlapPayload(conflicts: import("../core/store.js").WorkConflict[]) {
+  return {
+    note:
+      "FYI: a live teammate is already working this area. Creating the task is fine; " +
+      "expect the full conflict warning if someone claims it while the overlap is live.",
+    conflicts,
+  };
+}
+
 function fail(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   const kind =
@@ -251,15 +266,16 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           deps,
           stage,
         });
-        // Task 3 (isolation): warn when a PRESENT teammate is already working
-        // the same area — the other agent gets a conflict notice too.
-        const conflicts = store.warnWorkConflicts({
+        // Creating a task is not starting work: report overlap with a PRESENT
+        // teammate as informational only (no STOP block, no notice, no audit
+        // event). task_claim carries the full conflict treatment.
+        const overlaps = store.checkWorkOverlap({
           orgId: ctx.orgId,
           agentId: ctx.agentId,
-          taskId: task.id,
           tags,
+          excludeTaskId: task.id,
         });
-        return text(conflicts.length ? { ...task, conflict: conflictPayload(conflicts) } : task);
+        return text(overlaps.length ? { ...task, overlap: overlapPayload(overlaps) } : task);
       } catch (err) {
         return fail(err);
       }
@@ -681,7 +697,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "5. Keep shared knowledge current with doc_read / doc_update.",
           "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release.",
           "7. Talk to teammates with message_send (audit-logged; the supervisor sees everything). Notices arrive inside your tool results — act on them and message_ack.",
-          "8. If a task_create/task_claim result carries a `conflict` block, another live agent is on that surface: STOP and ask your user — stop, hand off, or park it.",
+          "8. If a task_claim result carries a `conflict` block, another live agent is on that surface: STOP and ask your user — stop, hand off, or park it. An `overlap` field on task_create is informational only: creating a task is fine, just route it with the overlap in mind.",
         ],
         rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc.",
         tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, session_leave.",
