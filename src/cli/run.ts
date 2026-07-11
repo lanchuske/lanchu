@@ -21,6 +21,7 @@ import {
   writeSettings,
 } from "../config.js";
 import { agentColor, ansiColorize } from "../core/colors.js";
+import { gitInfo } from "../core/git.js";
 import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
 
@@ -210,9 +211,70 @@ async function cmdBoard(kind: "agents" | "tasks"): Promise<void> {
   console.log(JSON.stringify(kind === "agents" ? board.agents : board.tasks, null, 2));
 }
 
+/**
+ * The project name this checkout implies: the repo root's folder name, then
+ * the origin remote's repo name, then the bare folder name. A project IS a
+ * repo + folder — deriving the default here is what keeps records bound to
+ * something real (see the panel-philosophy design doc).
+ */
+function projectNameFromCheckout(cwd = process.cwd()): string {
+  const g = gitInfo(cwd);
+  if (g.worktree) return path.basename(g.worktree);
+  const fromRemote = g.repoUrl?.split("/").pop();
+  return fromRemote || path.basename(cwd);
+}
+
+/** Name↔folder drift checks shared by `lanchu init` and the wizard. */
+function provisioningWarnings(org: string, project: string, cwd = process.cwd()): string[] {
+  const warnings: string[] = [];
+  const bound = findConfig(cwd);
+  if (bound && bound.config.org !== org) {
+    warnings.push(
+      `this directory is already bound to org '${bound.config.org}' (${bound.file}) — you chose '${org}'.`,
+    );
+  }
+  if (bound && bound.config.project !== project) {
+    warnings.push(
+      `this directory is already bound to project '${bound.config.project}' (${bound.file}) — you chose '${project}'.`,
+    );
+  }
+  const expected = projectNameFromCheckout(cwd);
+  if (project !== expected) {
+    warnings.push(
+      `project name '${project}' does not match this checkout ('${expected}'). ` +
+        "A project is a repo + folder; a name that drifts from its folder is how phantom records happen.",
+    );
+  }
+  return warnings;
+}
+
 function cmdInit(): void {
-  const org = flag("org") ?? "acme";
-  const project = flag("project") ?? path.basename(process.cwd());
+  const org = flag("org");
+  // No silent default org: the phantom 'acme' org existed because init
+  // invented one. Provisioning must name the org explicitly.
+  if (!org) {
+    const bound = findConfig();
+    if (bound) {
+      return console.log(
+        `This directory is already bound to org '${bound.config.org}' · project '${bound.config.project}' (${bound.file}).\n` +
+          "To rebind, run: lanchu init --org <name> [--project <name>] [--force]",
+      );
+    }
+    return console.log(
+      `usage: lanchu init --org <name> [--project <name>]   (project defaults to '${projectNameFromCheckout()}' from this checkout)`,
+    );
+  }
+  const project = flag("project") ?? projectNameFromCheckout();
+  const existingHere = fs.existsSync(path.join(process.cwd(), ".lanchu", "config.json"));
+  const warnings = provisioningWarnings(org, project);
+  for (const w of warnings) console.log(`⚠ ${w}`);
+  // Overwriting THIS directory's binding with different names is a rebind —
+  // make it deliberate. (Warnings about a parent binding or a name↔folder
+  // mismatch inform but don't block.)
+  const rebinding = warnings.some((w) => w.includes("already bound")) && existingHere;
+  if (rebinding && !hasFlag("force")) {
+    return console.log("Refusing to rebind this directory. Re-run with --force if you mean it.");
+  }
   const file = writeConfig({ org, project });
   console.log(`Wrote ${file}  (org: ${org}, project: ${project})`);
 }
@@ -222,8 +284,10 @@ async function cmdOnboard(objective: string): Promise<void> {
   if (!found) {
     cmdInit();
     found = findConfig();
+    // init refuses to invent an org — its message already says what to run.
+    if (!found) return;
   }
-  const { org, project } = found!.config;
+  const { org, project } = found.config;
   await ensureServer();
 
   // reuse-or-create
@@ -762,8 +826,21 @@ async function cmdWork(prefillObjective: string): Promise<void> {
       project = found.config.project;
       console.log(`\nOrg: ${org} · Project: ${project}  (from .lanchu/config.json)`);
     } else {
-      org = (await rl.question(`\nOrganization [acme]: `)).trim() || "acme";
-      project = (await rl.question(`Project [${path.basename(process.cwd())}]: `)).trim() || path.basename(process.cwd());
+      // Org must be named explicitly (no invented default); the project name
+      // defaults from the real checkout so records stay bound to the folder.
+      org = "";
+      while (!org) org = (await rl.question(`\nOrganization: `)).trim();
+      const defProject = projectNameFromCheckout();
+      project = (await rl.question(`Project [${defProject}]: `)).trim() || defProject;
+      const warnings = provisioningWarnings(org, project);
+      if (warnings.length) {
+        for (const w of warnings) console.log(`⚠ ${w}`);
+        const go = (await rl.question(`Continue anyway? [y/N] `)).trim().toLowerCase();
+        if (go !== "y" && go !== "yes") {
+          console.log("Cancelled — nothing written.");
+          return;
+        }
+      }
       writeConfig({ org, project });
       console.log(`Wrote .lanchu/config.json`);
     }
