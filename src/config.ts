@@ -115,6 +115,20 @@ export function sdlcMode(): SdlcMode {
   return m === "off" || m === "strict" ? m : "assist";
 }
 
+/** How long a notice may sit undelivered before its idle recipient gets nudged. */
+export function nudgeAfterMs(): number {
+  const s = process.env.LANCHU_NUDGE_AFTER_SECONDS;
+  const n = s ? Number.parseInt(s, 10) : 60;
+  return (Number.isFinite(n) && n > 0 ? n : 60) * 1000;
+}
+
+/** Minimum spacing between nudges to the same agent. */
+export function nudgeCooldownMs(): number {
+  const s = process.env.LANCHU_NUDGE_COOLDOWN_MINUTES;
+  const n = s ? Number.parseInt(s, 10) : 5;
+  return (Number.isFinite(n) && n > 0 ? n : 5) * 60_000;
+}
+
 // ── local settings (opt-in preferences; never leaves the machine) ──
 export interface Settings {
   notifyUpdates?: boolean;

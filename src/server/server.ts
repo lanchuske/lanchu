@@ -13,7 +13,7 @@ import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
-import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
+import { closeTerminal, focusTerminal, nudgeTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { clearContexts, getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
 import { probeServers, readProjectMcpServers } from "../core/mcps.js";
@@ -893,6 +893,41 @@ function restartServer(): void {
   setTimeout(() => process.exit(0), 150);
 }
 
+/**
+ * The one fixed line auto-wake may ever type into an agent's terminal.
+ * Deliberately constant: no interpolation of message bodies or names — the
+ * nudge points at the inbox, the inbox carries the content (audited).
+ */
+export const NUDGE_LINE =
+  "You have Lanchu notices: run message_list now and follow the instructions.";
+
+/**
+ * Auto-wake sweep: nudge agents whose queued notices sat undelivered past the
+ * grace window and whose Lanchu-spawned terminal is still open. Store-side
+ * guard rails (queued-only, cooldown) are in agentsNeedingNudge; injectable
+ * effects keep this testable without a real terminal.
+ */
+export function runNudgeSweep(
+  effects: { alive?: typeof terminalAlive; nudge?: typeof nudgeTerminal } = {},
+): { nudged: string[] } {
+  const alive = effects.alive ?? terminalAlive;
+  const nudge = effects.nudge ?? nudgeTerminal;
+  const nudged: string[] = [];
+  for (const org of store.listOrgs()) {
+    for (const c of store.agentsNeedingNudge(org.id)) {
+      try {
+        if (!alive(c.terminal_ref)) continue;
+        if (!nudge(c.terminal_ref, NUDGE_LINE)) continue;
+        store.recordNudge(org.id, c.agent_id, c.queued_notices);
+        nudged.push(c.agent_name);
+      } catch {
+        /* a broken terminal must not stop the sweep */
+      }
+    }
+  }
+  return { nudged };
+}
+
 export function startServer(): Promise<http.Server> {
   startWebhookDelivery();
   // Warm the runtime inventory off the startup path (each probe is capped at
@@ -908,6 +943,15 @@ export function startServer(): Promise<http.Server> {
   };
   tick();
   setInterval(tick, 30_000).unref();
+  // Auto-wake: queued A2A messages must not wait for a tool call that never
+  // comes. Same cadence as the recurring tick.
+  setInterval(() => {
+    try {
+      runNudgeSweep();
+    } catch {
+      /* keep the server alive */
+    }
+  }, 30_000).unref();
   const server = createServer();
   return new Promise((resolve, reject) => {
     server.once("error", (err: NodeJS.ErrnoException) => {
