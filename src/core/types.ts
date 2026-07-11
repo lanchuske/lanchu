@@ -41,7 +41,8 @@ export type EventType =
   | "conflict.detected"
   | "agent.duplicate_session"
   | "scope.violation"
-  | "quota.exceeded";
+  | "quota.exceeded"
+  | "memory.written";
 
 export interface Org {
   id: string;
@@ -116,6 +117,24 @@ export interface LanchuEvent {
   outcome: EventOutcome;
   data: Record<string, unknown> | null;
   created_at: string;
+}
+
+export type MemoryScope = "agent" | "project" | "org";
+export type MemorySource = "event" | "agent" | "distilled";
+
+/** A persisted learning: org-visible, audited, size-capped. Data, not instructions. */
+export interface MemoryEntry {
+  id: string;
+  org_id: string;
+  scope: MemoryScope;
+  subject_id: string;
+  key: string;
+  value: string;
+  source: MemorySource;
+  source_ref: string | null;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
 }
 
 /** Governance error: the action violates the role scope (hard block on mediated actions). */

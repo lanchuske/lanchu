@@ -491,6 +491,24 @@ export function createServer(): http.Server {
         return sendJson(res, 200, { ok: true, rules: store.getOrgRules(org.id) });
       }
 
+      if (url.pathname === "/api/memory" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, []);
+        const entries = store.memoryGet(org.id).map((m) => ({
+          ...m,
+          subject_name:
+            m.scope === "agent"
+              ? (store.getAgent(m.subject_id)?.name ?? m.subject_id)
+              : m.scope === "project"
+                ? (store.listProjects(org.id).find((p) => p.id === m.subject_id)?.name ?? m.subject_id)
+                : org.name,
+          writer_name: m.source === "agent" && m.source_ref ? (store.getAgent(m.source_ref)?.name ?? null) : null,
+        }));
+        return sendJson(res, 200, entries);
+      }
+
       if (url.pathname === "/api/audit" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });

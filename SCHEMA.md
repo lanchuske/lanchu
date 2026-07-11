@@ -66,6 +66,21 @@ CREATE TABLE role (
   UNIQUE (org_id, name)
 );
 
+CREATE TABLE memory (
+  id         TEXT PRIMARY KEY,
+  org_id     TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
+  scope      TEXT NOT NULL,                    -- agent | project | org
+  subject_id TEXT NOT NULL,                    -- the agent/project/org the learning is about
+  key        TEXT NOT NULL,                    -- stable identifier; upsert unit
+  value      TEXT NOT NULL,                    -- the learning (data, not instructions)
+  source     TEXT NOT NULL DEFAULT 'agent',    -- event (distilled from audit) | agent | distilled
+  source_ref TEXT,                             -- provenance: event id or writing agent id
+  confidence REAL NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (org_id, scope, subject_id, key)      -- size-capped per subject with LRU eviction
+);
+
 CREATE TABLE role_tag (
   role_id     TEXT NOT NULL REFERENCES role(id) ON DELETE CASCADE,
   tag         TEXT NOT NULL,

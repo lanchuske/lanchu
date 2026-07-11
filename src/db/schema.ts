@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -181,6 +181,22 @@ CREATE TABLE IF NOT EXISTS notice (
   acked_at      TEXT
 );
 
+CREATE TABLE IF NOT EXISTS memory (
+  id         TEXT PRIMARY KEY,
+  org_id     TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
+  scope      TEXT NOT NULL CHECK (scope IN ('agent','project','org')),
+  subject_id TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  value      TEXT NOT NULL,
+  source     TEXT NOT NULL DEFAULT 'agent'
+               CHECK (source IN ('event','agent','distilled')),
+  source_ref TEXT,
+  confidence REAL NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (org_id, scope, subject_id, key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
@@ -190,4 +206,5 @@ CREATE INDEX IF NOT EXISTS idx_session_agent_live  ON session(agent_id, ended_at
 CREATE INDEX IF NOT EXISTS idx_event_org_id        ON event(org_id, id);
 CREATE INDEX IF NOT EXISTS idx_event_actor         ON event(actor_agent_id, id);
 CREATE INDEX IF NOT EXISTS idx_notice_pending      ON notice(to_agent_id, acked_at);
+CREATE INDEX IF NOT EXISTS idx_memory_subject      ON memory(org_id, scope, subject_id, updated_at);
 `;

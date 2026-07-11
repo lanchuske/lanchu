@@ -316,6 +316,7 @@ export function panelHtml(): string {
         <li data-view="graph">Org life</li>
         <li data-view="bugs">Bugs <span class="badge" id="c-bugs">0</span></li>
         <li data-view="docs">Docs <span class="badge" id="c-docs">0</span></li>
+        <li data-view="memory">Memory <span class="badge" id="c-memory">0</span></li>
         <li data-view="activity">Activity</li>
         <li data-view="processes">Processes <span class="badge" id="c-proc">0</span></li>
       </ul>
@@ -395,6 +396,12 @@ export function panelHtml(): string {
         <p class="vsub">Shared definitions and knowledge kept current by the team.</p>
         <input id="doc-q" class="doc-search" type="search" placeholder="Filter docs by title or content…" autocomplete="off" spellcheck="false">
         <div id="docs"></div>
+      </section>
+
+      <section class="view" id="v-memory">
+        <h1 class="vhead">Memory</h1>
+        <p class="vsub">Persistent learnings in three scopes — org, project, agent — each with provenance: who or what wrote it, and when. Event-derived entries are distilled automatically from the audit log; agents add their own with <code>memory_set</code>. Read-only here.</p>
+        <div id="memory"></div>
       </section>
 
       <section class="view" id="v-activity">
@@ -851,6 +858,30 @@ function evRow(e) {
     '<span>' + (e.actor_name ? colorChip(e.actor_name) : "") + '<span class="who">' + esc(e.actor_name || "—") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
     '<span class="right">' + right + '</span></div>';
 }
+
+var MEMORY_SCOPES = [["org", "Org"], ["project", "Projects"], ["agent", "Agents"]];
+function renderMemory(list) {
+  list = list || [];
+  document.getElementById("c-memory").textContent = list.length;
+  document.getElementById("memory").innerHTML = MEMORY_SCOPES.map(function (sc) {
+    var entries = list.filter(function (m) { return m.scope === sc[0]; });
+    if (!entries.length) return "";
+    return '<h2 class="sub-h2">' + sc[1] + '</h2>' + entries.map(function (m) {
+      var who = m.scope === "agent" ? colorChip(m.subject_name) + esc(m.subject_name) : esc(m.subject_name);
+      var prov = m.source === "agent"
+        ? "written by " + esc(m.writer_name || "an agent")
+        : m.source === "event"
+          ? "distilled from event " + esc(m.source_ref || "?")
+          : "distilled (curation run)";
+      return '<div class="card"><div class="top"><span class="name">' + who +
+        ' <span class="type">' + esc(m.key) + '</span></span>' +
+        '<span class="meta">' + esc((m.updated_at || "").slice(0, 16).replace("T", " ")) + '</span></div>' +
+        '<div class="meta">' + esc(m.value) + '</div>' +
+        '<div class="hint">' + prov + '</div></div>';
+    }).join("");
+  }).join("") || '<div class="empty">No memories yet. They accrue automatically from events (merged PRs, conflict hot zones, role changes) and from agents\' own <code>memory_set</code> calls.</div>';
+}
+
 function renderAudit(list) {
   document.getElementById("audit").innerHTML = list.map(evRow).join("") || '<div class="empty">No activity yet.</div>';
 }
@@ -1068,7 +1099,7 @@ function refresh() {
   updateProcBadge();
   fetchGraph(); // no-op unless the Org life view is open
   if (busy) return; busy = true;
-  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs")])
+  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs"), get("/api/memory")])
     .then(function (r) {
       var sig = JSON.stringify(r);
       if (sig === lastSig) return; // nothing changed — keep the DOM (and any open select) intact
@@ -1084,7 +1115,7 @@ function refresh() {
       renderProjectsView(r[0].projects, r[0].tasks, r[0].agents);
       renderAgents(r[0].agents);
       renderTasks(r[0].tasks, r[0].agents);
-      renderRoles(r[1]); renderDocs(r[2]); renderAudit(r[3]);
+      renderRoles(r[1]); renderDocs(r[2]); renderAudit(r[3]); renderMemory(r[5]);
       renderStats(r[0], r[3]);
       renderOverview(r[0], r[3]);
       renderAttention(r[4], r[0].agents);
