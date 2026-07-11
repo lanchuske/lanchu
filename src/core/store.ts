@@ -1345,6 +1345,8 @@ export type BoardAgent = Agent & {
   role_name: string | null;
   open_tasks: number;
   workspace: string | null;
+  active_task_id: string | null;
+  active_task_title: string | null;
 };
 
 export interface BoardSnapshot {
@@ -1717,11 +1719,16 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
     const owned = tasks.filter((t) => t.owner_agent_id === a.id);
     const openOwned = owned.filter((t) => isOpen(t.status));
     const wsTask = openOwned.find((t) => t.workspace) ?? owned.find((t) => t.workspace);
+    // "Where is this agent right now": the task it is actively building wins
+    // over one it merely claimed.
+    const activeTask = openOwned.find((t) => t.status === "in_progress") ?? openOwned[0] ?? null;
     return {
       ...a,
       role_name: roleName.get(a.role_id) ?? null,
       open_tasks: openOwned.length,
       workspace: wsTask?.workspace ?? null,
+      active_task_id: activeTask?.id ?? null,
+      active_task_title: activeTask?.title ?? null,
     };
   });
 
