@@ -48,6 +48,8 @@ export type EventType =
   | "greenzone.requested"
   | "greenzone.confirmed"
   | "greenzone.executed"
+  | "greenzone.expired"
+  | "greenzone.cancelled"
   | "coordinator.acquired"
   | "coordinator.released"
   | "coordinator.handoff"

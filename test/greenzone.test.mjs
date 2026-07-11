@@ -137,6 +137,74 @@ test("acking the greenzone request notice confirms: old sessions are never stuck
   teardown(a, b);
 });
 
+// ── orphan fix: a stuck window self-expires; cancel is the supervisor override ──
+
+test("orphan repro: a window whose timer died self-expires on the next touch and never blocks the org", async () => {
+  const { org, a, b } = setup("gz-orphan-org");
+  let executed = 0;
+
+  // Shrink the expiry grace INSIDE this test only (expiryGraceMs reads the env
+  // per call): a tiny file-global grace made every other greenzone test racy
+  // on slow CI runners — any >60ms gap between request and the next touch
+  // expired windows that were supposed to still be open (Windows CI red).
+  process.env.LANCHU_GREENZONE_GRACE_MS = "10";
+  try {
+    gz.requestGreenzone({ orgId: org.id, timeoutMs: 30, execute: () => executed++ });
+    gz.dropTimerForTest(org.id); // the 2026-07-11 incident: execution lost mid-window
+    await new Promise((r) => setTimeout(r, 100)); // past deadline (30ms) + grace (10ms)
+
+    assert.equal(executed, 0, "the lost op never ran");
+    assert.equal(gz.isGreenzoneActive(org.id), false, "a stale window is not active");
+    assert.equal(gz.greenzoneStatus(org.id).state, "expired");
+    assert.ok(
+      store.listAuditEvents(org.id).some((e) => e.type === "greenzone.expired"),
+      "expiry is on the record",
+    );
+
+    // The whole point: the next request goes straight through.
+    const next = gz.requestGreenzone({ orgId: org.id, execute: () => executed++ });
+    assert.equal(next.state, "requested", "org is never blocked by a dead window");
+  } finally {
+    delete process.env.LANCHU_GREENZONE_GRACE_MS;
+  }
+
+  teardown(a, b);
+});
+
+test("cancel aborts the pending op, notices the agents, audits, and frees the org", async () => {
+  const { org, a, b } = setup("gz-cancel-org");
+  let executed = 0;
+
+  // Cancel IMMEDIATELY after the request — any bookkeeping in between gave
+  // slow CI runners time to hit the 50ms deadline before the cancel arrived
+  // ("no greenzone in progress" on windows-latest). The timeout is generous;
+  // the sleep below still proves the armed timer was cleared, not just slow.
+  gz.requestGreenzone({ orgId: org.id, timeoutMs: 500, execute: () => executed++ });
+  const status = gz.cancelGreenzone(org.id, a.id);
+  assert.equal(status.state, "cancelled");
+  assert.equal(gz.isGreenzoneActive(org.id), false);
+
+  // The armed op must never fire, even past its original deadline.
+  await new Promise((r) => setTimeout(r, 650));
+  assert.equal(executed, 0, "cancelled means the op does not run");
+
+  store.takeUndeliveredNotices(a.id); // drain a's request+cancelled notices
+  const bNotices = store.takeUndeliveredNotices(b.id);
+  assert.equal(bNotices.length, 2, "request notice + cancellation notice");
+  const cancelled = bNotices.find((n) => /Greenzone cancelled/.test(n.body));
+  assert.ok(cancelled, "cancellation notice reached the agent");
+  assert.match(cancelled.body, /resume normal work/);
+
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "greenzone.cancelled");
+  assert.ok(ev, "cancellation is on the record");
+
+  assert.throws(() => gz.ackGreenzone(org.id, b.id), /no greenzone in progress/, "acks after cancel are refused");
+  assert.throws(() => gz.cancelGreenzone(org.id), /no greenzone in progress/, "nothing left to cancel");
+  assert.equal(gz.requestGreenzone({ orgId: org.id, execute: () => {} }).state, "requested", "org is free again");
+
+  teardown(a, b);
+});
+
 test("HTTP surface: /greenzone/request opens the window and /api/greenzone reports it", async () => {
   const { createServer } = await import("../dist/server/server.js");
   const server = createServer();
@@ -173,6 +241,28 @@ test("HTTP surface: /greenzone/request opens the window and /api/greenzone repor
       body: JSON.stringify({ org: "gz-http-org", action: "migrate-the-moon" }),
     });
     assert.equal(bad.status, 400, "unknown actions are refused");
+
+    // Supervisor override over HTTP: cancel clears the window; a second cancel
+    // has nothing to act on; unknown orgs 404.
+    const cancel = await fetch(base + "/greenzone/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ org: "gz-http-org" }),
+    });
+    assert.equal(cancel.status, 200);
+    assert.equal((await cancel.json()).state, "cancelled");
+    const again = await fetch(base + "/greenzone/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ org: "gz-http-org" }),
+    });
+    assert.equal(again.status, 409, "nothing left to cancel");
+    const ghost = await fetch(base + "/greenzone/cancel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ org: "no-such-org" }),
+    });
+    assert.equal(ghost.status, 404);
   } finally {
     teardown(a, b);
     void org;

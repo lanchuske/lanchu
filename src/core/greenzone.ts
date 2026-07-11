@@ -14,8 +14,23 @@ import * as store from "./store.js";
 
 export const GREENZONE_DEFAULT_TIMEOUT_MS = 120_000;
 
+/**
+ * Belt-and-braces TTL past the deadline: if the arming timer ever dies without
+ * executing (the 2026-07-11 orphan blocked the org's greenzones for 20+ min
+ * with no way to clear it), any later touch — status read, ack, new request —
+ * expires the stale window instead of letting it block forever.
+ */
+export const GREENZONE_EXPIRY_GRACE_MS = 60_000;
+
+/** Env override (LANCHU_GREENZONE_GRACE_MS) so tests don't wait a minute. */
+function expiryGraceMs(): number {
+  const s = process.env.LANCHU_GREENZONE_GRACE_MS;
+  const n = s ? Number.parseInt(s, 10) : GREENZONE_EXPIRY_GRACE_MS;
+  return Number.isFinite(n) && n >= 0 ? n : GREENZONE_EXPIRY_GRACE_MS;
+}
+
 export interface GreenzoneStatus {
-  state: "idle" | "requested" | "done";
+  state: "idle" | "requested" | "done" | "expired" | "cancelled";
   action?: string;
   requested_at?: string;
   deadline?: string;
@@ -23,6 +38,7 @@ export interface GreenzoneStatus {
   required: { id: string; name: string; confirmed_at: string | null }[];
   confirmed?: number;
   executed_at?: string;
+  ended_at?: string;
   timed_out?: boolean;
 }
 
@@ -34,7 +50,9 @@ interface Zone {
   timer: NodeJS.Timeout | null;
   required: Map<string, { name: string; confirmedAt: number | null }>;
   execute: () => void;
-  executedAt: number | null;
+  /** When the zone ENDED, whatever the reason — null while the window is open. */
+  endedAt: number | null;
+  endReason: "executed" | "expired" | "cancelled" | null;
   timedOut: boolean;
 }
 
@@ -47,26 +65,50 @@ function statusOf(zone: Zone): GreenzoneStatus {
     name: e.name,
     confirmed_at: e.confirmedAt ? new Date(e.confirmedAt).toISOString() : null,
   }));
+  const state: GreenzoneStatus["state"] =
+    zone.endedAt === null ? "requested" : zone.endReason === "executed" ? "done" : (zone.endReason ?? "done");
   return {
-    state: zone.executedAt ? "done" : "requested",
+    state,
     action: zone.action,
     requested_at: new Date(zone.requestedAt).toISOString(),
     deadline: new Date(zone.requestedAt + zone.timeoutMs).toISOString(),
     required,
     confirmed: required.filter((r) => r.confirmed_at).length,
-    ...(zone.executedAt ? { executed_at: new Date(zone.executedAt).toISOString(), timed_out: zone.timedOut } : {}),
+    ...(zone.endedAt
+      ? {
+          ended_at: new Date(zone.endedAt).toISOString(),
+          ...(zone.endReason === "executed"
+            ? { executed_at: new Date(zone.endedAt).toISOString(), timed_out: zone.timedOut }
+            : {}),
+        }
+      : {}),
   };
+}
+
+/**
+ * Self-healing on every touch: a window whose deadline+grace passed without
+ * ending means its timer died (killed requester process in older builds, a
+ * cleared timer, a bug) — expire it, audited, so it can never block the org.
+ */
+function maybeExpire(zone: Zone): void {
+  if (zone.endedAt !== null) return;
+  if (Date.now() <= zone.requestedAt + zone.timeoutMs + expiryGraceMs()) return;
+  endZone(zone, "expired");
 }
 
 export function greenzoneStatus(orgId: string): GreenzoneStatus {
   const zone = zones.get(orgId);
-  return zone ? statusOf(zone) : { state: "idle", required: [] };
+  if (!zone) return { state: "idle", required: [] };
+  maybeExpire(zone);
+  return statusOf(zone);
 }
 
 /** True while a window is open — callers pause risky ops (new claims…). */
 export function isGreenzoneActive(orgId: string): boolean {
   const zone = zones.get(orgId);
-  return !!zone && zone.executedAt === null;
+  if (!zone) return false;
+  maybeExpire(zone);
+  return zone.endedAt === null;
 }
 
 /**
@@ -82,7 +124,8 @@ export function requestGreenzone(input: {
   execute: () => void;
 }): GreenzoneStatus {
   const existing = zones.get(input.orgId);
-  if (existing && existing.executedAt === null) {
+  if (existing) maybeExpire(existing);
+  if (existing && existing.endedAt === null) {
     throw new Error("a greenzone is already in progress for this org");
   }
   const action = input.action ?? "restart";
@@ -99,7 +142,8 @@ export function requestGreenzone(input: {
     timer: null,
     required: new Map(live.map((a) => [a.id, { name: a.name, confirmedAt: null }])),
     execute: input.execute,
-    executedAt: null,
+    endedAt: null,
+    endReason: null,
     timedOut: false,
   };
   zones.set(input.orgId, zone);
@@ -138,7 +182,8 @@ export function requestGreenzone(input: {
 /** An agent confirms it reached a safe point. All confirmed → execute early. */
 export function ackGreenzone(orgId: string, agentId: string): GreenzoneStatus {
   const zone = zones.get(orgId);
-  if (!zone || zone.executedAt !== null) throw new Error("no greenzone in progress");
+  if (zone) maybeExpire(zone);
+  if (!zone || zone.endedAt !== null) throw new Error("no greenzone in progress");
   const entry = zone.required.get(agentId);
   if (entry) {
     if (!entry.confirmedAt) entry.confirmedAt = Date.now();
@@ -164,23 +209,9 @@ export function ackGreenzone(orgId: string, agentId: string): GreenzoneStatus {
 }
 
 function executeZone(zone: Zone, timedOut: boolean): void {
-  if (zone.executedAt !== null) return;
-  zone.executedAt = Date.now();
+  if (zone.endedAt !== null) return;
   zone.timedOut = timedOut;
-  if (zone.timer) clearTimeout(zone.timer);
-  const entries = [...zone.required.values()];
-  store.recordEvent({
-    org_id: zone.orgId,
-    type: "greenzone.executed",
-    subject_kind: "org",
-    subject_id: zone.orgId,
-    data: {
-      action: zone.action,
-      confirmed: entries.filter((e) => e.confirmedAt).length,
-      required: entries.length,
-      timed_out: timedOut,
-    },
-  });
+  endZone(zone, "executed");
   try {
     zone.execute();
   } catch {
@@ -188,8 +219,60 @@ function executeZone(zone: Zone, timedOut: boolean): void {
   }
 }
 
+/** Close the window for any reason (executed | expired | cancelled), audited. */
+function endZone(zone: Zone, reason: "executed" | "expired" | "cancelled", byAgentId?: string | null): void {
+  if (zone.endedAt !== null) return;
+  zone.endedAt = Date.now();
+  zone.endReason = reason;
+  if (zone.timer) clearTimeout(zone.timer);
+  const entries = [...zone.required.values()];
+  store.recordEvent({
+    org_id: zone.orgId,
+    type: `greenzone.${reason}` as "greenzone.executed" | "greenzone.expired" | "greenzone.cancelled",
+    actor_agent_id: byAgentId ?? null,
+    subject_kind: "org",
+    subject_id: zone.orgId,
+    data: {
+      action: zone.action,
+      confirmed: entries.filter((e) => e.confirmedAt).length,
+      required: entries.length,
+      ...(reason === "executed" ? { timed_out: zone.timedOut } : {}),
+      ...(reason === "expired" ? { deadline_overrun_ms: zone.endedAt - zone.requestedAt - zone.timeoutMs } : {}),
+    },
+  });
+}
+
+/**
+ * Supervisor override: abort a requested window before it executes. The armed
+ * op never runs; the agents that were told to reach a safe point are noticed
+ * that the window is off. Audited as greenzone.cancelled.
+ */
+export function cancelGreenzone(orgId: string, byAgentId?: string | null): GreenzoneStatus {
+  const zone = zones.get(orgId);
+  if (zone) maybeExpire(zone);
+  if (!zone || zone.endedAt !== null) throw new Error("no greenzone in progress");
+  endZone(zone, "cancelled", byAgentId);
+  for (const [agentId] of zone.required) {
+    store.systemNotice(
+      orgId,
+      agentId,
+      `Greenzone cancelled (${zone.action}): the maintenance window was called off — resume normal work.`,
+    );
+  }
+  return statusOf(zone);
+}
+
 /** Test hook: drop all in-memory windows. */
 export function resetGreenzones(): void {
   for (const z of zones.values()) if (z.timer) clearTimeout(z.timer);
   zones.clear();
+}
+
+/** Test hook: kill a window's armed timer — simulates the orphan (a lost execution). */
+export function dropTimerForTest(orgId: string): void {
+  const z = zones.get(orgId);
+  if (z?.timer) {
+    clearTimeout(z.timer);
+    z.timer = null;
+  }
 }

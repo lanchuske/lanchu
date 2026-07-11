@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { accessKey, host, port, publicUrl, reconnectGraceMs, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
-import { greenzoneStatus, requestGreenzone } from "../core/greenzone.js";
+import { cancelGreenzone, greenzoneStatus, requestGreenzone } from "../core/greenzone.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
@@ -770,6 +770,19 @@ export function createServer(): http.Server {
         }
         res.writeHead(200, { "content-type": "text/plain" });
         return res.end(String(store.undeliveredNoticeCount(ctx.agentId)));
+      }
+      // Supervisor override: abort a requested window before it executes (the
+      // armed op never runs). Also the recovery path for a stuck window.
+      if (url.pathname === "/greenzone/cancel" && req.method === "POST") {
+        const body = (await readJson(req)) as { org: string };
+        if (!body?.org) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(body.org);
+        if (!org) return sendJson(res, 404, { error: `no org named '${body.org}'` });
+        try {
+          return sendJson(res, 200, cancelGreenzone(org.id));
+        } catch (err) {
+          return sendJson(res, 409, { error: (err as Error).message });
+        }
       }
       if (url.pathname === "/api/greenzone" && req.method === "GET") {
         const orgName = url.searchParams.get("org");

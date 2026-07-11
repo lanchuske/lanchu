@@ -111,6 +111,9 @@ export const COMMANDS: CommandSpec[] = [
     { name: "greenzone", desc: "agents confirm a safe point first" },
     { name: "timeout", desc: "greenzone timeout in seconds", arg: "value" },
   ] },
+  { name: "greenzone", desc: "show the org's maintenance window / abort it", sub: [
+    { name: "cancel", desc: "abort the requested window (supervisor override)" },
+  ] },
   { name: "doctor", desc: "check the environment (node, port, config, DB)" },
   { name: "statusline", desc: "status line for Claude Code" },
   { name: "install-commands", desc: "install lanchu slash-commands for Claude Code" },

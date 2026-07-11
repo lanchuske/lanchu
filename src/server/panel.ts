@@ -1512,14 +1512,31 @@ function refreshGreenzone() {
     if (gz.state === "done") {
       body = "<b>Greenzone</b> " + esc(gz.action || "") + " executed" + (gz.timed_out ? " (timeout — not everyone confirmed)" : "") + chips;
       // The banner clears once the restarted server reports idle again.
+    } else if (gz.state === "cancelled" || gz.state === "expired") {
+      body = "<b>Greenzone</b> " + esc(gz.action || "") + " " + gz.state +
+        (gz.state === "expired" ? " (its timer never fired — the pending op did not run)" : " — the pending op will not run") + chips;
     } else {
       var left = Math.max(0, Math.round((new Date(gz.deadline).getTime() - Date.now()) / 1000));
-      body = "<b>Greenzone</b> " + esc(gz.action || "") + " requested — " + (gz.confirmed || 0) + "/" + (gz.required || []).length +
-        " confirmed · executes in ≤" + left + "s" + chips;
+      var age = Math.max(0, Math.round((Date.now() - new Date(gz.requested_at).getTime()) / 1000));
+      // A window past its deadline is stuck (timer lost): say so and lead with
+      // the override; the server also self-expires it on the next touch.
+      var stuck = left === 0;
+      body = "<b>Greenzone</b> " + esc(gz.action || "") + (stuck ? " STUCK — requested " + age + "s ago, deadline passed" : " requested " + age + "s ago — " + (gz.confirmed || 0) + "/" + (gz.required || []).length +
+        " confirmed · executes in ≤" + left + "s") + chips +
+        ' <button class="danger" onclick="cancelGreenzone()" title="Abort the window: the pending op will not run (audited, agents are noticed)">Cancel</button>';
     }
     el.innerHTML = body;
     el.style.display = "block";
   }).catch(function () {});
+}
+function cancelGreenzone() {
+  authFetch("/greenzone/cancel", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ org: org() }) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      toast(r.error ? r.error : "Greenzone cancelled — the pending op will not run", !!r.error);
+      refreshGreenzone();
+    });
 }
 setInterval(refreshGreenzone, 3000);
 
