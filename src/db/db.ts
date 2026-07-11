@@ -63,6 +63,7 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "skill", "loaded_at", "TEXT");
   addColumn(db, "doc", "category", "TEXT NOT NULL DEFAULT 'general'");
   addColumn(db, "role", "token_quota", "INTEGER");
+  addColumn(db, "agent", "color_slot", "INTEGER");
   addColumn(db, "doc", "read_count", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "doc", "last_read_at", "TEXT");
   addColumn(db, "doc", "last_read_by_agent_id", "TEXT");

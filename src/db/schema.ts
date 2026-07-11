@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS agent (
   branch           TEXT,
   worktree         TEXT,
   terminal_ref     TEXT,
+  color_slot       INTEGER,
   created_at       TEXT NOT NULL,
   retired_at       TEXT,
   UNIQUE (org_id, name)

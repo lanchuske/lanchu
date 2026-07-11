@@ -3,6 +3,7 @@ import { activeWindowMs, sdlcMode, staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
+import { preferredSlot, slotColor, type AgentColor } from "./colors.js";
 import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
 import { isAgentLive, liveSessionCount } from "./presence.js";
 import { loadSkillDefinition } from "./skills_loader.js";
@@ -729,13 +730,66 @@ function loadAgent(row: Record<string, unknown>): Agent {
     cwd: (row.cwd as string) ?? null,
     branch: (row.branch as string) ?? null,
     worktree: (row.worktree as string) ?? null,
+    color_slot: (row.color_slot as number) ?? null,
     created_at: row.created_at as string,
     retired_at: (row.retired_at as string) ?? null,
   };
 }
 
 const AGENT_COLS =
-  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, created_at, retired_at";
+  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, created_at, retired_at";
+
+/**
+ * Per-org color de-collision (bug from #22: 'qa-gate' and 'product' hashed to
+ * the same slot). Each agent gets a PERSISTED palette slot at first sight:
+ * its hash-preferred slot when free, else the least-used slot probing forward
+ * from it — deterministic, survives respawns, and two live teammates can only
+ * share a hue once every slot is in use (>10 agents, palette cycles).
+ * Pre-existing agents (rows from before color_slot) are backfilled in
+ * created_at order so assignments never depend on read order.
+ */
+export function ensureColorSlots(orgId: string): void {
+  // Tie-break equal timestamps by rowid (true insertion order) — created_at
+  // has millisecond grain, and a random-uuid tie-break would make backfill
+  // order (and thus colors) platform-dependent.
+  const missing = db()
+    .prepare("SELECT id, name FROM agent WHERE org_id = ? AND color_slot IS NULL ORDER BY created_at, rowid")
+    .all(orgId) as { id: string; name: string }[];
+  if (!missing.length) return;
+  for (const a of missing) {
+    db().prepare("UPDATE agent SET color_slot = ? WHERE id = ?").run(pickColorSlot(orgId, a.name), a.id);
+  }
+}
+
+function pickColorSlot(orgId: string, name: string): number {
+  const counts = new Array(10).fill(0) as number[];
+  const used = db()
+    .prepare("SELECT color_slot AS s, COUNT(*) AS c FROM agent WHERE org_id = ? AND color_slot IS NOT NULL GROUP BY color_slot")
+    .all(orgId) as { s: number; c: number }[];
+  for (const u of used) {
+    const slot = ((u.s % 10) + 10) % 10;
+    counts[slot] = (counts[slot] ?? 0) + u.c;
+  }
+  const preferred = preferredSlot(name);
+  const min = Math.min(...counts);
+  // First slot at the minimum use count, probing forward from the hash slot —
+  // keeps the hash color whenever it's free (or as free as anything else).
+  for (let i = 0; i < 10; i++) {
+    const slot = (preferred + i) % 10;
+    if ((counts[slot] ?? 0) === min) return slot;
+  }
+  return preferred;
+}
+
+/** The palette color for a durable agent, from its persisted slot (assigning it if missing). */
+export function agentColorOf(agent: Agent): AgentColor {
+  if (agent.color_slot === null) {
+    ensureColorSlots(agent.org_id);
+    const slot = (db().prepare("SELECT color_slot AS s FROM agent WHERE id = ?").get(agent.id) as { s: number | null } | undefined)?.s;
+    return slotColor(slot ?? preferredSlot(agent.name));
+  }
+  return slotColor(agent.color_slot);
+}
 
 export function createAgent(input: {
   orgId: string;
@@ -759,10 +813,10 @@ export function createAgent(input: {
 
   db()
     .prepare(
-      `INSERT INTO agent(id, org_id, role_id, name, objective, state, created_at)
-       VALUES (?,?,?,?,?, 'active', ?)`,
+      `INSERT INTO agent(id, org_id, role_id, name, objective, state, color_slot, created_at)
+       VALUES (?,?,?,?,?, 'active', ?, ?)`,
     )
-    .run(id, input.orgId, input.roleId, name, input.objective ?? null, nowIso());
+    .run(id, input.orgId, input.roleId, name, input.objective ?? null, pickColorSlot(input.orgId, name), nowIso());
 
   recordEvent({
     org_id: input.orgId,
@@ -2262,6 +2316,8 @@ export type BoardAgent = Agent & {
   active_task_title: string | null;
   /** open MCP transports right now — >1 hints at a duplicate identity */
   live_transports: number;
+  /** de-collided palette color (same across panel, tile, terminal) */
+  color: AgentColor;
 };
 
 export interface BoardSnapshot {
@@ -2630,6 +2686,7 @@ function ageHours(iso: string | null): number {
 export function boardSnapshot(orgId: string): BoardSnapshot {
   // Presence is an open MCP transport, falling back to recency of activity so
   // it survives a server restart. Retired agents stay retired.
+  ensureColorSlots(orgId);
   const allAgents = listAgents(orgId);
   const rawAgents = allAgents
     .filter((a) => a.state !== "retired")
@@ -2673,6 +2730,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       active_task_id: activeTask?.id ?? null,
       active_task_title: activeTask?.title ?? null,
       live_transports: liveSessionCount(a.id),
+      color: agentColorOf(a),
     };
   });
 

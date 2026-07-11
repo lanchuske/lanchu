@@ -237,6 +237,9 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
     mcpUrl: advertisedMcpUrl(req),
     worktree,
     branch,
+    // De-collided per-org color so CLI-side spawns tint with the same hue
+    // the panel shows (falling back to the name hash would re-collide).
+    color: store.agentColorOf(store.getAgent(agentId)!),
   });
 }
 
@@ -284,7 +287,10 @@ function revealAgent(agentId: string): {
   const prompt =
     "You are resuming as a Lanchu teammate. Read the lanchu://me resource for your objective, " +
     "role and open tasks, then continue working them, reporting progress with task_update.";
-  const result = spawnTerminal({ title, agentName: agent.name, cwd, token, prompt });
+  const result = spawnTerminal({
+    title, agentName: agent.name, cwd, token, prompt,
+    colorHex: store.agentColorOf(agent).hex,
+  });
   store.setAgentTerminal(agent.id, result.ref ?? null);
   return { action: "opened", method: result.method };
 }

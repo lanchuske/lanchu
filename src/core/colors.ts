@@ -60,14 +60,29 @@ function mix(h: number): number {
   return h >>> 0;
 }
 
-/** Stable color for an agent name (same name → same color, forever). */
+/**
+ * Hash-preferred color for an agent name. This is the FALLBACK path (offline
+ * statusline, names not in the org roster): close names can collide here.
+ * Durable agents get a persisted, per-org de-collided slot at creation
+ * (store.ensureColorSlots) — prefer that wherever the roster is available.
+ */
 export function agentColor(name: string): AgentColor {
-  const slot = mix(fnv1a(name) + SALT) % AGENT_PALETTE.length;
-  return { slot, ...AGENT_PALETTE[slot]! };
+  return slotColor(preferredSlot(name));
+}
+
+/** The slot a name hashes to before any de-collision. */
+export function preferredSlot(name: string): number {
+  return mix(fnv1a(name) + SALT) % AGENT_PALETTE.length;
+}
+
+/** Palette entry for a (possibly persisted) slot; cycles beyond the palette. */
+export function slotColor(slot: number): AgentColor {
+  const i = ((slot % AGENT_PALETTE.length) + AGENT_PALETTE.length) % AGENT_PALETTE.length;
+  return { slot: i, ...AGENT_PALETTE[i]! };
 }
 
 /** Wrap text in an xterm-256 foreground color (reset afterwards). */
-export function ansiColorize(text: string, color: AgentColor): string {
+export function ansiColorize(text: string, color: Pick<AgentColor, "ansi256">): string {
   return `\u001b[38;5;${color.ansi256}m${text}\u001b[0m`;
 }
 
@@ -76,10 +91,11 @@ export function ansiColorize(text: string, color: AgentColor): string {
  * toward white so dark text on the default profile stays readable, with
  * enough hue left to tell windows apart at a glance.
  */
-export function pastelRgb16(color: AgentColor, whiteness = 0.85): [number, number, number] {
-  const r = Number.parseInt(color.hex.slice(1, 3), 16);
-  const g = Number.parseInt(color.hex.slice(3, 5), 16);
-  const b = Number.parseInt(color.hex.slice(5, 7), 16);
+export function pastelRgb16(color: AgentColor | string, whiteness = 0.85): [number, number, number] {
+  const hex = typeof color === "string" ? color : color.hex;
+  const r = Number.parseInt(hex.slice(1, 3), 16);
+  const g = Number.parseInt(hex.slice(3, 5), 16);
+  const b = Number.parseInt(hex.slice(5, 7), 16);
   const blend = (c: number) => Math.round((c * (1 - whiteness) + 255 * whiteness) * 257);
   return [blend(r), blend(g), blend(b)];
 }

@@ -681,8 +681,11 @@ function renderProjectsView(projects, tasks, agents) {
   }).join("") || '<div class="empty">No projects yet. A project is a repo + its local folder, so it\\'s created from inside that folder — in your terminal, run ' + cmdSnippet(initCmd()) + ' then have an agent join (it appears here with its repo and path).</div>';
 }
 
-// Stable per-agent color — MIRRORS src/core/colors.ts (same palette, same
-// FNV-1a hash) so the panel chip matches the terminal border and tile roster.
+// Agent colors come from the board (persisted, per-org de-collided slots —
+// bug fix: 'qa-gate'/'product' used to hash to the same hue). The hash below
+// MIRRORS src/core/colors.ts and is only the fallback for names the board
+// doesn't carry (e.g. retired actors in old Activity rows).
+var COLOR_BY_NAME = {};
 var AGENT_PALETTE = ["#e69f00", "#56b4e9", "#009e73", "#f0e442", "#0072b2", "#d55e00", "#cc79a7", "#9467bd", "#17becf", "#999999"];
 function agentColorHex(name) {
   var h = 0x811c9dc5;
@@ -694,7 +697,8 @@ function agentColorHex(name) {
   return AGENT_PALETTE[h % AGENT_PALETTE.length];
 }
 function colorChip(name) {
-  return '<span class="cdot" style="background:' + agentColorHex(name) + '" title="agent color (same in terminal + tile)"></span>';
+  var hex = COLOR_BY_NAME[name] || agentColorHex(name);
+  return '<span class="cdot" style="background:' + hex + '" title="agent color (same in terminal + tile)"></span>';
 }
 
 function renderAgents(list) {
@@ -1280,6 +1284,8 @@ function refresh() {
       var ow = document.getElementById("orgwarn");
       ow.style.display = known ? "none" : "block";
       if (!known) ow.innerHTML = 'Org “' + esc(org()) + '” doesn\\'t exist — this field only picks existing orgs; the panel never creates one. To set it up, run this inside your repo folder: ' + cmdSnippet(initCmd());
+      COLOR_BY_NAME = {};
+      (r[0].agents || []).forEach(function (a) { if (a.color) COLOR_BY_NAME[a.name] = a.color.hex; });
       renderProjects(r[0].projects);
       renderProjectsView(r[0].projects, r[0].tasks, r[0].agents);
       renderAgents(r[0].agents);
