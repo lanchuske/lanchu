@@ -585,10 +585,19 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "tile_terminals",
     {
       title: "Tile the terminals",
-      description: "Arranges the agent terminals into a mosaic (tmux or macOS Terminal). Use when the user asks to organize/tile the windows.",
+      description: "Arranges the agent terminals into a mosaic (tmux or macOS Terminal) and reports who is where: each agent's worktree, branch and active task. Use when the user asks to organize/tile the windows.",
       inputSchema: {},
     },
-    async () => text(tileTerminals()),
+    async () => {
+      const roster = store.boardSnapshot(ctx.orgId).agents.map((a) => ({
+        name: a.name,
+        state: a.state,
+        worktree: a.worktree,
+        branch: a.branch,
+        active_task: a.active_task_id ? { id: a.active_task_id, title: a.active_task_title } : null,
+      }));
+      return text({ ...tileTerminals(), agents: roster });
+    },
   );
 
   registerTool(

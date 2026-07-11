@@ -245,6 +245,15 @@ test("board enriches agents (role, open count, workspace) and task owner name", 
   assert.equal(ba.role_name, "frontend");
   assert.equal(ba.open_tasks, 1);
   assert.equal(ba.workspace, "feat/x");
+  // A claimed task counts as the agent's active task…
+  assert.equal(ba.active_task_id, t.id);
+  assert.equal(ba.active_task_title, "enrich");
+  // …but a task actually being built wins over one merely claimed.
+  const t2 = store.createTask({ projectId: project.id, orgId: org.id, agentId: agent.id, title: "building now", tags: ["ui"] });
+  store.claimTask({ agentId: agent.id, taskId: t2.id });
+  store.updateTaskStatus({ agentId: agent.id, taskId: t2.id, status: "in_progress" });
+  const ba2 = store.boardSnapshot(org.id).agents.find((a) => a.id === agent.id);
+  assert.equal(ba2.active_task_id, t2.id);
   const bt = b.tasks.find((x) => x.id === t.id);
   assert.equal(bt.owner_name, agent.name);
 });

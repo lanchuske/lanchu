@@ -491,12 +491,14 @@ function renderAgents(list) {
   document.getElementById("agents").innerHTML = list.map(function (a) {
     var branch = a.branch ? ' · <span class="branch">⌥ ' + esc(a.branch) + '</span>' : "";
     var wt = a.worktree ? '<div class="meta"><span class="k">wt</span> <span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(shortPath(a.worktree)) + '</span></div>' : "";
+    var taskTitle = a.active_task_title ? (a.active_task_title.length > 90 ? a.active_task_title.slice(0, 90) + "…" : a.active_task_title) : "";
+    var task = a.active_task_id ? '<div class="meta"><span class="k">task</span> <span title="' + esc(a.active_task_title || "") + '">' + esc(taskTitle) + '</span></div>' : "";
     var reveal = a.state === "active" ? "focus terminal" : "open terminal";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to ' + reveal + '">' +
       '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
       esc(a.name) + '</span><button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></div>' +
       '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") + ' · <b>' + a.open_tasks + '</b> open' + branch +
-      (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") + '</div>' + wt +
+      (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") + '</div>' + wt + task +
       (a.objective ? '<div class="meta"><span class="k">obj</span> ' + esc(a.objective) + '</div>' : "") +
       '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") + '</div>' +
       '<div class="hint">' + (a.state === "active" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +

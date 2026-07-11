@@ -541,6 +541,35 @@ async function cmdTile(): Promise<void> {
   await ensureServer();
   const r = tileTerminals(hasFlag("dry"));
   console.log(`[${r.method}] ${r.note}`);
+  // The "who is where" half of tiling: each agent's worktree, branch and
+  // active task. Best-effort — skipped outside a lanchu project.
+  const found = findConfig();
+  if (!found) return;
+  const res = await api(`/api/board?org=${encodeURIComponent(found.config.org)}`);
+  const b = (await res.json()) as {
+    agents: {
+      name: string; state: string; branch: string | null; worktree: string | null;
+      active_task_id: string | null; active_task_title: string | null;
+    }[];
+  };
+  if (!b.agents.length) return;
+  const home = os.homedir();
+  const tilde = (p: string) => (p.startsWith(home) ? "~" + p.slice(home.length) : p);
+  const pad = Math.max(...b.agents.map((a) => a.name.length));
+  console.log("");
+  for (const a of b.agents) {
+    const dot = a.state === "active" ? "●" : "○";
+    const where = a.worktree
+      ? `${tilde(a.worktree)}  (${a.branch ?? "no branch"})`
+      : a.branch
+        ? `(${a.branch})`
+        : "shared directory";
+    console.log(`  ${dot} ${a.name.padEnd(pad)}  ${where}`);
+    if (a.active_task_id) {
+      const title = a.active_task_title ?? "";
+      console.log(`  ${" ".repeat(pad + 2)}  task ${a.active_task_id}: ${title.length > 70 ? title.slice(0, 70) + "…" : title}`);
+    }
+  }
 }
 
 const LANCHU_SLASH_COMMAND = `---
