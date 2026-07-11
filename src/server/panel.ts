@@ -1330,7 +1330,9 @@ function evRow(e) {
   var subj = "";
   if (e.subject_id) {
     var tTitle = evTaskTitles[e.subject_id], dTitle = evDocTitles[e.subject_id];
-    var label = tTitle || dTitle;
+    // Archived docs leave the /api/docs payload (so evDocTitles forgets them),
+    // but their events carry data.title — fall back to it before a raw uuid.
+    var label = tTitle || dTitle || (e.data && e.data.title ? String(e.data.title) : "");
     subj = label
       ? ' <a class="id-link" data-kind="' + (tTitle ? "task" : "doc") + '" data-ref="' + esc(e.subject_id) + '" title="' + esc(e.subject_id) + '">' +
         esc(label.length > 46 ? label.slice(0, 46) + "…" : label) + '</a>'

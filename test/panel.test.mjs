@@ -80,6 +80,15 @@ test("work board clamps titles, signals lane overflow and reassigns with one con
   assert.ok(!/<button[^>]*>\s*Reassign\s*<\/button>/.test(html), "the standalone Reassign button must stay gone");
 });
 
+test("regression (task-mrgmrg7b8): Activity rows fall back to the event's own data.title before a raw uuid", () => {
+  // Archived docs leave /api/docs, so evDocTitles can't resolve their id —
+  // doc.archived events carry data.title and the row must use it.
+  assert.ok(
+    html.includes("tTitle || dTitle || (e.data && e.data.title"),
+    "evRow's subject label must fall back to e.data.title",
+  );
+});
+
 test("overview is the supervisor's home: working-now strip, inline activity, conflict feed (#26)", () => {
   assert.ok(html.includes("Working now"), "expected the working-now strip");
   assert.ok(html.includes("evRow"), "expected activity rows reused inline on the overview");
