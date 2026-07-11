@@ -2,6 +2,16 @@
 
 Notable changes to [lanchu](https://www.npmjs.com/package/lanchu). Numbers reference pull requests in this repository.
 
+## 0.5.14 — 2026-07-11
+
+Governance hardening after the wake v5.1 drill.
+
+- Presence: PARKED — the fourth state, on every surface (#92).
+- Wake v5.1: typing abolished; asyncRewake long-poll push for live idle TUIs (#93).
+- Governance: retire attribution + agents can never `--force` — the 18:38Z bypass is closed and diagnosable (#94).
+- Governance: a denied `--force` leaves a trace — the attempt files the request and is audited (#96).
+- Governance: every role covers the taxonomy implicitly — detection is everyone's job (#97).
+
 ## 0.5.13 — 2026-07-11
 
 Cycle 3: the org heals itself.
