@@ -33,7 +33,7 @@ test("a queued notice past the grace window nudges the sleeping agent's terminal
   const calls = [];
   const effects = {
     alive: () => true,
-    nudge: (ref, line) => { calls.push({ ref, line }); return true; },
+    nudge: (ref, line) => { calls.push({ ref, line }); return "tmux"; },
   };
   const first = runNudgeSweep(effects);
   assert.deepEqual(first.nudged, ["sleeper"]);
@@ -50,6 +50,7 @@ test("a queued notice past the grace window nudges the sleeping agent's terminal
   const ev = store.listAuditEvents(org.id).find((e) => e.type === "agent.nudged");
   assert.ok(ev, "nudge is on the record");
   assert.equal(ev.data.queued_notices, 1);
+  assert.equal(ev.data.transport, "tmux", "wake v4: the delivery transport is audited");
 });
 
 test("no nudge when notices were delivered, acked, too fresh, or there is no terminal", async () => {
@@ -90,7 +91,7 @@ test("a dead terminal is skipped and stays un-audited (so a later sweep can retr
   assert.equal(store.listAuditEvents(org.id).some((e) => e.type === "agent.nudged"), false);
 
   // Terminal comes back → the same queued notice now nudges.
-  const later = runNudgeSweep({ alive: () => true, nudge: () => true });
+  const later = runNudgeSweep({ alive: () => true, nudge: () => "tmux" });
   assert.deepEqual(later.nudged, ["sleeper"]);
 });
 
@@ -146,7 +147,7 @@ test("v3: a broadcast never triggers a nudge and self-expires after the TTL", as
   const old = new Date(Date.now() - 31 * 60_000).toISOString();
   raw.prepare("UPDATE notice SET created_at = ? WHERE org_id = ? AND is_broadcast = 1").run(old, org.id);
   raw.close();
-  const second = runNudgeSweep({ alive: () => true, nudge: () => true });
+  const second = runNudgeSweep({ alive: () => true, nudge: () => "tmux" });
   assert.ok(second.expired_broadcasts >= 1, "stale broadcast expired");
   assert.equal(store.unackedNoticeCount(sleeperId), 0, "expiry acks the broadcast");
   assert.ok(
@@ -165,12 +166,12 @@ test("v3: the nudge budget caps at 2 per undelivered set, then the agent shows u
   raw.prepare("UPDATE notice SET created_at = ? WHERE to_agent_id = ?")
     .run(new Date(Date.now() - 10 * 60_000).toISOString(), sleeperId);
 
-  const first = runNudgeSweep({ alive: () => true, nudge: () => true });
+  const first = runNudgeSweep({ alive: () => true, nudge: () => "tmux" });
   assert.deepEqual(first.nudged, ["sleeper"], "nudge 1 of the budget");
   raw.prepare("UPDATE event SET created_at = ? WHERE type = 'agent.nudged' AND subject_id = ?")
     .run(new Date(Date.now() - 7 * 60_000).toISOString(), sleeperId);
 
-  const second = runNudgeSweep({ alive: () => true, nudge: () => true });
+  const second = runNudgeSweep({ alive: () => true, nudge: () => "tmux" });
   assert.deepEqual(second.nudged, ["sleeper"], "nudge 2 of the budget");
   raw.prepare("UPDATE event SET created_at = ? WHERE type = 'agent.nudged' AND subject_id = ? AND created_at > ?")
     .run(new Date(Date.now() - 6 * 60_000).toISOString(), sleeperId, new Date(Date.now() - 60_000).toISOString());
