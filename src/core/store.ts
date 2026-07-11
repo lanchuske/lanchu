@@ -1605,13 +1605,14 @@ export function takeUndeliveredNotices(agentId: string): Notice[] {
   const rows = db()
     .prepare(
       `SELECT ${NOTICE_COLS} FROM notice n LEFT JOIN agent a ON a.id = n.from_agent_id
-       WHERE n.to_agent_id = ? AND n.delivered_at IS NULL ORDER BY n.created_at`,
+       WHERE n.to_agent_id = ? AND n.delivered_at IS NULL AND n.acked_at IS NULL
+       ORDER BY n.created_at`,
     )
     .all(agentId) as Record<string, unknown>[];
   if (rows.length) {
     db()
       .prepare(
-        "UPDATE notice SET delivered_at = ? WHERE to_agent_id = ? AND delivered_at IS NULL",
+        "UPDATE notice SET delivered_at = ? WHERE to_agent_id = ? AND delivered_at IS NULL AND acked_at IS NULL",
       )
       .run(nowIso(), agentId);
   }
@@ -1640,11 +1641,16 @@ export function unackedNoticeCount(agentId: string): number {
 export function ackNotices(agentId: string, ids: string[]): number {
   if (!ids.length) return 0;
   const placeholders = ids.map(() => "?").join(",");
+  // Acking implies the notice was seen (e.g. via message_list, which doesn't
+  // stamp delivered_at): mark it delivered too, so the piggyback channel can
+  // never re-deliver an acked notice.
+  const now = nowIso();
   const info = db()
     .prepare(
-      `UPDATE notice SET acked_at = ? WHERE to_agent_id = ? AND acked_at IS NULL AND id IN (${placeholders})`,
+      `UPDATE notice SET acked_at = ?, delivered_at = COALESCE(delivered_at, ?)
+       WHERE to_agent_id = ? AND acked_at IS NULL AND id IN (${placeholders})`,
     )
-    .run(nowIso(), agentId, ...ids);
+    .run(now, now, agentId, ...ids);
   return Number(info.changes);
 }
 

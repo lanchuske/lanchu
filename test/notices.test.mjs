@@ -145,3 +145,24 @@ test("system notices carry no sender and ride the same channel", () => {
   assert.equal(got[0].from_agent_id, null);
   assert.equal(got[0].from_name, null);
 });
+
+test("regression: a notice read via inbox and acked is never re-delivered by piggyback", () => {
+  const { org, alice, bob } = setup("ack-no-redeliver-org");
+
+  store.sendNotice({ orgId: org.id, fromAgentId: alice.id, to: "bob", body: "read me in the inbox" });
+
+  // Bob reads it via message_list (which does NOT stamp delivered_at)…
+  const inbox = store.listNotices(bob.id);
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].delivered_at, null);
+
+  // …acks it, then makes any tool call: the piggyback channel must stay silent.
+  assert.equal(store.ackNotices(bob.id, [inbox[0].id]), 1);
+  assert.equal(store.takeUndeliveredNotices(bob.id).length, 0, "acked notice must not be re-delivered");
+
+  // The ack also stamped delivered_at, so the row is consistent either way.
+  const acked = store.listNotices(bob.id, { includeAcked: true });
+  assert.equal(acked.length, 1);
+  assert.ok(acked[0].acked_at !== null);
+  assert.ok(acked[0].delivered_at !== null);
+});
