@@ -19,6 +19,13 @@ export interface AgentWorktree {
 }
 
 const WORKTREES_SUBDIR = path.join(".lanchu", "worktrees");
+/**
+ * Marker for "this path is inside a Lanchu-managed worktree". Compared on
+ * forward slashes: git prints `/`-separated paths even on Windows, where
+ * path.sep is `\`, so a path.sep-built marker would never match there.
+ */
+const WORKTREES_MARKER = "/.lanchu/worktrees/";
+const toSlashes = (p: string) => p.replace(/\\/g, "/");
 
 function git(cwd: string, args: string[]): { ok: boolean; out: string } {
   try {
@@ -77,8 +84,7 @@ export function ensureAgentWorktree(dir: string, agentName: string): AgentWorktr
   // Nested isolation guard: spawning from inside an agent worktree must anchor
   // new worktrees at the main repo, not grow .lanchu/worktrees/a/.lanchu/… chains.
   let repoRoot = top.out;
-  const marker = path.sep + WORKTREES_SUBDIR + path.sep;
-  const idx = repoRoot.indexOf(marker);
+  const idx = toSlashes(repoRoot).indexOf(WORKTREES_MARKER);
   if (idx >= 0) repoRoot = repoRoot.slice(0, idx);
 
   const slug = slugify(agentName);
@@ -114,12 +120,12 @@ export function removeAgentWorktree(worktreePath: string | null | undefined): {
   reason?: string;
 } {
   if (!worktreePath) return { removed: false, reason: "no worktree recorded" };
-  const marker = path.sep + WORKTREES_SUBDIR + path.sep;
-  if (!worktreePath.includes(marker)) {
+  const idx = toSlashes(worktreePath).indexOf(WORKTREES_MARKER);
+  if (idx < 0) {
     return { removed: false, reason: "not a Lanchu-managed worktree" };
   }
   if (!fs.existsSync(worktreePath)) return { removed: false, reason: "already gone" };
-  const repoRoot = worktreePath.slice(0, worktreePath.indexOf(marker));
+  const repoRoot = worktreePath.slice(0, idx);
   const r = git(repoRoot, ["worktree", "remove", worktreePath]);
   if (!r.ok) return { removed: false, reason: "worktree has uncommitted changes — left in place" };
   return { removed: true };

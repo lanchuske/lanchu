@@ -13,8 +13,9 @@ function git(cwd, ...args) {
 
 /** A fresh throwaway repo with one commit, so worktrees have a base to branch from. */
 function makeRepo(name) {
-  // realpath: on macOS tmpdir is a symlink (/var → /private/var) and git reports resolved paths.
-  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `lanchu-wt-${name}-`)));
+  // realpath, native flavor: on macOS tmpdir is a symlink (/var → /private/var) and on
+  // Windows it can be an 8.3 short name (RUNNER~1); git reports fully resolved paths.
+  const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `lanchu-wt-${name}-`)));
   git(repo, "init", "-q", "-b", "main");
   git(repo, "config", "user.email", "test@lanchu.dev");
   git(repo, "config", "user.name", "lanchu-test");
