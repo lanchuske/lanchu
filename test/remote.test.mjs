@@ -106,7 +106,9 @@ test("LANCHU_PUBLIC_URL overrides the advertised mcp url", async () => {
 // contract that the run.ts fix depends on.
 test("session records the agent's real cwd/branch/worktree from the request", async () => {
   delete process.env.LANCHU_ACCESS_KEY;
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "lanchu-ws-"));
+  // native realpath: Windows tmpdir can be an 8.3 short name (RUNNER~1) and git
+  // reports fully resolved paths; plain realpathSync doesn't expand short names.
+  const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "lanchu-ws-")));
   const git = (...a) => spawnSync("git", ["-C", repo, ...a], { encoding: "utf8" });
   git("init", "-q", "-b", "trunk");
   git("config", "user.email", "t@example.com");
