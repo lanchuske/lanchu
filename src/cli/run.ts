@@ -488,9 +488,13 @@ async function cmdSpawn(): Promise<void> {
   await ensureServer();
   const { org, project } = found.config;
   const role = flag("role");
+  const roleName = role ?? "generalist";
   const objective = positional().slice(1).join(" ") || undefined;
+  // Honor --as; otherwise default to a tidy role-based name (matches spawn_agent)
+  // rather than a long slug of the objective.
   const s = (await post("/session", {
-    org, project, objective, cwd: process.cwd(), role: role ?? "generalist", wildcard: role ? false : true,
+    org, project, objective, cwd: process.cwd(), role: roleName, wildcard: role ? false : true,
+    agentName: flag("as") || roleName,
   })) as { token: string; agentName: string; agentId: string };
   const result = spawnTerminal({ title: `${org}·${s.agentName}`, agentName: s.agentName, cwd: process.cwd(), token: s.token, prompt: SPAWN_PROMPT, dry: hasFlag("dry") });
   // Persist the terminal handle so the panel can re-focus this agent later.
