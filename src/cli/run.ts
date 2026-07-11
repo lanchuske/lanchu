@@ -609,17 +609,25 @@ async function cmdStats(): Promise<void> {
   console.log(`stale:  ${stale}`);
 }
 
+/** Rule-10 discriminator, exported for tests: a --force without a TTY is denied. */
+export function retireForceDenied(force: boolean, isTTY: boolean): boolean {
+  return force && !isTTY;
+}
+
 async function cmdRetire(agentId: string): Promise<void> {
   if (!agentId) return console.log("usage: lanchu retire <agentId> [--force]");
   await orgOf();
   // Rule-10 hardening (task-mrgpswtk14): --force is the HUMAN supervisor's
   // override. Agents run non-interactive shells — a force without a TTY is an
-  // agent trying to bypass the coordinator gate, and it refuses.
-  if (hasFlag("force") && !process.stdin.isTTY) {
-    console.log("retire --force requires an interactive terminal (rule 10: agents never force retirement — request it and let the coordinator resolve).");
-    return;
+  // agent trying to bypass the coordinator gate. The refusal is not silent:
+  // the request still goes to the server UNFORCED with a denial source, so
+  // the gate files the normal retirement request AND the attempt is audited.
+  const forceDenied = retireForceDenied(hasFlag("force"), process.stdin.isTTY === true);
+  if (forceDenied) {
+    console.log("retire --force requires an interactive terminal (rule 10: agents never force retirement). Filing a retirement REQUEST instead — the coordinator resolves it.");
   }
-  const r = (await post("/agent/retire", { agentId, force: hasFlag("force"), source: hasFlag("force") ? "cli-force" : "cli" })) as {
+  const source = forceDenied ? "cli-force-denied" : hasFlag("force") ? "cli-force" : "cli";
+  const r = (await post("/agent/retire", { agentId, force: hasFlag("force") && !forceDenied, source })) as {
     retired: boolean;
     requested?: boolean;
     coordinator?: string;

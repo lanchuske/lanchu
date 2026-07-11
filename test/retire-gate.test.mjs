@@ -138,3 +138,23 @@ test("a coordinator-approved retirement names the coordinator as the actor", () 
   assert.equal(ev.actor_name, "lead", "the resolver, not the subject, is the actor");
   assert.equal(ev.data.via, "coordinator-resolve");
 });
+
+// ── QA bounce round (qa-pr94): the denial must leave a trace, and the guard has a test ──
+
+test("the TTY discriminator: --force without a terminal is denied; with one it passes", async () => {
+  const { retireForceDenied } = await import("../dist/cli/run.js");
+  assert.equal(retireForceDenied(true, false), true, "agent shell (no TTY) → denied");
+  assert.equal(retireForceDenied(true, true), false, "human terminal → allowed");
+  assert.equal(retireForceDenied(false, false), false, "no force → nothing to deny");
+});
+
+test("a denied --force still files the request AND the attempt is audited (server contract)", () => {
+  const { org, coordinator, worker } = setup("retire-k");
+  store.coordinatorAcquire({ orgId: org.id, agentId: coordinator.id });
+  // What the CLI sends after denying: force stripped, denial source attached.
+  const r = store.retireAgent(worker.id, { source: "cli-force-denied" });
+  assert.equal(r.retired, false);
+  assert.equal(r.requested, true, "the gate files the normal request");
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "retire.requested" && e.subject_id === worker.id);
+  assert.equal(ev.data.source, "cli-force-denied", "the bypass ATTEMPT is on the record, not just refused");
+});
