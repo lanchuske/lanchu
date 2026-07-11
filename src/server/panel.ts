@@ -724,12 +724,13 @@ document.addEventListener("click", function (e) {
   var cp = e.target.closest ? e.target.closest("button[data-copy]") : null;
   if (cp) { copyCmd(cp); return; }
   // Activity id-links jump to the thing: task → Work board, doc → Docs
-  // expanded, event → Activity, agent memories → Memory pre-filtered.
+  // expanded, event/activity (definition history) → Activity, agent
+  // memories → Memory pre-filtered.
   var il = e.target.closest ? e.target.closest("a.id-link") : null;
   if (il) {
     var ilk = il.getAttribute("data-kind");
     if (ilk === "doc") { openDocs[il.getAttribute("data-ref")] = true; renderDocs(lastDocs); location.hash = "docs"; }
-    else if (ilk === "event") location.hash = "activity";
+    else if (ilk === "event" || ilk === "activity") location.hash = "activity";
     else if (ilk === "memories") showAgentMemories(il.getAttribute("data-ref"));
     else location.hash = "work";
     return;
@@ -987,6 +988,9 @@ function taskCard(t, opts) {
   // 2+ rejections = the definition itself is the problem; flag it prominently.
   if (t.rejection_count >= 2) badge += ' <span class="pill stale-pill" title="rejected ' + t.rejection_count + ' times — fix the definition before anyone retries">needs definition</span>';
   if (t.archived_at) badge += ' <span class="pill p-blocked" title="' + esc(t.archived_reason || "archived") + '">' + (t.superseded_by_task_id ? "superseded" : "archived") + '</span>';
+  // Definition history: the audit log keeps every task.redefined with the old
+  // title — the pill jumps to Activity where the trail lives.
+  if (t.redefined_count) badge += ' <a class="pill p-claimed id-link" data-kind="activity" data-ref="' + t.id + '" title="the definition was refined in place ' + t.redefined_count + ' time' + (t.redefined_count > 1 ? 's' : '') + ' — the Activity log keeps each previous title">definition ×' + t.redefined_count + '</a>';
   var owned = !!t.owner_agent_id;
   var pr = t.pr_url ? ' · <a class="pr-link" href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">PR ↗</a>' : "";
   var rej = t.last_rejection

@@ -971,6 +971,16 @@ export function createServer(): http.Server {
           return sendJson(res, 400, { error: (err as Error).message });
         }
       }
+      // Definition refinement (supervisor): rewrite a definition/backlog title in place.
+      if (url.pathname === "/task/redefine" && req.method === "POST") {
+        const body = (await readJson(req)) as { taskId: string; title: string };
+        if (!body?.taskId || !body?.title) return sendJson(res, 400, { error: "taskId and title required" });
+        try {
+          return sendJson(res, 200, store.redefineTask({ taskId: body.taskId, title: body.title, override: true }));
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
       // Docs hygiene (supervisor): soft-hide an outdated record; audited, never deleted.
       if (url.pathname === "/doc/archive" && req.method === "POST") {
         const body = (await readJson(req)) as { id: string; reason?: string };

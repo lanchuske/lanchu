@@ -419,10 +419,14 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       title: "Update task",
       description:
         "Changes status (in_progress|blocked|done). 'done' unblocks dependents. Optionally attach the PR/MR URL you opened — the server then routes the SDLC stage (PR → review; done → qa verification). " +
-        "Completing a verification task ('QA: verify …'): start the note with FAIL to bounce the work back to build; anything else passes and closes the original.",
+        "Completing a verification task ('QA: verify …'): start the note with FAIL to bounce the work back to build; anything else passes and closes the original. " +
+        "Pass title (with or without a status) to refine the DEFINITION in place — only in the definition/backlog stages, only for the owner/creator/coordinator; audited with the old title preserved.",
       inputSchema: {
         taskId: z.string(),
-        status: z.enum(["in_progress", "blocked", "done"]),
+        status: z.enum(["in_progress", "blocked", "done"]).optional()
+          .describe("Omit when only redefining the title."),
+        title: z.string().optional()
+          .describe("New definition title (definition/backlog stages only; audited task.redefined)."),
         stage: z.enum(["backlog", "definition", "build", "review", "qa", "done"]).optional()
           .describe("SDLC lane for the board: definition | build | review | qa | done."),
         prUrl: z.string().optional().describe("URL of the pull/merge request for this task."),
@@ -430,8 +434,11 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         tokens: z.number().optional(),
       },
     },
-    async ({ taskId, status, stage, prUrl, note, tokens }) => {
+    async ({ taskId, status, title, stage, prUrl, note, tokens }) => {
       try {
+        if (!status && !title) return fail(new Error("pass a status, a title, or both"));
+        if (title) store.redefineTask({ taskId, title, byAgentId: ctx.agentId });
+        if (!status) return text({ task: store.getTask(taskId) });
         const task = store.updateTaskStatus({ agentId: ctx.agentId, taskId, status, stage, prUrl, note, tokens });
         // SDLC gate feedback: a 'done' that landed in the qa lane is awaiting
         // (or held for, in strict mode) independent verification.

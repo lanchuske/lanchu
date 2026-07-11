@@ -206,7 +206,8 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   `task.created` · `task.claimed` · `task.released` · `task.started` ·
   `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` ·
   `task.stage_changed` · `task.bounced` · `task.archived` · `task.superseded` ·
-  `task.handoff` · `doc.created` · `doc.updated` · `doc.archived` · `scope.violation`.
+  `task.redefined` · `task.handoff` · `doc.created` · `doc.updated` · `doc.archived` ·
+  `scope.violation`.
 - **Wake v5 — park & refire:** agents report their Claude Code session lifecycle via
   hooks installed at spawn (`SessionStart` → `POST /hooks/agent/session-start` captures
   `claude_session_id` and clears `parked_at`; `SessionEnd` → `/session-end` parks the
@@ -217,6 +218,13 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   absent from `claude agents --json` (an unreadable answer fails CLOSED — resuming a
   live session from a second process interleaves both into one transcript). Audited
   `agent.nudged` with `transport: "runner"`.
+- **Definition refinement:** `task_update` with a `title` (status optional) rewrites a
+  task's definition IN PLACE — only in the definition/backlog stages, only by the
+  owner, the creator, the coordinator lease holder, or the supervisor
+  (`POST /task/redefine`). Audited `task.redefined` with `{from_title, to_title}` —
+  the audit log IS the definition history (panel pill "definition ×n" links to it).
+  The owner is noticed when someone else refines their brief. Build+ stages reject:
+  once work started, bounce (task_reject) or supersede instead.
 - **Retirement gate:** while an org's coordinator lease is live, a non-forced
   `retireAgent` of anyone but the lease holder files `retire.requested` (notice to the
   coordinator; visible in the panel's Needs-attention) instead of executing. The
