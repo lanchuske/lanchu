@@ -102,6 +102,8 @@ export const COMMANDS: CommandSpec[] = [
   { name: "task", desc: "supervisor overrides on tasks", sub: [
     { name: "release", desc: "release a task back to the pool", arg: "tasks" },
     { name: "reassign", desc: "reassign a task to an agent", arg: "tasks" },
+    { name: "archive", desc: "archive a task (terminal, soft — audit stays)", arg: "tasks" },
+    { name: "supersede", desc: "archive a task with a link to its successor", arg: "tasks" },
   ] },
   { name: "panel", desc: "open the web panel in the browser" },
   { name: "open", desc: "alias of panel" },

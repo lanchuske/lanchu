@@ -405,6 +405,7 @@ const TEMPLATE = `<!doctype html>
           <button data-btab="open" class="on">Open <span class="c" id="bt-open">0</span></button>
           <button data-btab="shipped">Shipped <span class="c" id="bt-shipped">0</span></button>
           <button data-btab="all">All <span class="c" id="bt-all">0</span></button>
+          <button data-btab="archived">Archived <span class="c" id="bt-archived">0</span></button>
         </div>
         <div class="board-wrap" id="board-wrap">
           <div class="board" id="tasks"></div>
@@ -834,15 +835,17 @@ function taskCard(t, opts) {
   var badge = t.stale ? '<span class="pill stale-pill">stale</span>' : (t.reserved ? '<span class="pill p-available">reserved</span>' : "");
   // 2+ rejections = the definition itself is the problem; flag it prominently.
   if (t.rejection_count >= 2) badge += ' <span class="pill stale-pill" title="rejected ' + t.rejection_count + ' times — fix the definition before anyone retries">needs definition</span>';
+  if (t.archived_at) badge += ' <span class="pill p-blocked" title="' + esc(t.archived_reason || "archived") + '">' + (t.superseded_by_task_id ? "superseded" : "archived") + '</span>';
   var owned = !!t.owner_agent_id;
   var pr = t.pr_url ? ' · <a class="pr-link" href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">PR ↗</a>' : "";
   var rej = t.last_rejection
     ? '<div class="meta"><span class="k">rejected</span> ' + esc(t.last_rejection.reason.replace(/_/g, " ")) + ' by ' + esc(t.last_rejection.by) +
       (t.rejection_count > 1 ? ' (×' + t.rejection_count + ')' : '') + ' — ' + esc(t.last_rejection.note) + '</div>'
     : "";
-  // Supervisor overrides only make sense on open work — a done task has nothing
-  // to release or reassign. Reassign is ONE control: picking an agent acts.
-  var actions = owned && t.status !== "done"
+  if (t.archived_at) rej += '<div class="meta"><span class="k">archived</span> ' + esc((t.archived_reason || "") + (t.superseded_by_task_id ? " → " + t.superseded_by_task_id : "")) + '</div>';
+  // Supervisor overrides only make sense on open work — a done or archived task
+  // has nothing to release or reassign. Reassign is ONE control: picking an agent acts.
+  var actions = owned && t.status !== "done" && !t.archived_at
     ? '<div class="actions"><button data-act="release" data-id="' + t.id + '">Release</button>' +
       '<select data-reassign="' + t.id + '" title="Picking an agent reassigns this task immediately">' + opts + '</select></div>'
     : "";
@@ -876,7 +879,7 @@ function doneStamp(t) { return t.done_at || t.updated_at || t.created_at || ""; 
 // of hiding at the end of the horizontal scroll (task-mrg88fqr1).
 var boardTab = "open";
 var showAllDone = false;
-var lastBoardList = [], lastBoardOpts = "";
+var lastBoardList = [], lastBoardOpts = "", lastArchivedList = [];
 function renderBoard() {
   var list = lastBoardList, opts = lastBoardOpts;
   var byStage = {}; STAGES.forEach(function (s) { byStage[s[0]] = []; });
@@ -885,6 +888,17 @@ function renderBoard() {
   document.getElementById("bt-open").textContent = list.length - byStage.done.length;
   document.getElementById("bt-shipped").textContent = byStage.done.length;
   document.getElementById("bt-all").textContent = list.length;
+  document.getElementById("bt-archived").textContent = lastArchivedList.length;
+  // The archive is its own flat lane: terminal soft-deletes, never in the SDLC flow.
+  if (boardTab === "archived") {
+    document.getElementById("tasks").innerHTML =
+      '<div class="lane"><div class="lane-h">Archived <span class="c">' + lastArchivedList.length + '</span></div>' +
+      (lastArchivedList.map(function (t) { return taskCard(t, opts); }).join("") ||
+        '<div class="empty">Nothing archived — probes and superseded tasks land here, findable but off the board.</div>') +
+      '</div>';
+    updateBoardMore();
+    return;
+  }
   var stages = boardTab === "open" ? STAGES.filter(function (s) { return s[0] !== "done"; })
     : boardTab === "shipped" ? STAGES.filter(function (s) { return s[0] === "done"; })
     : STAGES;
@@ -907,10 +921,10 @@ function renderBoard() {
   updateBoardMore();
 }
 
-function renderTasks(list, agents) {
+function renderTasks(list, agents, archived) {
   document.getElementById("c-tasks").textContent = list.length;
   var opts = '<option value="">Reassign to…</option>' + agents.map(function (a) { return '<option value="' + a.id + '">' + esc(a.name) + '</option>'; }).join("");
-  lastBoardList = list; lastBoardOpts = opts;
+  lastBoardList = list; lastBoardOpts = opts; lastArchivedList = archived || [];
   renderBoard();
 
   var bugs = list.filter(function (t) { return (t.tags || []).indexOf("bug") >= 0; });
@@ -1476,7 +1490,7 @@ function refresh() {
       renderProjects(r[0].projects);
       renderProjectsView(r[0].projects, r[0].tasks, r[0].agents);
       renderAgents(r[0].agents);
-      renderTasks(r[0].tasks, r[0].agents);
+      renderTasks(r[0].tasks, r[0].agents, r[0].archived);
       // id → title lookups for the activity rows, before anything renders them.
       evTaskTitles = {}; (r[0].tasks || []).forEach(function (t) { evTaskTitles[t.id] = t.title; });
       evDocTitles = {}; (r[2] || []).forEach(function (d) { evDocTitles[d.id] = d.title; });

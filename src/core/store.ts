@@ -1147,11 +1147,14 @@ function loadTask(row: Record<string, unknown>): Task {
       : null,
     bounce_count: Number(row.bounce_count ?? 0),
     last_bounce: row.last_bounce ? (JSON.parse(row.last_bounce as string) as Task["last_bounce"]) : null,
+    archived_at: (row.archived_at as string) ?? null,
+    archived_reason: (row.archived_reason as string) ?? null,
+    superseded_by_task_id: (row.superseded_by_task_id as string) ?? null,
   };
 }
 
 const TASK_COLS =
-  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce";
+  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce, archived_at, archived_reason, superseded_by_task_id";
 
 export function getTask(taskId: string): Task | null {
   const row = db().prepare(`SELECT ${TASK_COLS} FROM task WHERE id = ?`).get(taskId) as
@@ -1160,16 +1163,31 @@ export function getTask(taskId: string): Task | null {
   return row ? loadTask(row) : null;
 }
 
+/** Live tasks only — the archive is invisible everywhere unless asked for. */
 export function listTasks(projectId: string, status?: TaskStatus): Task[] {
   const rows = (
     status
       ? db()
-          .prepare(`SELECT ${TASK_COLS} FROM task WHERE project_id = ? AND status = ? ORDER BY created_at`)
+          .prepare(
+            `SELECT ${TASK_COLS} FROM task WHERE project_id = ? AND status = ? AND archived_at IS NULL ORDER BY created_at`,
+          )
           .all(projectId, status)
       : db()
-          .prepare(`SELECT ${TASK_COLS} FROM task WHERE project_id = ? ORDER BY created_at`)
+          .prepare(
+            `SELECT ${TASK_COLS} FROM task WHERE project_id = ? AND archived_at IS NULL ORDER BY created_at`,
+          )
           .all(projectId)
   ) as Record<string, unknown>[];
+  return rows.map(loadTask);
+}
+
+/** The archive: findable on demand, newest first, never on the board. */
+export function listArchivedTasks(projectId: string): Task[] {
+  const rows = db()
+    .prepare(
+      `SELECT ${TASK_COLS} FROM task WHERE project_id = ? AND archived_at IS NOT NULL ORDER BY archived_at DESC`,
+    )
+    .all(projectId) as Record<string, unknown>[];
   return rows.map(loadTask);
 }
 
@@ -1262,6 +1280,7 @@ export function claimTask(input: {
   const task = getTask(input.taskId);
   const agent = getAgent(input.agentId);
   if (!task || !agent) throw new Error("unknown task or agent");
+  assertNotArchived(task);
   const role = getRole(agent.role_id);
 
   if (role && !roleCoversTags(role, task.tags)) {
@@ -1306,7 +1325,7 @@ export function claimTask(input: {
       `UPDATE task
        SET status = 'claimed', owner_agent_id = ?, workspace = COALESCE(?, workspace),
            claimed_at = ?, updated_at = ?
-       WHERE id = ? AND status = 'available'`,
+       WHERE id = ? AND status = 'available' AND archived_at IS NULL`,
     )
     .run(input.agentId, input.workspace ?? null, now, now, input.taskId);
 
@@ -1339,6 +1358,7 @@ export function updateTaskStatus(input: {
   const task = getTask(input.taskId);
   const agent = getAgent(input.agentId);
   if (!task || !agent) throw new Error("unknown task or agent");
+  assertNotArchived(task);
 
   const now = nowIso();
   const mode = sdlcMode();
@@ -1432,13 +1452,14 @@ function unblockDependents(projectId: string): void {
   db()
     .prepare(
       `UPDATE task SET status = 'available', updated_at = ?
-       WHERE project_id = ? AND status = 'blocked'
+       WHERE project_id = ? AND status = 'blocked' AND archived_at IS NULL
          -- only auto-unblock tasks that were blocked BY a dependency, not ones
          -- an agent blocked manually (which have no dependency rows)
          AND EXISTS (SELECT 1 FROM task_dep d WHERE d.task_id = task.id)
          AND NOT EXISTS (
            SELECT 1 FROM task_dep d JOIN task p ON p.id = d.depends_on_task_id
-           WHERE d.task_id = task.id AND p.status <> 'done'
+           -- an archived dependency will never complete; it no longer blocks
+           WHERE d.task_id = task.id AND p.status <> 'done' AND p.archived_at IS NULL
          )`,
     )
     .run(nowIso(), projectId);
@@ -1477,7 +1498,7 @@ export function openVerificationTaskFor(taskId: string): Task | null {
   const row = db()
     .prepare(
       `SELECT ${TASK_COLS} FROM task
-       WHERE parent_task_id = ? AND title LIKE 'QA: verify%' AND status <> 'done'
+       WHERE parent_task_id = ? AND title LIKE 'QA: verify%' AND status <> 'done' AND archived_at IS NULL
        ORDER BY created_at DESC LIMIT 1`,
     )
     .get(taskId) as Record<string, unknown> | undefined;
@@ -1578,6 +1599,7 @@ export function advanceStage(input: {
 }): Task {
   const task = getTask(input.taskId);
   if (!task) throw new Error("unknown task");
+  assertNotArchived(task);
   const orgId = orgIdForProject(task.project_id);
   const from = task.stage ?? "backlog";
   if (from === input.to) return task;
@@ -1808,6 +1830,8 @@ function resolveBatchVerification(batch: Task, qaAgentId: string, note?: string)
     closeOpenVerificationChild(orig, batch.id, orgId);
     flipVerifiedOriginal(orig, batch.id, orgId, qaAgentId, note);
   }
+  // qa duty: the batch is closed — its probe fixtures go to the archive.
+  archiveQaProbesOf(qaAgentId, "batch closed");
 }
 
 /** Project tasks awaiting verification (review/qa lane) that a coverage set names. */
@@ -1833,7 +1857,7 @@ function coveredOriginals(batch: Task, covered: VerificationRefs, excluded: Veri
  */
 export function reconcileSdlcStages(): { toDone: string[]; toQa: string[] } {
   const rows = db()
-    .prepare(`SELECT ${TASK_COLS} FROM task WHERE status = 'done' AND stage = 'review'`)
+    .prepare(`SELECT ${TASK_COLS} FROM task WHERE status = 'done' AND stage = 'review' AND archived_at IS NULL`)
     .all() as Record<string, unknown>[];
   const toDone: string[] = [];
   const toQa: string[] = [];
@@ -1957,6 +1981,7 @@ export function releaseTask(input: {
 }): Task {
   const task = getTask(input.taskId);
   if (!task) throw new Error("unknown task");
+  assertNotArchived(task);
   const orgId = orgIdForProject(task.project_id);
   db()
     .prepare(
@@ -1992,6 +2017,7 @@ export function rejectTask(input: {
   const task = getTask(input.taskId);
   const me = getAgent(input.agentId);
   if (!task || !me) throw new Error("unknown task or agent");
+  assertNotArchived(task);
   if (task.owner_agent_id && task.owner_agent_id !== input.agentId) {
     throw new ScopeError(`${task.id} is owned by another agent; only its owner can reject it.`);
   }
@@ -2056,6 +2082,7 @@ export function reassignTask(input: {
   const task = getTask(input.taskId);
   const to = getAgent(input.toAgentId);
   if (!task || !to) throw new Error("unknown task or agent");
+  assertNotArchived(task);
   const role = getRole(to.role_id);
   if (role && !roleCoversTags(role, task.tags)) {
     throw new ScopeError(
@@ -2076,6 +2103,202 @@ export function reassignTask(input: {
   });
   if (input.byAgentId) touchActivity(input.byAgentId, `handed off ${task.id} to ${to.name}`);
   return getTask(input.taskId)!;
+}
+
+// ───────────────────────── archive (terminal, soft) ─────────────────────────
+// Task lifecycle hygiene (task-mrgkojz09): probes and superseded tombstones
+// used to sit in the Definition lane forever — there was no way to remove a
+// task. Archive is the answer: a terminal soft-delete that hides the task from
+// the board and every open-work query while the row (and its audit trail)
+// stays intact. Never hard-delete.
+
+/** Guard: an archived task is terminal — no claim, update, release, reject, reassign or stage move. */
+function assertNotArchived(task: Task): void {
+  if (task.archived_at) {
+    throw new Error(
+      `${task.id} is archived (${task.archived_reason ?? "no reason recorded"})` +
+        (task.superseded_by_task_id ? ` — superseded by ${task.superseded_by_task_id}` : "") +
+        `; archived tasks are terminal.`,
+    );
+  }
+}
+
+/** QA probe fixtures: throwaway tasks created to exercise the machine, marked by their own titles. */
+export function isProbeTask(t: Task): boolean {
+  return /\bprobe\b/i.test(t.title) || /safe to delete/i.test(t.title);
+}
+
+/** Who may archive: the coordinator lease holder, the product role, or the creator of a probe. */
+function mayArchive(agent: Agent, task: Task): boolean {
+  const lease = getCoordinator(agent.org_id);
+  if (lease && !lease.expired && lease.agent_id === agent.id) return true;
+  if (getRole(agent.role_id)?.name === "product") return true;
+  return task.created_by_agent_id === agent.id && isProbeTask(task);
+}
+
+export function archiveTask(input: {
+  taskId: string;
+  byAgentId?: string | null;
+  reason?: string;
+  supersededByTaskId?: string | null;
+  /** Supervisor path (HTTP/CLI) — skips the agent permission check. */
+  override?: boolean;
+}): Task {
+  const task = getTask(input.taskId);
+  if (!task) throw new Error("unknown task");
+  if (task.archived_at) return task; // idempotent
+  const orgId = orgIdForProject(task.project_id);
+  const actor = input.byAgentId ? getAgent(input.byAgentId) : null;
+  if (!input.override) {
+    if (!actor) throw new Error("unknown agent");
+    if (!mayArchive(actor, task)) {
+      recordEvent({
+        org_id: orgId,
+        project_id: task.project_id,
+        type: "scope.violation",
+        actor_agent_id: actor.id,
+        subject_kind: "task",
+        subject_id: task.id,
+        outcome: "rejected",
+        data: { action: "archive" },
+      });
+      throw new ScopeError(
+        `Archiving ${task.id} needs the coordinator lease, the product role, or being the creator of a probe. ` +
+          `If it's obsolete because newer work replaces it, use task_supersede instead.`,
+      );
+    }
+  }
+
+  const now = nowIso();
+  db()
+    .prepare(
+      `UPDATE task SET archived_at = ?, archived_reason = ?, superseded_by_task_id = ?, updated_at = ? WHERE id = ?`,
+    )
+    .run(now, input.reason ?? null, input.supersededByTaskId ?? null, now, task.id);
+  recordEvent({
+    org_id: orgId,
+    project_id: task.project_id,
+    type: "task.archived",
+    actor_agent_id: input.byAgentId ?? null,
+    subject_kind: "task",
+    subject_id: task.id,
+    data: {
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.supersededByTaskId ? { superseded_by: input.supersededByTaskId } : {}),
+      prior_status: task.status,
+      prior_stage: task.stage,
+      ...(input.override ? { override: true } : {}),
+    },
+  });
+  if (actor) touchActivity(actor.id, `archived ${task.id}`);
+  // An archived dependency will never complete — free anything it was blocking.
+  unblockDependents(task.project_id);
+  // The owner learns their task went terminal under them (coordinator/supervisor move).
+  if (task.owner_agent_id && task.owner_agent_id !== input.byAgentId) {
+    const owner = getAgent(task.owner_agent_id);
+    if (owner && owner.state !== "retired") {
+      insertNotice({
+        orgId,
+        kind: "system",
+        fromAgentId: input.byAgentId ?? null,
+        toAgentId: owner.id,
+        body:
+          `${task.id} was archived${input.reason ? ` (${input.reason})` : ""}` +
+          (input.supersededByTaskId ? ` — superseded by ${input.supersededByTaskId}` : "") +
+          `. Stop any work on it.`,
+        ref: task.id,
+      });
+    }
+  }
+  return getTask(task.id)!;
+}
+
+/**
+ * First-class supersede: the release+block pattern product used, done right.
+ * Archives the old task with a link to its successor and retargets any
+ * dependents so nothing waits on a tombstone.
+ */
+export function supersedeTask(input: {
+  oldTaskId: string;
+  newTaskId: string;
+  byAgentId?: string | null;
+  note?: string;
+  override?: boolean;
+}): Task {
+  const oldTask = getTask(input.oldTaskId);
+  const newTask = getTask(input.newTaskId);
+  if (!oldTask || !newTask) throw new Error("unknown task");
+  if (oldTask.id === newTask.id) throw new Error("a task cannot supersede itself");
+  if (newTask.archived_at) throw new Error(`${newTask.id} is archived; it cannot supersede anything.`);
+  if (oldTask.archived_at) return oldTask; // idempotent
+  const orgId = orgIdForProject(oldTask.project_id);
+  const actor = input.byAgentId ? getAgent(input.byAgentId) : null;
+  if (!input.override) {
+    if (!actor) throw new Error("unknown agent");
+    // The creator superseding their own definition is legitimate hygiene.
+    if (!mayArchive(actor, oldTask) && oldTask.created_by_agent_id !== actor.id) {
+      recordEvent({
+        org_id: orgId,
+        project_id: oldTask.project_id,
+        type: "scope.violation",
+        actor_agent_id: actor.id,
+        subject_kind: "task",
+        subject_id: oldTask.id,
+        outcome: "rejected",
+        data: { action: "supersede", by: newTask.id },
+      });
+      throw new ScopeError(
+        `Superseding ${oldTask.id} needs the coordinator lease, the product role, or being its creator.`,
+      );
+    }
+  }
+
+  // Retarget dependents old → new (dropping any dep the successor had on the
+  // old task first, so the update can't make it depend on itself).
+  db()
+    .prepare("DELETE FROM task_dep WHERE task_id = ? AND depends_on_task_id = ?")
+    .run(newTask.id, oldTask.id);
+  db()
+    .prepare("UPDATE OR IGNORE task_dep SET depends_on_task_id = ? WHERE depends_on_task_id = ?")
+    .run(newTask.id, oldTask.id);
+  db().prepare("DELETE FROM task_dep WHERE depends_on_task_id = ?").run(oldTask.id);
+
+  const archived = archiveTask({
+    taskId: oldTask.id,
+    byAgentId: input.byAgentId,
+    reason: input.note ?? `superseded by ${newTask.id}`,
+    supersededByTaskId: newTask.id,
+    override: true, // permission already checked above
+  });
+  recordEvent({
+    org_id: orgId,
+    project_id: oldTask.project_id,
+    type: "task.superseded",
+    actor_agent_id: input.byAgentId ?? null,
+    subject_kind: "task",
+    subject_id: oldTask.id,
+    data: { by: newTask.id, by_title: newTask.title.slice(0, 120), ...(input.note ? { note: input.note } : {}) },
+  });
+  return archived;
+}
+
+/**
+ * qa duty (task-mrgkojz09): probe fixtures auto-archive when their creator
+ * retires or the batch they exercised closes — QA never leaves litter behind.
+ */
+function archiveQaProbesOf(agentId: string, trigger: "creator retired" | "batch closed"): string[] {
+  const agent = getAgent(agentId);
+  if (!agent || getRole(agent.role_id)?.name !== "qa") return [];
+  const rows = db()
+    .prepare(`SELECT ${TASK_COLS} FROM task WHERE created_by_agent_id = ? AND archived_at IS NULL`)
+    .all(agentId) as Record<string, unknown>[];
+  const archived: string[] = [];
+  for (const t of rows.map(loadTask)) {
+    if (!isProbeTask(t)) continue;
+    archiveTask({ taskId: t.id, byAgentId: null, reason: `qa probe auto-archived (${trigger})`, override: true });
+    archived.push(t.id);
+  }
+  return archived;
 }
 
 /** Find a durable agent by display name within an org (for directed handoffs). */
@@ -2280,7 +2503,8 @@ export function openTasksForAgent(agentId: string): Task[] {
   const rows = db()
     .prepare(
       `SELECT ${TASK_COLS} FROM task
-       WHERE owner_agent_id = ? AND status IN ('claimed','in_progress','blocked')`,
+       WHERE owner_agent_id = ? AND status IN ('claimed','in_progress','blocked')
+         AND archived_at IS NULL`,
     )
     .all(agentId) as Record<string, unknown>[];
   return rows.map(loadTask);
@@ -2297,6 +2521,8 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
   // Nothing is addressed to the dead: pending notices would otherwise keep
   // triggering the wake sweep forever.
   const voided = voidNoticesFor(agentId);
+  // qa duty: a retiring QA agent's probe fixtures go to the archive with it.
+  const probes = archiveQaProbesOf(agentId, "creator retired");
   if (agent) {
     recordEvent({
       org_id: agent.org_id,
@@ -2304,7 +2530,10 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
       actor_agent_id: agentId,
       subject_kind: "agent",
       subject_id: agentId,
-      data: voided ? { voided_notices: voided } : undefined,
+      data:
+        voided || probes.length
+          ? { ...(voided ? { voided_notices: voided } : {}), ...(probes.length ? { archived_probes: probes } : {}) }
+          : undefined,
     });
     // A retiring coordinator releases the lease — the org must never be
     // "coordinated" by a ghost.
@@ -2838,6 +3067,8 @@ export type BoardAgent = Agent & {
 export interface BoardSnapshot {
   agents: BoardAgent[];
   tasks: BoardTask[];
+  /** Terminal soft-deleted tasks — findable here, invisible in `tasks`/lanes. */
+  archived: BoardTask[];
   projects: ProjectRow[];
   landing: LandingSlot[];
   release: ReleasePressure[];
@@ -3467,6 +3698,17 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       return { ...t, owner_state: ownerState, reserved, stale, owner_name };
     });
 
+  // The archive rides along separately: terminal, no governance signals.
+  const archived: BoardTask[] = projects
+    .flatMap((p) => listArchivedTasks(p.id))
+    .map((t) => ({
+      ...t,
+      owner_state: t.owner_agent_id ? (stateById.get(t.owner_agent_id) ?? "retired") : null,
+      reserved: false,
+      stale: false,
+      owner_name: t.owner_agent_id ? (nameById.get(t.owner_agent_id) ?? null) : null,
+    }));
+
   const nudges = lastNudges(orgId);
   const unreachable = unreachableAgents(orgId);
   const agents: BoardAgent[] = rawAgents.map((a) => {
@@ -3494,6 +3736,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
   return {
     agents,
     tasks,
+    archived,
     projects: listProjects(orgId),
     landing: projects.flatMap((p) => landingQueue(p.id)),
     release: projects.flatMap((p) => releasePressureOf(p.id) ?? []),

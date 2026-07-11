@@ -134,7 +134,10 @@ CREATE TABLE task (
   rejection_count     INTEGER NOT NULL DEFAULT 0, -- times agents bounced it back to definition; 2+ = "needs definition"
   last_rejection      TEXT,                    -- JSON {reason, note, by, at} of the latest task_reject
   bounce_count        INTEGER NOT NULL DEFAULT 0, -- backward SDLC moves; 2+ = "needs attention"
-  last_bounce         TEXT                     -- JSON {from, to, reason, at} of the latest bounce
+  last_bounce         TEXT,                    -- JSON {from, to, reason, at} of the latest bounce
+  archived_at         TEXT,                    -- terminal soft-delete; NULL = live (see §3)
+  archived_reason     TEXT,
+  superseded_by_task_id TEXT REFERENCES task(id) -- set when newer work replaces this task
 );
 
 CREATE TABLE task_tag (
@@ -199,8 +202,17 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
 - **event.type:** `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
   `agent.retired` · `task.created` · `task.claimed` · `task.released` · `task.started` ·
   `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` ·
-  `task.stage_changed` · `task.bounced` · `task.handoff` ·
-  `doc.created` · `doc.updated` · `scope.violation`.
+  `task.stage_changed` · `task.bounced` · `task.archived` · `task.superseded` ·
+  `task.handoff` · `doc.created` · `doc.updated` · `scope.violation`.
+- **Archive (terminal, soft):** `archived_at IS NOT NULL` removes the task from the
+  board and every open-work query (claims, overlap checks, dependency unblocking,
+  landing queue) while the row and its audit trail stay — never hard-delete.
+  Permission: the coordinator lease holder, the product role, the creator of a probe
+  fixture (title contains "probe"/"safe to delete"), or the supervisor override
+  (HTTP `/task/archive`, `lanchu task archive`). `task_supersede(old, new)` archives
+  `old` with `superseded_by_task_id = new` and retargets `task_dep` rows so nothing
+  waits on a tombstone. QA probe fixtures auto-archive when their creator retires or
+  the batch verification they exercised closes.
 - **task_reject reason:** `out_of_scope` · `underspecified` · `missing_docs` ·
   `blocked_dependency` · `other`. A rejection releases the task, bounces its stage to
   `definition`, increments `rejection_count`, stores `last_rejection`, and notifies the

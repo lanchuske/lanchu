@@ -261,10 +261,12 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "task_list",
     {
       title: "List tasks",
-      description: "Lists project tasks. filter: mine | available | all.",
-      inputSchema: { filter: z.enum(["mine", "available", "all"]).default("all") },
+      description:
+        "Lists project tasks. filter: mine | available | all (live tasks; the archive is excluded) | archived.",
+      inputSchema: { filter: z.enum(["mine", "available", "all", "archived"]).default("all") },
     },
     async ({ filter }) => {
+      if (filter === "archived") return text(store.listArchivedTasks(ctx.projectId));
       let tasks = store.listTasks(ctx.projectId);
       if (filter === "mine") tasks = tasks.filter((t) => t.owner_agent_id === ctx.agentId);
       else if (filter === "available") tasks = tasks.filter((t) => t.status === "available");
@@ -534,6 +536,50 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         return text(
           store.reassignTask({ taskId, toAgentId: target.id, byAgentId: ctx.agentId, note }),
         );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "task_archive",
+    {
+      title: "Archive task",
+      description:
+        "Terminal soft-delete: hides the task from the board and every open-work query; the row and its audit trail stay (never hard-deleted). " +
+        "Allowed for the coordinator lease holder, the product role, or the creator of a probe fixture. " +
+        "If newer work replaces the task, use task_supersede instead so the link is kept.",
+      inputSchema: {
+        taskId: z.string(),
+        reason: z.string().optional().describe("Why it's leaving the board — shows in the archive."),
+      },
+    },
+    async ({ taskId, reason }) => {
+      try {
+        return text(store.archiveTask({ taskId, byAgentId: ctx.agentId, reason }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "task_supersede",
+    {
+      title: "Supersede task",
+      description:
+        "Archives the old task with a link to the new one that replaces it, and retargets any dependents to the successor. " +
+        "Allowed for the old task's creator, the coordinator lease holder, or the product role.",
+      inputSchema: {
+        oldTaskId: z.string(),
+        newTaskId: z.string(),
+        note: z.string().optional().describe("Why the new task replaces the old one."),
+      },
+    },
+    async ({ oldTaskId, newTaskId, note }) => {
+      try {
+        return text(store.supersedeTask({ oldTaskId, newTaskId, byAgentId: ctx.agentId, note }));
       } catch (err) {
         return fail(err);
       }
@@ -882,7 +928,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "3. Claim a task with task_claim before working it — this prevents duplication. Use task_check_scope if unsure it's yours.",
           "4. Report progress with task_update (in_progress, then done). 'done' unblocks dependent tasks. The server owns the SDLC pipeline: attach your PR and it routes the task to review; say done and it spins up the QA verification — you never manage stages yourself.",
           "5. Keep shared knowledge current with doc_read / doc_update.",
-          "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release. If a claimed task turns out underspecified, missing docs, or outside your competence, don't guess — task_reject with the reason: it bounces to the definition lane and notifies whoever can fix the spec.",
+          "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release. If a claimed task turns out underspecified, missing docs, or outside your competence, don't guess — task_reject with the reason: it bounces to the definition lane and notifies whoever can fix the spec. A task made obsolete by newer work is superseded (task_supersede), not abandoned; probe/junk tasks are archived (task_archive) — both are terminal, audited, and keep the row.",
           "7. Talk to teammates with message_send (audit-logged; the supervisor sees everything). Notices arrive inside your tool results — act on them and message_ack.",
           "8. If a task_claim result carries a `conflict` block, another live agent is on that surface: STOP and ask your user — stop, hand off, or park it. An `overlap` field on task_create is informational only: creating a task is fine, just route it with the overlap in mind.",
           "9. Verifying a feature ALWAYS ends with a regression test left behind (a test-only PR is fine) and a test_report of the run — the registry, not your context, is the org's memory of what is covered. Mark coverage you identified but didn't write yet as status 'planned' so the gap stays visible.",
@@ -900,7 +946,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           example:
             'task_create({ title: "Bug: panel Docs search misses body matches — repro: type X in the filter; expected: doc Y listed; actual: empty", tags: ["bug", "panel"] })',
         },
-        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_reject, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, test_report, session_leave.",
+        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_reject, task_handoff, task_archive, task_supersede, doc_list, doc_read, doc_update, message_send, message_list, message_ack, test_report, session_leave.",
       }),
   );
 
