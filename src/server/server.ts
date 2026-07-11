@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { accessKey, host, port, publicUrl, reconnectGraceMs, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
+import { greenzoneStatus, requestGreenzone } from "../core/greenzone.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
@@ -675,6 +676,36 @@ export function createServer(): http.Server {
         sendJson(res, 200, { ok: true });
         restartServer();
         return;
+      }
+      // Greenzone: coordinated maintenance window (design: task-mrg0aeba6).
+      // Agents are noticed to reach a safe point and confirm via greenzone_ack;
+      // the op runs when all live agents confirm or the timeout expires.
+      if (url.pathname === "/greenzone/request" && req.method === "POST") {
+        const body = (await readJson(req)) as { org: string; action?: string; timeoutSeconds?: number };
+        if (!body?.org) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(body.org);
+        if (!org) return sendJson(res, 404, { error: `no org named '${body.org}'` });
+        const action = body.action ?? "restart";
+        if (action !== "restart") {
+          return sendJson(res, 400, { error: `unsupported greenzone action '${action}' (v1 supports: restart)` });
+        }
+        try {
+          const status = requestGreenzone({
+            orgId: org.id,
+            action,
+            timeoutMs: body.timeoutSeconds ? Math.max(1, body.timeoutSeconds) * 1000 : undefined,
+            execute: () => restartServer(),
+          });
+          return sendJson(res, 200, status);
+        } catch (err) {
+          return sendJson(res, 409, { error: (err as Error).message });
+        }
+      }
+      if (url.pathname === "/api/greenzone" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        return sendJson(res, 200, org ? greenzoneStatus(org.id) : { state: "idle", required: [] });
       }
       // Kill every open session token in an org (after an exposure): agents
       // re-register through the launcher and get fresh tokens.

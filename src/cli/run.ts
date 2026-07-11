@@ -602,6 +602,43 @@ async function cmdStop(): Promise<void> {
   console.log("server stopped");
 }
 
+/**
+ * Restart the server. --greenzone opens a coordinated maintenance window first:
+ * live agents are noticed to reach a safe point and confirm (greenzone_ack);
+ * the restart runs when everyone confirms or at the timeout (default 120s).
+ */
+async function cmdRestart(): Promise<void> {
+  if (!(await serverUp())) return console.log("server not running — start it with: lanchu serve");
+  if (!hasFlag("greenzone")) {
+    await post("/server/restart", {});
+    console.log("server restarting…");
+    return;
+  }
+  const org = await orgOf();
+  const timeoutSeconds = flag("timeout") ? Number.parseInt(flag("timeout")!, 10) : undefined;
+  const status = (await post("/greenzone/request", { org, action: "restart", timeoutSeconds })) as {
+    error?: string; state: string; required: { name: string; confirmed_at: string | null }[]; confirmed?: number;
+  };
+  if (status.error) return console.log(status.error);
+  if (status.state === "done") return console.log("no live agents — restarting now");
+  console.log(`greenzone requested: waiting for ${status.required.length} live agent(s) to confirm (greenzone_ack)…`);
+  // Poll until it executes; the poll erroring means the restart happened.
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const gz = (await (await api(`/api/greenzone?org=${encodeURIComponent(org)}`)).json()) as typeof status;
+      if (gz.state === "done") {
+        console.log(`greenzone complete (${gz.confirmed}/${gz.required.length} confirmed) — restarting`);
+        return;
+      }
+      console.log(`  ${gz.confirmed}/${gz.required.length} confirmed`);
+    } catch {
+      console.log("server restarting…");
+      return;
+    }
+  }
+}
+
 const SPAWN_PROMPT =
   "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work.";
 
@@ -1024,6 +1061,7 @@ const HELP_SECTIONS: HelpSection[] = [
     rows: [
       ["lanchu serve", "run the local server (foreground)"],
       ["lanchu stop", "stop the background server"],
+      ["lanchu restart [--greenzone] [--timeout <s>]", "restart the server; --greenzone coordinates it (agents confirm a safe point first)"],
       ["lanchu panel", "open the panel in your browser"],
       ["lanchu statusline", "status line for Claude Code (setup shown when run)"],
       ["lanchu doctor", "environment checks"],
@@ -1140,6 +1178,8 @@ async function main(): Promise<void> {
       return cmdInstallCommands();
     case "stop":
       return cmdStop();
+    case "restart":
+      return cmdRestart();
     case "spawn":
       return cmdSpawn();
     case "tile":
