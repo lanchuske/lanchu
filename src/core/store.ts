@@ -3088,6 +3088,20 @@ export function unackedNoticeCount(agentId: string): number {
   return r.c;
 }
 
+/**
+ * Notices the agent has not HEARD yet (undelivered and unacked) — what the
+ * Stop hook checks before letting a turn end. Delivered-but-unacked ones were
+ * already heard via piggyback, so they must not trap the agent at the prompt.
+ */
+export function undeliveredNoticeCount(agentId: string): number {
+  const r = db()
+    .prepare(
+      "SELECT COUNT(*) AS c FROM notice WHERE to_agent_id = ? AND delivered_at IS NULL AND acked_at IS NULL",
+    )
+    .get(agentId) as { c: number };
+  return r.c;
+}
+
 /** Acknowledge notices you received. Only your own; returns how many changed. */
 export function ackNotices(agentId: string, ids: string[]): number {
   if (!ids.length) return 0;
@@ -3253,13 +3267,13 @@ export function nudgeStillNeeded(agentId: string): boolean {
 }
 
 /** Audit one nudge (also what the cooldown checks). */
-export function recordNudge(orgId: string, agentId: string, queued: number): void {
+export function recordNudge(orgId: string, agentId: string, queued: number, transport?: string): void {
   recordEvent({
     org_id: orgId,
     type: "agent.nudged",
     subject_kind: "agent",
     subject_id: agentId,
-    data: { queued_notices: queued },
+    data: { queued_notices: queued, ...(transport ? { transport } : {}) },
   });
 }
 

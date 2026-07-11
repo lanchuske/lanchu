@@ -80,6 +80,9 @@ function accessGate(req: http.IncomingMessage, url: URL): { ok: true } | { ok: f
   if (p === "/health") return { ok: true };
   if (p === "/" && req.method === "GET") return { ok: true };
   if (p === "/mcp" || p === "/hooks/intake") return { ok: true };
+  // Stop-hook probe: authenticated by the agent's own session token, not the
+  // panel key (same class as /mcp).
+  if (p === "/api/agent/pending") return { ok: true };
   const presented =
     bearer(req.headers.authorization ?? undefined) ??
     (typeof req.headers["x-lanchu-key"] === "string" ? (req.headers["x-lanchu-key"] as string) : null) ??
@@ -756,6 +759,18 @@ export function createServer(): http.Server {
           return sendJson(res, 409, { error: (err as Error).message });
         }
       }
+      // Stop-hook probe (wake v4): how many notices has this agent not heard
+      // yet? Bare number, agent-token auth — the hook is a jq-free curl. On a
+      // bad token the hook's -f fails and it fails OPEN (never trap an agent).
+      if (url.pathname === "/api/agent/pending" && req.method === "GET") {
+        const ctx = getContext(bearer(req.headers.authorization ?? undefined) ?? "");
+        if (!ctx) {
+          res.writeHead(401, { "content-type": "text/plain" });
+          return res.end("unauthorized");
+        }
+        res.writeHead(200, { "content-type": "text/plain" });
+        return res.end(String(store.undeliveredNoticeCount(ctx.agentId)));
+      }
       if (url.pathname === "/api/greenzone" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
@@ -977,8 +992,11 @@ export function runNudgeSweep(
         // The alive probe can take seconds — cancel if delivery or a tool
         // call happened since this candidate was computed.
         if (!store.nudgeStillNeeded(c.agent_id)) continue;
-        if (!nudge(c.terminal_ref, NUDGE_LINE)) continue;
-        store.recordNudge(org.id, c.agent_id, c.queued_notices);
+        const transport = nudge(c.terminal_ref, NUDGE_LINE);
+        if (!transport) continue;
+        // Wake v4: the transport is audited — a degraded keystroke wake means
+        // "install tmux / check the Stop hook" and must be visible, not silent.
+        store.recordNudge(org.id, c.agent_id, c.queued_notices, transport);
         nudged.push(c.agent_name);
       } catch {
         /* a broken terminal must not stop the sweep */

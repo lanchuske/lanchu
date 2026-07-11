@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { mcpUrl, stateDir } from "../config.js";
+import { baseUrl, mcpUrl, stateDir } from "../config.js";
 import { agentColor, contrastRatio16, tintedBg16, type Rgb16 } from "../core/colors.js";
 
 /**
@@ -73,6 +73,58 @@ export function bootstrapCommand(cwd: string, token: string, prompt: string, age
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 
 /**
+ * Wake v4, the 90% case: a Claude Code Stop hook in the agent's worktree.
+ * When the agent's turn ends, the hook asks the server for its pending-notice
+ * count and BLOCKS the stop (exit 2) while work is queued — the agent never
+ * reaches the idle prompt with unread notices, and nothing ever has to type
+ * into its terminal. Standard Claude Code mechanism, zero injection.
+ *
+ * The session token lives in a user-only file in the state dir (mode 600,
+ * same exposure class as the MCP config file, but persistent: the hook
+ * outlives the launching shell). Stable path per agent name, so a respawn
+ * refreshes the token in place and the hook entry stays idempotent.
+ */
+export function installStopHook(cwd: string, token: string, agentName?: string): boolean {
+  try {
+    const dir = path.join(stateDir(), "run");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const slug = (agentName ?? "agent").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const tokenFile = path.join(dir, `${slug}.stop-hook-token`);
+    fs.writeFileSync(tokenFile, token, { mode: 0o600 });
+
+    // POSIX, jq-free: the endpoint answers a bare number. Fail-open on any
+    // curl error (server down, token rotated) — a hook must never trap an
+    // agent at the end of its turn.
+    const command =
+      `N=$(curl -sf --max-time 3 -H "Authorization: Bearer $(cat ${sq(tokenFile)} 2>/dev/null)" ` +
+      `${sq(`${baseUrl()}/api/agent/pending`)} 2>/dev/null); ` +
+      `case "$N" in ''|0|*[!0-9]*) exit 0;; ` +
+      `*) echo "You have $N Lanchu notices — run message_list now and follow the instructions." >&2; exit 2;; esac`;
+
+    const file = path.join(cwd, ".claude", "settings.local.json");
+    let settings: Record<string, unknown> = {};
+    if (fs.existsSync(file)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+      } catch {
+        return false; // unparseable user file — never clobber it
+      }
+    }
+    const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
+    const stop = (hooks.Stop ??= []) as unknown[];
+    // Idempotency: the token-file path identifies this agent's hook entry.
+    if (!JSON.stringify(stop).includes(tokenFile)) {
+      stop.push({ hooks: [{ type: "command", command }] });
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+    return true;
+  } catch {
+    return false; // best-effort: spawn must not fail over a hook
+  }
+}
+
+/**
  * Handle to an agent's live terminal, captured at spawn: a tmux pane id or a
  * Terminal.app window id. We focus by this id rather than by title, because
  * Claude Code rewrites the window title with its own status once it starts.
@@ -105,6 +157,10 @@ export function spawnTerminal(input: {
   dry?: boolean;
 }): SpawnResult {
   const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model);
+  // Wake v4: the Stop hook keeps the agent from idling with queued notices —
+  // preferred over any terminal wake. Installed for every launch method (the
+  // print path's user runs the command in this same cwd).
+  if (!input.dry) installStopHook(input.cwd, input.token, input.agentName);
 
   if (hasTmux()) {
     const plan: SpawnResult = {
@@ -309,22 +365,28 @@ end try`]);
   return true;
 }
 
+/** How a wake reached the terminal — audited so degraded paths are visible. */
+export type WakeTransport = "tmux" | "terminal.app-keystroke-degraded";
+
 /**
  * Wake an idle agent by putting ONE fixed line into its own terminal.
- * Per product's notes: clipboard-paste, not per-key keystrokes (garble-proof),
- * and window-id targeting (never the frontmost window). The previous clipboard
- * contents are saved and restored — this runs on the supervisor's machine.
- * Best-effort: returns false when the terminal can't be nudged.
+ * Wake v4 transport policy: tmux paste-buffer/send-keys is the standard path
+ * (scriptable, no focus stealing, works with the screen locked). The
+ * Terminal.app System-Events keystroke is a LAST-RESORT fallback only — it
+ * steals focus and types into the user's machine — and callers must audit it
+ * as degraded (the returned transport says which path ran). The Stop hook
+ * installed at spawn should make most wakes unnecessary in the first place.
+ * Best-effort: returns null when the terminal can't be nudged.
  */
-export function nudgeTerminal(ref: TerminalRef, line: string): boolean {
+export function nudgeTerminal(ref: TerminalRef, line: string): WakeTransport | null {
   if (ref.method === "tmux") {
-    if (!terminalAlive(ref)) return false;
+    if (!terminalAlive(ref)) return null;
     // Paste via a named buffer (safe for any chars), then submit.
     const buf = spawnSync("tmux", ["set-buffer", "-b", "lanchu-nudge", "--", line]);
-    if (buf.status !== 0) return false;
+    if (buf.status !== 0) return null;
     const paste = spawnSync("tmux", ["paste-buffer", "-b", "lanchu-nudge", "-t", ref.id, "-d"]);
-    if (paste.status !== 0) return false;
-    return spawnSync("tmux", ["send-keys", "-t", ref.id, "Enter"]).status === 0;
+    if (paste.status !== 0) return null;
+    return spawnSync("tmux", ["send-keys", "-t", ref.id, "Enter"]).status === 0 ? "tmux" : null;
   }
 
   // Terminal.app: raise the window BY ID, paste from the clipboard, restore it.
@@ -354,7 +416,7 @@ export function nudgeTerminal(ref: TerminalRef, line: string): boolean {
     "return true",
   ].join("\n");
   const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8", timeout: 8000 });
-  return (out.stdout ?? "").trim() === "true";
+  return (out.stdout ?? "").trim() === "true" ? "terminal.app-keystroke-degraded" : null;
 }
 
 export interface TileResult {
