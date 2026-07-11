@@ -36,6 +36,7 @@
 <link rel="describedby" href=".well-known/mcp/server-card.json" />
 <link rel="service-doc" href="https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md" />
 <link rel="alternate" type="text/markdown" href="llms.txt" />
+<link rel="alternate" type="application/atom+xml" title="Lanchu releases" href="https://github.com/lanchuske/lanchu/releases.atom" />
 
 <!-- Structured data for search engines and AI answer engines -->
 <script type="application/ld+json">
@@ -275,9 +276,13 @@
   <figure class="shot-wrap">
     <div class="shot">
       <div class="win">
-        <img src="lanchu-demo.gif" width="1200" height="760"
-             alt="Running 'npx lanchu' starts a short guided wizard that sets up the org, agent and role and connects Claude; then the panel walks through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task."
-             loading="lazy" decoding="async" />
+        <picture>
+          <!-- Reduced-motion users get a still first frame instead of the looping GIF. -->
+          <source media="(prefers-reduced-motion: reduce)" srcset="lanchu-demo-poster.png" />
+          <img src="lanchu-demo.gif" width="1200" height="760"
+               alt="Running 'npx lanchu' starts a short guided wizard that sets up the org, agent and role and connects Claude; then the panel walks through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task."
+               loading="lazy" decoding="async" />
+        </picture>
       </div>
     </div>
     <figcaption class="shotcap">One command runs the wizard; the panel gives you a live, local view of every agent, role and task. Runs at <code>127.0.0.1:4319</code>; nothing leaves your machine.</figcaption>
@@ -522,6 +527,7 @@
     <a href="https://www.npmjs.com/package/lanchu">npm</a>
     <a href="https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md">What it is</a>
     <a href="#build">Contribute</a>
+    <a href="https://github.com/lanchuske/lanchu/releases">Changelog</a>
     <a href="https://github.com/lanchuske/lanchu/discussions">Discussions</a>
   </footer>
 </main>
