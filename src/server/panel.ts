@@ -306,6 +306,12 @@ export function panelHtml(): string {
                   border: 1px solid var(--line); font-size: 11.5px; }
   .gz .gz-agent.ok { border-color: var(--ok, #2e7d32); color: var(--ok, #2e7d32); }
 
+  /* ── coordinator lease ── */
+  .coord-pill { background: var(--accent-bg, #eef4ff); color: var(--accent); border: 1px solid var(--accent); }
+  .coordline { font-size: 11.5px; color: var(--muted); padding: 2px 0; }
+  .coordline b { color: var(--text); }
+  .coordline.expired { color: var(--bad); }
+
   /* ── toast ── */
   #toast { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
   .toast { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
@@ -329,6 +335,7 @@ export function panelHtml(): string {
       <div class="orgfield"><span>org</span><input id="org" value="lanchu" list="orglist" autocomplete="off" placeholder="pick an existing org…" title="Picks an existing org — orgs are created from the terminal (run lanchu in your repo)" /><datalist id="orglist"></datalist></div>
       <span id="live" class="live"><span class="pip"></span><span id="live-t">connecting</span></span>
       <div id="orgwarn" class="orgwarn" style="display:none"></div>
+      <div id="coordline" class="coordline" style="display:none"></div>
       <ul class="nav" id="nav">
         <li data-view="overview">Overview</li>
         <li data-view="projects">Projects <span class="badge" id="c-projects">0</span></li>
@@ -752,9 +759,12 @@ function renderAgents(list) {
     var nudged = a.nudged_at && (Date.now() - new Date(a.nudged_at).getTime() < 600000)
       ? '<span class="pill p-in_progress" title="auto-woken at ' + esc(a.nudged_at.slice(11, 19)) + ' — queued notices were waiting">nudged</span> '
       : "";
+    var coord = COORD && COORD.agent_id === a.id
+      ? ' <span class="pill coord-pill" title="holds the coordinator lease' + (COORD.expired ? " (EXPIRED)" : "") + '">coordinator' + (COORD.expired ? " ⌛" : "") + '</span>'
+      : "";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to ' + reveal + '">' +
       '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
-      colorChip(a.name) + esc(a.name) + '</span><span>' + nudged + '<button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></span></div>' +
+      colorChip(a.name) + esc(a.name) + coord + '</span><span>' + nudged + '<button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></span></div>' +
       '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") + ' · <b>' + a.open_tasks + '</b> open' + branch +
       (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") +
       ' · <span class="k">mcp</span> ' + (a.live_transports > 0 ? a.live_transports + " live" : "not connected") +
@@ -766,6 +776,20 @@ function renderAgents(list) {
       '<div class="hint">' + (a.state === "active" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
       '<div class="meta" style="color:var(--bad)" id="retire-msg-' + a.id + '"></div></div>';
   }).join("") || '<div class="empty">No agents yet. Agents are started from the terminal — inside a project folder, run ' + cmdSnippet('lanchu spawn "your objective"') + ' and supervise it from here.</div>';
+}
+
+// Coordinator lease (at most one coordinating agent per org): chip on the
+// holder's card + a sidebar line with lease age; expired leases are flagged.
+var COORD = null;
+function renderCoordinator() {
+  var el = document.getElementById("coordline");
+  if (!COORD) { el.style.display = "none"; return; }
+  var age = Math.max(0, Math.round((Date.now() - new Date(COORD.acquired_at).getTime()) / 60000));
+  el.className = "coordline" + (COORD.expired ? " expired" : "");
+  el.innerHTML = COORD.expired
+    ? "no coordinator — <b>" + esc(COORD.agent_name) + "</b>'s lease expired"
+    : "coordinator: <b>" + esc(COORD.agent_name) + "</b> · " + (age < 1 ? "just now" : age + "m");
+  el.style.display = "block";
 }
 
 var openTasks = {}; // task cards expanded by the user, kept across refreshes (like openDocs)
@@ -1347,11 +1371,13 @@ function refresh() {
   updateProcBadge();
   fetchGraph(); // no-op unless the Org life view is open
   if (busy) return; busy = true;
-  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs"), get("/api/memory"), get("/api/tests")])
+  Promise.all([get("/api/board"), get("/api/roles"), get("/api/docs"), get("/api/audit"), get("/api/orgs"), get("/api/memory"), get("/api/tests"), get("/api/coordinator")])
     .then(function (r) {
       var sig = JSON.stringify(r);
       if (sig === lastSig) return; // nothing changed — keep the DOM (and any open select) intact
       lastSig = sig;
+      COORD = r[7] && r[7].agent_id ? r[7] : null;
+      renderCoordinator();
       renderOrgOptions(r[4]);
       // An unknown org renders exactly like a real-but-empty one, so say so —
       // and point at the terminal, where orgs are actually created.

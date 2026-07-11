@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -206,6 +206,14 @@ CREATE TABLE IF NOT EXISTS memory (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (org_id, scope, subject_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS coordinator (
+  org_id      TEXT PRIMARY KEY REFERENCES org(id) ON DELETE CASCADE,
+  agent_id    TEXT NOT NULL REFERENCES agent(id),
+  acquired_at TEXT NOT NULL,
+  renewed_at  TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS test_suite (

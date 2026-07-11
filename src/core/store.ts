@@ -2008,8 +2008,218 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
       subject_kind: "agent",
       subject_id: agentId,
     });
+    // A retiring coordinator releases the lease — the org must never be
+    // "coordinated" by a ghost.
+    releaseCoordinatorIfHeld(agent.org_id, agentId, "holder retired");
   }
   return { retired: true, blockedBy: [] };
+}
+
+// ───────────────────────── coordinator lease ─────────────────────────
+// Coordination is a leasable RESOURCE, not a role: at most one coordinating
+// agent per org at a time, enforced by infrastructure, while peers still
+// self-organize freely (1:1 messages, own-task handoffs, pairing). Evidence:
+// the 2026-07-11 PR #9 incident was two agents coordinating divergent
+// directions on one surface — a lease makes that structurally impossible.
+
+export const COORDINATOR_DEFAULT_TTL_SECONDS = 3600;
+
+export interface CoordinatorLease {
+  agent_id: string;
+  agent_name: string;
+  acquired_at: string;
+  renewed_at: string;
+  ttl_seconds: number;
+  /** TTL ran out (or the holder retired) — the lease is up for grabs. */
+  expired: boolean;
+  /** Holder has an open MCP transport right now. */
+  live: boolean;
+}
+
+/** The org's current lease, with derived expiry/liveness — null when free. */
+export function getCoordinator(orgId: string): CoordinatorLease | null {
+  const row = db()
+    .prepare(
+      `SELECT c.agent_id, c.acquired_at, c.renewed_at, c.ttl_seconds, a.name, a.state
+       FROM coordinator c JOIN agent a ON a.id = c.agent_id WHERE c.org_id = ?`,
+    )
+    .get(orgId) as
+    | { agent_id: string; acquired_at: string; renewed_at: string; ttl_seconds: number; name: string; state: string }
+    | undefined;
+  if (!row) return null;
+  const expiresAt = new Date(row.renewed_at).getTime() + row.ttl_seconds * 1000;
+  return {
+    agent_id: row.agent_id,
+    agent_name: row.name,
+    acquired_at: row.acquired_at,
+    renewed_at: row.renewed_at,
+    ttl_seconds: row.ttl_seconds,
+    expired: row.state === "retired" || Date.now() >= expiresAt,
+    live: isAgentLive(row.agent_id),
+  };
+}
+
+/**
+ * Take (or renew) the lease. Grants when the lease is free, expired, or its
+ * holder has no live transport; fails while a LIVE holder's lease is current.
+ */
+export function coordinatorAcquire(input: {
+  orgId: string;
+  agentId: string;
+  ttlSeconds?: number;
+}): CoordinatorLease {
+  const me = getAgent(input.agentId);
+  if (!me || me.state === "retired") throw new Error("unknown or retired agent");
+  const ttl = input.ttlSeconds ?? COORDINATOR_DEFAULT_TTL_SECONDS;
+  const current = getCoordinator(input.orgId);
+  if (current && current.agent_id !== input.agentId && !current.expired && current.live) {
+    throw new ScopeError(
+      `the coordinator lease is held by '${current.agent_name}' (live) — route through them, or wait for the lease to expire.`,
+    );
+  }
+  if (current && current.agent_id !== input.agentId && current.expired) {
+    // Lazy expiry audit: the takeover is when the expiry becomes observable.
+    recordEvent({
+      org_id: input.orgId,
+      type: "coordinator.expired",
+      subject_kind: "org",
+      subject_id: input.orgId,
+      data: { holder: current.agent_name, renewed_at: current.renewed_at, ttl_seconds: current.ttl_seconds },
+    });
+  }
+  const now = nowIso();
+  const renewal = current?.agent_id === input.agentId;
+  db()
+    .prepare(
+      `INSERT INTO coordinator(org_id, agent_id, acquired_at, renewed_at, ttl_seconds) VALUES (?,?,?,?,?)
+       ON CONFLICT(org_id) DO UPDATE SET agent_id = excluded.agent_id,
+         acquired_at = CASE WHEN coordinator.agent_id = excluded.agent_id THEN coordinator.acquired_at ELSE excluded.acquired_at END,
+         renewed_at = excluded.renewed_at, ttl_seconds = excluded.ttl_seconds`,
+    )
+    .run(input.orgId, input.agentId, now, now, ttl);
+  recordEvent({
+    org_id: input.orgId,
+    type: "coordinator.acquired",
+    actor_agent_id: input.agentId,
+    subject_kind: "org",
+    subject_id: input.orgId,
+    data: {
+      ttl_seconds: ttl,
+      ...(renewal ? { renewal: true } : {}),
+      ...(current && current.agent_id !== input.agentId ? { took_over_from: current.agent_name } : {}),
+    },
+  });
+  touchActivity(input.agentId, "acquired the coordinator lease");
+  return getCoordinator(input.orgId)!;
+}
+
+/** Give the lease back. Holder-only unless override (supervisor). */
+export function coordinatorRelease(input: {
+  orgId: string;
+  agentId?: string | null;
+  override?: boolean;
+  reason?: string;
+}): void {
+  const current = getCoordinator(input.orgId);
+  if (!current) throw new Error("no coordinator lease is held");
+  if (!input.override && current.agent_id !== input.agentId) {
+    throw new ScopeError(`the lease is held by '${current.agent_name}' — only the holder (or the supervisor) can release it.`);
+  }
+  db().prepare("DELETE FROM coordinator WHERE org_id = ?").run(input.orgId);
+  recordEvent({
+    org_id: input.orgId,
+    type: "coordinator.released",
+    actor_agent_id: input.agentId ?? null,
+    subject_kind: "org",
+    subject_id: input.orgId,
+    data: { holder: current.agent_name, ...(input.reason ? { reason: input.reason } : {}), ...(input.override ? { override: true } : {}) },
+  });
+}
+
+/** Planned transition: the holder hands the lease to a named teammate. */
+export function coordinatorHandoff(input: {
+  orgId: string;
+  fromAgentId: string;
+  toAgentName: string;
+}): CoordinatorLease {
+  const current = getCoordinator(input.orgId);
+  if (!current || current.agent_id !== input.fromAgentId) {
+    throw new ScopeError("only the current coordinator can hand off the lease.");
+  }
+  const to = findAgentByName(input.orgId, input.toAgentName);
+  if (!to || to.state === "retired") throw new Error(`no active agent named '${input.toAgentName}'`);
+  const now = nowIso();
+  db()
+    .prepare("UPDATE coordinator SET agent_id = ?, acquired_at = ?, renewed_at = ? WHERE org_id = ?")
+    .run(to.id, now, now, input.orgId);
+  recordEvent({
+    org_id: input.orgId,
+    type: "coordinator.handoff",
+    actor_agent_id: input.fromAgentId,
+    subject_kind: "org",
+    subject_id: input.orgId,
+    data: { from: current.agent_name, to: to.name },
+  });
+  insertNotice({
+    orgId: input.orgId,
+    kind: "system",
+    fromAgentId: input.fromAgentId,
+    toAgentId: to.id,
+    body: `You now hold the coordinator lease (handed off by ${current.agent_name}). Coordination-class actions (broadcasts, spawning) are yours until you release or hand it off.`,
+  });
+  return getCoordinator(input.orgId)!;
+}
+
+/** Supervisor override: grant to a named agent, or clear. Audited either way. */
+export function coordinatorOverride(orgId: string, agentName: string | null): CoordinatorLease | null {
+  if (agentName === null) {
+    if (getCoordinator(orgId)) coordinatorRelease({ orgId, override: true, reason: "supervisor override" });
+    return null;
+  }
+  const to = findAgentByName(orgId, agentName);
+  if (!to || to.state === "retired") throw new Error(`no active agent named '${agentName}'`);
+  const now = nowIso();
+  db()
+    .prepare(
+      `INSERT INTO coordinator(org_id, agent_id, acquired_at, renewed_at, ttl_seconds) VALUES (?,?,?,?,?)
+       ON CONFLICT(org_id) DO UPDATE SET agent_id = excluded.agent_id, acquired_at = excluded.acquired_at,
+         renewed_at = excluded.renewed_at, ttl_seconds = excluded.ttl_seconds`,
+    )
+    .run(orgId, to.id, now, now, COORDINATOR_DEFAULT_TTL_SECONDS);
+  recordEvent({
+    org_id: orgId,
+    type: "coordinator.acquired",
+    subject_kind: "org",
+    subject_id: orgId,
+    data: { via: "supervisor", holder: to.name, ttl_seconds: COORDINATOR_DEFAULT_TTL_SECONDS },
+  });
+  return getCoordinator(orgId);
+}
+
+function releaseCoordinatorIfHeld(orgId: string, agentId: string, reason: string): void {
+  const current = getCoordinator(orgId);
+  if (current?.agent_id === agentId) {
+    coordinatorRelease({ orgId, agentId, reason });
+  }
+}
+
+/**
+ * Gate for coordination-class actions (broadcasts, spawning teammates…):
+ * the current holder passes — and the use renews the lease — everyone else
+ * gets a clear rejection naming the coordinator. Peer collaboration (1:1
+ * messages, own-task handoffs, pairing) is NEVER gated.
+ */
+export function assertCoordinator(orgId: string, agentId: string, action: string): void {
+  const current = getCoordinator(orgId);
+  if (current && current.agent_id === agentId && !current.expired) {
+    db().prepare("UPDATE coordinator SET renewed_at = ? WHERE org_id = ?").run(nowIso(), orgId);
+    return;
+  }
+  const holder =
+    current && !current.expired
+      ? ` '${current.agent_name}' holds it${current.live ? "" : " (idle)"} — route through them, or take over when it expires.`
+      : " The lease is free — take it with coordinator_acquire first.";
+  throw new ScopeError(`'${action}' is a coordination action and needs the coordinator lease.${holder}`);
 }
 
 // ───────────────────────── docs (minimal, C5) ─────────────────────────
