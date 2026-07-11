@@ -72,6 +72,7 @@ export type EventType =
   | "scope.violation"
   | "quota.exceeded"
   | "memory.written"
+  | "memory.deleted"
   | "test.reported"
   | "tool.response"
   | "agent.nudged"

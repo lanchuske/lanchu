@@ -116,3 +116,18 @@ test("Layer 1: repeated conflicts on a tag distill a hot-zone project memory", (
   assert.ok(hot, "hot-zone memory distilled after threshold");
   assert.match(hot.value, /panel/);
 });
+
+test("memoryDelete removes the entry and leaves an audited snapshot", () => {
+  const { org, agent } = setup("mem-del");
+  const entry = store.memorySet({
+    orgId: org.id, scope: "org", subjectId: org.id,
+    key: "test:delete", value: "to be removed", actorAgentId: agent.id,
+  });
+  assert.equal(store.memoryDelete(org.id, entry.id, agent.id), true);
+  assert.ok(!store.memoryGet(org.id).find((m) => m.id === entry.id), "entry gone");
+  const ev = store.listAuditEvents(org.id, 20).find((e) => e.type === "memory.deleted");
+  assert.ok(ev, "deletion audited");
+  assert.equal(ev.data.key, "test:delete");
+  assert.equal(ev.data.value, "to be removed");
+  assert.equal(store.memoryDelete(org.id, "no-such-id"), false, "unknown id is a no-op");
+});

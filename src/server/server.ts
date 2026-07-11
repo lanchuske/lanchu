@@ -629,6 +629,15 @@ export function createServer(): http.Server {
         return sendJson(res, 200, entries);
       }
 
+      // Supervisor delete from the panel — audited (memory.deleted snapshots
+      // the entry), and behind the access key like every admin action.
+      if (url.pathname === "/memory/delete" && req.method === "POST") {
+        const body = (await readJson(req)) as { org: string; id: string };
+        const org = store.getOrgByName(body.org ?? "");
+        if (!org) return sendJson(res, 404, { error: "unknown org" });
+        return sendJson(res, 200, { deleted: store.memoryDelete(org.id, body.id) });
+      }
+
       if (url.pathname === "/api/audit" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
