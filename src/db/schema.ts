@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -166,6 +166,20 @@ CREATE TABLE IF NOT EXISTS recurring (
   created_at       TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS notice (
+  id            TEXT PRIMARY KEY,
+  org_id        TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
+  kind          TEXT NOT NULL DEFAULT 'message'
+                  CHECK (kind IN ('message','conflict','system')),
+  from_agent_id TEXT REFERENCES agent(id),
+  to_agent_id   TEXT NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
+  body          TEXT NOT NULL,
+  ref           TEXT,
+  created_at    TEXT NOT NULL,
+  delivered_at  TEXT,
+  acked_at      TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
@@ -174,4 +188,5 @@ CREATE INDEX IF NOT EXISTS idx_agent_org_state     ON agent(org_id, state);
 CREATE INDEX IF NOT EXISTS idx_session_agent_live  ON session(agent_id, ended_at);
 CREATE INDEX IF NOT EXISTS idx_event_org_id        ON event(org_id, id);
 CREATE INDEX IF NOT EXISTS idx_event_actor         ON event(actor_agent_id, id);
+CREATE INDEX IF NOT EXISTS idx_notice_pending      ON notice(to_agent_id, acked_at);
 `;

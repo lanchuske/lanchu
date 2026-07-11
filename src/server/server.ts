@@ -13,7 +13,7 @@ import { ensureAgentWorktree, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
 import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { getContext, putContext } from "./context.js";
-import { addLiveSession, removeLiveSession } from "../core/presence.js";
+import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
 import { buildMcpServer } from "./mcp.js";
 import { panelHtml } from "./panel.js";
 import { startWebhookDelivery } from "./webhooks.js";
@@ -277,6 +277,24 @@ async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): P
     onsessioninitialized: (id) => {
       transports.set(id, transport);
       sessionAgent.set(id, ctx.agentId);
+      // Two live sessions resolving to one agent id means two terminals share
+      // an identity — misattribution waiting to happen (isolation root cause #2).
+      // Warn the agent (it'll see it on its next tool call) and audit it.
+      if (isAgentLive(ctx.agentId)) {
+        store.recordEvent({
+          org_id: ctx.orgId,
+          type: "agent.duplicate_session",
+          actor_agent_id: ctx.agentId,
+          subject_kind: "agent",
+          subject_id: ctx.agentId,
+          data: { note: "a second live session connected as this agent" },
+        });
+        store.systemNotice(
+          ctx.orgId,
+          ctx.agentId,
+          "Another live session is connected as this same agent. Two terminals sharing one identity causes misattribution — close one, or spawn a separate agent (lanchu spawn).",
+        );
+      }
       addLiveSession(ctx.agentId);
     },
     onsessionclosed: (id) => forgetSession(id),
