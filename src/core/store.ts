@@ -1851,3 +1851,201 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
 
   return { agents, tasks, projects: listProjects(orgId) };
 }
+
+// ───────────────── org-life graph: the audit log as a living picture ─────────────────
+
+export interface GraphNode {
+  id: string;
+  kind: "agent" | "doc" | "area";
+  label: string;
+  weight: number;
+  /** agents only — retired nodes render faded */
+  state?: AgentState;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  kind: "msg" | "handoff" | "conflict" | "doc" | "area" | "flow" | "bounce";
+  weight: number;
+}
+
+export interface OrgGraph {
+  window_hours: number;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/**
+ * How far along the pipeline a task event sits. Used to tell forward flow from
+ * backward bounces when successive actors touch the same task: a later event
+ * with a LOWER rank means the work moved backward (release after progress,
+ * reassign after completion…). The explicit `task.bounced` event from the SDLC
+ * state machine (design doc "SDLC state machine") is honored when it lands —
+ * this table is only the inference fallback for events recorded today.
+ */
+const GRAPH_STAGE_RANK: Record<string, number> = {
+  "task.created": 0,
+  "task.released": 0,
+  "task.claimed": 1,
+  "task.reassigned": 1,
+  "task.started": 2,
+  "task.blocked": 2,
+  "task.completed": 4,
+};
+
+/**
+ * Aggregate the event table into nodes (agents, docs, tag areas) and edges
+ * (messages, handoffs, conflicts, doc edits, area work, SDLC flow/bounces).
+ * No new tracking: everything derives from events already recorded. Weights
+ * are time-decayed so "busy now" is visibly bigger than "busy hours ago"
+ * (half-life ≈ a fifth of the window).
+ */
+export function orgGraph(orgId: string, windowHours: number): OrgGraph {
+  const now = Date.now();
+  const cutoff = new Date(now - windowHours * 3_600_000).toISOString();
+  const rows = db()
+    .prepare(
+      `SELECT type, actor_agent_id, subject_kind, subject_id, data, created_at
+       FROM event WHERE org_id = ? AND created_at >= ? AND outcome = 'applied' ORDER BY id`,
+    )
+    .all(orgId, cutoff) as {
+    type: string;
+    actor_agent_id: string | null;
+    subject_kind: string | null;
+    subject_id: string | null;
+    data: string | null;
+    created_at: string;
+  }[];
+  const decay = (iso: string) =>
+    Math.exp((-(now - new Date(iso).getTime()) / 3_600_000) * 3 / windowHours);
+
+  const agents = listAgents(orgId);
+  const agentById = new Map(agents.map((a) => [a.id, a]));
+  const agentByName = new Map(agents.map((a) => [a.name, a]));
+
+  const nodes = new Map<string, GraphNode>();
+  const edges = new Map<string, GraphEdge>();
+
+  const agentNode = (id: string | null | undefined): string | null => {
+    if (!id) return null;
+    const a = agentById.get(id);
+    if (!a) return null;
+    if (!nodes.has(a.id)) {
+      nodes.set(a.id, {
+        id: a.id,
+        kind: "agent",
+        label: a.name,
+        weight: 0,
+        state: a.state === "retired" ? "retired" : isPresent(a) ? "active" : "idle",
+      });
+    }
+    return a.id;
+  };
+  const areaNode = (tag: string): string => {
+    const id = "area:" + tag;
+    if (!nodes.has(id)) nodes.set(id, { id, kind: "area", label: tag, weight: 0 });
+    return id;
+  };
+  const docNode = (docId: string | null): string | null => {
+    if (!docId) return null;
+    const d = getDoc(docId);
+    if (!d) return null;
+    const id = "doc:" + d.id;
+    if (!nodes.has(id)) nodes.set(id, { id, kind: "doc", label: d.title, weight: 0 });
+    return id;
+  };
+  const bump = (id: string | null, w: number) => {
+    if (id) nodes.get(id)!.weight += w;
+  };
+  const edge = (from: string | null, to: string | null, kind: GraphEdge["kind"], w: number) => {
+    if (!from || !to || from === to) return;
+    const key = from + ">" + to + ":" + kind;
+    const e = edges.get(key) ?? { from, to, kind, weight: 0 };
+    e.weight += w;
+    edges.set(key, e);
+  };
+
+  // Every non-retired agent is on the map even with zero recent events — the
+  // org is who it is; retired ones only appear if they acted inside the window.
+  for (const a of agents) if (a.state !== "retired") agentNode(a.id);
+
+  // Per task: who touched it last and at which pipeline rank (for flow edges).
+  const lastTouch = new Map<string, { actor: string; rank: number }>();
+  const taskTags = new Map<string, string[]>();
+  const tagsOf = (taskId: string | null): string[] => {
+    if (!taskId) return [];
+    if (!taskTags.has(taskId)) taskTags.set(taskId, getTask(taskId)?.tags ?? []);
+    return taskTags.get(taskId)!;
+  };
+
+  for (const ev of rows) {
+    const w = decay(ev.created_at);
+    const actor = agentNode(ev.actor_agent_id);
+    bump(actor, w);
+    let data: Record<string, unknown> = {};
+    if (ev.data) {
+      try {
+        data = JSON.parse(ev.data) as Record<string, unknown>;
+      } catch {
+        /* tolerate malformed rows — the graph is a summary, not a ledger */
+      }
+    }
+
+    if (ev.type === "message.sent") {
+      // subject_id holds the recipient name(s), comma-separated for broadcasts.
+      for (const name of String(ev.subject_id ?? "").split(", ")) {
+        edge(actor, agentNode(agentByName.get(name)?.id), "msg", w);
+      }
+      continue;
+    }
+    if (ev.type === "conflict.detected") {
+      const conflicts = Array.isArray(data.conflicts) ? (data.conflicts as { with_agent?: string }[]) : [];
+      for (const c of conflicts) {
+        edge(actor, agentNode(agentByName.get(String(c.with_agent ?? ""))?.id), "conflict", w);
+      }
+      continue;
+    }
+    if (ev.type === "doc.created" || ev.type === "doc.updated") {
+      const dn = docNode(ev.subject_id);
+      bump(dn, w);
+      edge(actor, dn, "doc", w);
+      continue;
+    }
+    if (ev.type === "task.bounced") {
+      // First-class backward move from the SDLC state machine (when it ships).
+      const to = agentNode(typeof data.to === "string" ? data.to : null);
+      edge(actor, to, "bounce", w);
+      if (ev.subject_id && to) lastTouch.set(ev.subject_id, { actor: to, rank: GRAPH_STAGE_RANK["task.started"]! });
+      continue;
+    }
+    if (ev.type.startsWith("task.")) {
+      const rank = GRAPH_STAGE_RANK[ev.type];
+      if (rank === undefined) continue;
+      // A reassign moves the work into the RECEIVER's hands.
+      const holder = ev.type === "task.reassigned"
+        ? (agentNode(typeof data.to === "string" ? data.to : null) ?? actor)
+        : actor;
+      if (ev.type === "task.reassigned") edge(actor, holder, "handoff", w);
+      for (const tag of tagsOf(ev.subject_id)) {
+        const an = areaNode(tag);
+        bump(an, w);
+        edge(holder, an, "area", w);
+      }
+      if (ev.subject_id && holder) {
+        const prev = lastTouch.get(ev.subject_id);
+        if (prev && prev.actor !== holder) {
+          edge(prev.actor, holder, rank < prev.rank ? "bounce" : "flow", w);
+        }
+        lastTouch.set(ev.subject_id, { actor: holder, rank });
+      }
+    }
+  }
+
+  const round = (n: number) => Math.round(n * 1000) / 1000;
+  return {
+    window_hours: windowHours,
+    nodes: [...nodes.values()].map((n) => ({ ...n, weight: round(n.weight) })),
+    edges: [...edges.values()].map((e) => ({ ...e, weight: round(e.weight) })),
+  };
+}
