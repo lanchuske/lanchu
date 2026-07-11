@@ -501,3 +501,37 @@ test("test registry: report upserts suites/cases, tracks runs, planned gaps clos
 
   assert.throws(() => store.reportTestRun({ orgId: org.id, agentId: agent.id, suite: "x", cases: [] }));
 });
+
+// ── rule 7 (task-mrgplqdo11): every role may always FILE taxonomy-tagged tasks ──
+// A probe with allowed_tags=[] found a real SDLC bug during the wake-v5 drill
+// and had to relay it through the coordinator because task_create rejected
+// even ["bug"]. Detection is everyone's job.
+
+test("an empty-tags role can file bug/extension/idea/process tasks; area tags still scope-check", () => {
+  const org = store.getOrCreateOrg("rule7-org");
+  const project = store.getOrCreateProject(org.id, "core");
+  const scoped = store.getOrCreateRole(org.id, "scoped-probe", { tags: [] }); // no areas, no wildcard
+  const probe = store.createAgent({ orgId: org.id, roleId: scoped.id, name: "probe-rule7" });
+
+  const filed = store.createTask({
+    projectId: project.id, orgId: org.id, agentId: probe.id,
+    title: "Bug: router sent verification to a parked probe — repro attached",
+    tags: ["bug"],
+  });
+  assert.equal(filed.status, "available", "taxonomy-only filing always works");
+  assert.deepEqual(filed.tags, ["bug"]);
+
+  // Taxonomy + an uncovered AREA tag still rejects, naming only the area.
+  assert.throws(
+    () => store.createTask({
+      projectId: project.id, orgId: org.id, agentId: probe.id,
+      title: "Bug with area", tags: ["bug", "server"],
+    }),
+    (err) => err instanceof ScopeError && /\[server\]/.test(err.message) && !/bug/.test(err.message),
+  );
+
+  // Claiming is untouched: the probe cannot claim even its own taxonomy-only task.
+  // (roleCoversTags over the task's tags still applies on claim.)
+  const claimed = store.claimTask({ agentId: probe.id, taskId: filed.id });
+  assert.equal(claimed.status, "claimed", "taxonomy-only tasks are claimable by anyone (no area to license)");
+});
