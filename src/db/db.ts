@@ -64,6 +64,9 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "doc", "category", "TEXT NOT NULL DEFAULT 'general'");
   addColumn(db, "role", "token_quota", "INTEGER");
   addColumn(db, "agent", "color_slot", "INTEGER");
+  addColumn(db, "agent", "git_author_name", "TEXT");
+  addColumn(db, "agent", "git_author_email", "TEXT");
+  addColumn(db, "agent", "gh_login", "TEXT");
   addColumn(db, "doc", "read_count", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "doc", "last_read_at", "TEXT");
   addColumn(db, "doc", "last_read_by_agent_id", "TEXT");

@@ -94,6 +94,9 @@ export interface Agent {
   worktree: string | null;
   /** Persisted palette slot (per-org de-collision); null until first assignment. */
   color_slot: number | null;
+  git_author_name: string | null;
+  git_author_email: string | null;
+  gh_login: string | null;
   created_at: string;
   retired_at: string | null;
 }

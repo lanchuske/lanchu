@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 
-const { ensureAgentWorktree, removeAgentWorktree, slugify } = await import("../dist/core/worktree.js");
+const { ensureAgentWorktree, gitAuthorIn, removeAgentWorktree, slugify } = await import("../dist/core/worktree.js");
 
 function git(cwd, ...args) {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -104,4 +104,29 @@ test("remove never touches paths outside .lanchu/worktrees", () => {
   const r = removeAgentWorktree(repo);
   assert.equal(r.removed, false);
   assert.equal(fs.existsSync(repo), true);
+});
+
+test("worktree gets a per-agent git author; the repo's own author is untouched", () => {
+  const repo = makeRepo("author");
+  const a = ensureAgentWorktree(repo, "builder-panel", "acme");
+  const b = ensureAgentWorktree(repo, "qa", "acme");
+
+  // Effective author inside each worktree names the agent (GitHub-identity Phase 2).
+  assert.deepEqual(gitAuthorIn(a.path), { name: "builder-panel (lanchu)", email: "builder-panel@agents.acme.lanchu" });
+  assert.deepEqual(gitAuthorIn(b.path), { name: "qa (lanchu)", email: "qa@agents.acme.lanchu" });
+  // The main checkout keeps whatever identity the human configured (makeRepo sets its own).
+  const repoAuthor = gitAuthorIn(repo);
+  assert.notEqual(repoAuthor.name, "builder-panel (lanchu)");
+
+  // Commits made in the worktree carry the agent as author.
+  fs.writeFileSync(path.join(a.path, "change.txt"), "x\n");
+  execFileSync("git", ["-C", a.path, "add", "change.txt"]);
+  execFileSync("git", ["-C", a.path, "commit", "-m", "agent change"], { encoding: "utf8" });
+  const author = execFileSync("git", ["-C", a.path, "log", "-1", "--format=%an <%ae>"], { encoding: "utf8" }).trim();
+  assert.equal(author, "builder-panel (lanchu) <builder-panel@agents.acme.lanchu>");
+
+  // Reattach keeps (and would repair) the identity.
+  const again = ensureAgentWorktree(repo, "builder-panel", "acme");
+  assert.equal(again.created, false);
+  assert.equal(gitAuthorIn(again.path).name, "builder-panel (lanchu)");
 });
