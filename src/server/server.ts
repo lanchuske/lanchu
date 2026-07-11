@@ -24,6 +24,77 @@ import { startWebhookDelivery } from "./webhooks.js";
 const transports = new Map<string, StreamableHTTPServerTransport>();
 /** Maps an MCP session id to its agent, so we can refresh presence on each request. */
 const sessionAgent = new Map<string, string>();
+/** Maps an MCP session id to its protocol server, so a duplicate can be PINGED before it's flagged. */
+const sessionServers = new Map<string, { ping: () => Promise<unknown> }>();
+
+/**
+ * Is the transport behind this session actually alive? MCP ping with a short
+ * timeout: a half-open session (client dropped without a close — restart
+ * blips, laptop sleeps, network hiccups) hangs or rejects; a real terminal
+ * answers. Injectable for tests via setSessionPingProbe.
+ */
+async function defaultPingProbe(sid: string): Promise<boolean> {
+  const srv = sessionServers.get(sid);
+  if (!srv) return false;
+  try {
+    await Promise.race([
+      srv.ping(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("ping timeout")), 1500).unref()),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+let pingProbe: (sid: string) => Promise<boolean> = defaultPingProbe;
+/** Test seam: override (or restore with null) the duplicate-check ping probe. */
+export function setSessionPingProbe(probe: ((sid: string) => Promise<boolean>) | null): void {
+  pingProbe = probe ?? defaultPingProbe;
+}
+
+/** Drop a session outright (half-open replacement): forget it, then close the transport. */
+function dropSession(sid: string): void {
+  const old = transports.get(sid);
+  forgetSession(sid); // idempotent — a later onclose for the same sid is a no-op
+  void old?.close().catch(() => {
+    /* already half-closed */
+  });
+}
+
+/**
+ * Verify-then-flag (task-mrgmbqyv2): a duplicate OUTSIDE the startup grace
+ * window used to flag immediately — but clients also reconnect lazily,
+ * minutes after a restart or a transport hiccup, leaving their previous
+ * session half-open (false positive with exactly one real terminal,
+ * 2026-07-11 17:07). So the accusation now requires evidence: ping every
+ * other session first. Dead ones are replaced silently (that's a reconnect);
+ * only a session that ANSWERS proves a second live terminal and flags.
+ */
+async function verifyDuplicate(
+  ctx: { orgId: string; agentId: string },
+  others: string[],
+): Promise<void> {
+  const results = await Promise.all(
+    others.map(async (sid) => ({ sid, alive: await pingProbe(sid) })),
+  );
+  for (const r of results) {
+    if (!r.alive) dropSession(r.sid);
+  }
+  if (!results.some((r) => r.alive)) return; // lazy reconnect — nothing to report
+  store.recordEvent({
+    org_id: ctx.orgId,
+    type: "agent.duplicate_session",
+    actor_agent_id: ctx.agentId,
+    subject_kind: "agent",
+    subject_id: ctx.agentId,
+    data: { note: "a second live session connected as this agent", verified_by_ping: true },
+  });
+  store.systemNotice(
+    ctx.orgId,
+    ctx.agentId,
+    "Another live session is connected as this same agent. Two terminals sharing one identity causes misattribution — close one, or spawn a separate agent (lanchu spawn).",
+  );
+}
 
 /**
  * Right after the server starts, clients whose transports died with the old
@@ -48,6 +119,7 @@ function forgetSession(id: string): void {
   const agentId = sessionAgent.get(id);
   transports.delete(id);
   sessionAgent.delete(id);
+  sessionServers.delete(id);
   if (agentId !== undefined) removeLiveSession(agentId);
 }
 
@@ -350,38 +422,25 @@ async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): P
       sessionAgent.set(id, ctx.agentId);
       // Two live sessions resolving to one agent id means two terminals share
       // an identity — misattribution waiting to happen (isolation root cause #2).
-      // Warn the agent (it'll see it on its next tool call) and audit it.
-      // Exception: during the post-start grace window it's the same terminal
-      // reconnecting — replace its previous session instead of counting it.
+      // Within the post-start grace window it's the same terminal reconnecting:
+      // replace the previous session unquestioned. Past it, verify BEFORE
+      // flagging — ping the other sessions; only one that answers proves a
+      // real second terminal (lazy reconnects leave half-open ghosts that
+      // false-flagged single-terminal agents — task-mrgmbqyv2).
       if (isAgentLive(ctx.agentId)) {
+        const others = [...sessionAgent.entries()]
+          .filter(([sid, agentId]) => agentId === ctx.agentId && sid !== id)
+          .map(([sid]) => sid);
         if (inReconnectGrace()) {
-          const stale = [...sessionAgent.entries()]
-            .filter(([sid, agentId]) => agentId === ctx.agentId && sid !== id)
-            .map(([sid]) => sid);
-          for (const sid of stale) {
-            const old = transports.get(sid);
-            forgetSession(sid); // idempotent — a later onclose for the same sid is a no-op
-            void old?.close().catch(() => {
-              /* already half-closed */
-            });
-          }
+          for (const sid of others) dropSession(sid);
         } else {
-          store.recordEvent({
-            org_id: ctx.orgId,
-            type: "agent.duplicate_session",
-            actor_agent_id: ctx.agentId,
-            subject_kind: "agent",
-            subject_id: ctx.agentId,
-            data: { note: "a second live session connected as this agent" },
+          void verifyDuplicate(ctx, others).catch(() => {
+            /* verification must never break an initialize */
           });
-          store.systemNotice(
-            ctx.orgId,
-            ctx.agentId,
-            "Another live session is connected as this same agent. Two terminals sharing one identity causes misattribution — close one, or spawn a separate agent (lanchu spawn).",
-          );
         }
       }
       addLiveSession(ctx.agentId);
+      sessionServers.set(id, server.server);
     },
     onsessionclosed: (id) => forgetSession(id),
   });
