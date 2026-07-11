@@ -583,6 +583,22 @@ function renderProjectsView(projects, tasks, agents) {
   }).join("") || '<div class="empty">No projects yet. A project is a repo + its local folder, so it\\'s created from inside that folder — in your terminal, run ' + cmdSnippet(initCmd()) + ' then have an agent join (it appears here with its repo and path).</div>';
 }
 
+// Stable per-agent color — MIRRORS src/core/colors.ts (same palette, same
+// FNV-1a hash) so the panel chip matches the terminal border and tile roster.
+var AGENT_PALETTE = ["#e69f00", "#56b4e9", "#009e73", "#f0e442", "#0072b2", "#d55e00", "#cc79a7", "#9467bd", "#17becf", "#999999"];
+function agentColorHex(name) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  h = (h + 1984) >>> 0; // same SALT as core/colors.ts
+  h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b) >>> 0;
+  h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35) >>> 0;
+  h ^= h >>> 16; h = h >>> 0;
+  return AGENT_PALETTE[h % AGENT_PALETTE.length];
+}
+function colorChip(name) {
+  return '<span class="cdot" style="background:' + agentColorHex(name) + '" title="agent color (same in terminal + tile)"></span>';
+}
+
 function renderAgents(list) {
   document.getElementById("c-agents").textContent = list.length;
   document.getElementById("agents").innerHTML = list.map(function (a) {
@@ -593,7 +609,7 @@ function renderAgents(list) {
     var reveal = a.state === "active" ? "focus terminal" : "open terminal";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to ' + reveal + '">' +
       '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
-      esc(a.name) + '</span><button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></div>' +
+      colorChip(a.name) + esc(a.name) + '</span><button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></div>' +
       '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") + ' · <b>' + a.open_tasks + '</b> open' + branch +
       (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") + '</div>' + wt + task +
       (a.objective ? '<div class="meta"><span class="k">obj</span> ' + esc(a.objective) + '</div>' : "") +
@@ -772,7 +788,7 @@ function renderAudit(list) {
     var right = (e.outcome === "rejected" ? "rejected" : "") + (e.tokens ? (e.outcome === "rejected" ? " · " : "") + e.tokens + " tok" : "");
     return '<div class="ev' + (e.outcome === "rejected" ? " rej" : "") + '">' +
       '<span class="time">' + when + '</span>' +
-      '<span><span class="who">' + esc(e.actor_name || "—") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
+      '<span>' + (e.actor_name ? colorChip(e.actor_name) : "") + '<span class="who">' + esc(e.actor_name || "—") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
       '<span class="right">' + right + '</span></div>';
   }).join("") || '<div class="empty">No activity yet.</div>';
 }

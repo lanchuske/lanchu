@@ -20,6 +20,7 @@ import {
   VERSION,
   writeSettings,
 } from "../config.js";
+import { agentColor, ansiColorize } from "../core/colors.js";
 import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
 
@@ -569,7 +570,8 @@ async function cmdTile(): Promise<void> {
   const pad = Math.max(...b.agents.map((a) => a.name.length));
   console.log("");
   for (const a of b.agents) {
-    const dot = a.state === "active" ? "●" : "○";
+    // Same hue as the terminal border and panel chip — one identity everywhere.
+    const dot = ansiColorize(a.state === "active" ? "●" : "○", agentColor(a.name));
     const where = a.worktree
       ? `${tilde(a.worktree)}  (${a.branch ?? "no branch"})`
       : a.branch
@@ -687,8 +689,11 @@ async function statusLine(): Promise<string> {
   const found = findConfig();
   if (!found) return "";
   const { org, project } = found.config;
-  // Set at launch (spawn/wizard) so the line can name which teammate owns this terminal.
-  const me = process.env.LANCHU_AGENT ? ` · you: ${process.env.LANCHU_AGENT}` : "";
+  // Set at launch (spawn/wizard) so the line can name which teammate owns this
+  // terminal — shown in the agent's stable color (same hue as panel and tile).
+  const me = process.env.LANCHU_AGENT
+    ? ` · you: ${ansiColorize(process.env.LANCHU_AGENT, agentColor(process.env.LANCHU_AGENT))}`
+    : "";
   if (!(await serverUp())) return "lanchu ○ not running";
   try {
     const b = (await (await api(`/api/board?org=${encodeURIComponent(org)}`, {
