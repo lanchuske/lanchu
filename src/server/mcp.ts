@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { baseUrl, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
+import { ackGreenzone, greenzoneStatus, isGreenzoneActive } from "../core/greenzone.js";
 import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { QuotaError, ScopeError } from "../core/types.js";
@@ -337,6 +338,14 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ taskId, workspace }) => {
       try {
+        // Greenzone: during a maintenance window new work must not start.
+        if (isGreenzoneActive(ctx.orgId)) {
+          return fail(
+            new Error(
+              "greenzone in progress — new claims are paused until the maintenance window completes. If you're at a safe point, confirm with greenzone_ack.",
+            ),
+          );
+        }
         // Task 3 (isolation): a live teammate already working this area is a
         // conflict. Warn-and-ask by default; hard-block with LANCHU_CONFLICT_BLOCK=1.
         const target = store.getTask(taskId);
@@ -600,6 +609,34 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       inputSchema: {},
     },
     async () => text({ rules: store.getOrgRules(ctx.orgId) }),
+  );
+
+  registerTool(
+    "greenzone_ack",
+    {
+      title: "Confirm greenzone",
+      description:
+        "Confirm you're at a safe point (WIP committed, writes finished) for the org's pending maintenance window (server restart, migration…). " +
+        "The op executes once every live agent confirms, or at the window's timeout. Check status anytime with the panel banner.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        return text({ greenzone: ackGreenzone(ctx.orgId, ctx.agentId) });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "greenzone_status",
+    {
+      title: "Greenzone status",
+      description: "The org's current maintenance window: idle | requested (N/M confirmed, deadline) | done.",
+      inputSchema: {},
+    },
+    async () => text({ greenzone: greenzoneStatus(ctx.orgId) }),
   );
 
   registerTool(

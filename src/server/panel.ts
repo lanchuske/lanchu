@@ -298,6 +298,14 @@ export function panelHtml(): string {
   ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
   ::-webkit-scrollbar-track { background: transparent; }
 
+  /* ── greenzone banner (org-wide maintenance window) ── */
+  .gz { background: var(--warn-bg, #fff7e6); border: 1px solid var(--warn, #b8860b); border-radius: 10px;
+        padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+  .gz b { text-transform: uppercase; letter-spacing: .05em; font-size: 11.5px; }
+  .gz .gz-agent { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+                  border: 1px solid var(--line); font-size: 11.5px; }
+  .gz .gz-agent.ok { border-color: var(--ok, #2e7d32); color: var(--ok, #2e7d32); }
+
   /* ── toast ── */
   #toast { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
   .toast { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
@@ -342,6 +350,7 @@ export function panelHtml(): string {
     </nav>
 
     <main class="content">
+      <div id="greenzone" class="gz" style="display:none"></div>
       <section class="view" id="v-overview">
         <h1 class="vhead">Overview</h1>
         <p class="vsub">An <b>org</b> groups everything below it: <b>projects</b> (each a repo + local folder), the <b>agents</b> working across them, and their <b>tasks</b>.</p>
@@ -600,7 +609,7 @@ document.addEventListener("click", function (e) {
     else if (act === "focus-term") reveal(id, nm);
     else if (act === "logs") toggleLogs(id);
     else if (act === "close-term") closeTerm(id, nm);
-    else if (act === "restart-server") { post("/server/restart", {}); toast("Restarting the server…"); }
+    else if (act === "restart-server") { requestRestartGreenzone(); }
     else if (act === "stop-server") stopServer();
     else if (act === "remove-org") removeOrg(b, id);
     return;
@@ -1338,6 +1347,41 @@ function refresh() {
       updateContextCmds();
     }).catch(function () {}).then(function () { busy = false; });
 }
+
+// ── greenzone: coordinated restart. The button opens a maintenance window;
+// agents confirm via greenzone_ack; the banner tracks N/M until it executes. ──
+function requestRestartGreenzone() {
+  authFetch("/greenzone/request", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ org: org(), action: "restart" }) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (r.error) { toast(r.error, true); return; }
+      toast(r.state === "done" ? "No live agents — restarting now…" : "Greenzone requested — agents are reaching a safe point");
+      refreshGreenzone();
+    });
+}
+function refreshGreenzone() {
+  if (!org()) return;
+  get("/api/greenzone").then(function (gz) {
+    var el = document.getElementById("greenzone");
+    if (!gz || gz.state === "idle") { el.style.display = "none"; return; }
+    var chips = (gz.required || []).map(function (a) {
+      return '<span class="gz-agent' + (a.confirmed_at ? " ok" : "") + '">' + esc(a.name) + (a.confirmed_at ? " ✓" : " …") + "</span>";
+    }).join("");
+    var body;
+    if (gz.state === "done") {
+      body = "<b>Greenzone</b> " + esc(gz.action || "") + " executed" + (gz.timed_out ? " (timeout — not everyone confirmed)" : "") + chips;
+      // The banner clears once the restarted server reports idle again.
+    } else {
+      var left = Math.max(0, Math.round((new Date(gz.deadline).getTime() - Date.now()) / 1000));
+      body = "<b>Greenzone</b> " + esc(gz.action || "") + " requested — " + (gz.confirmed || 0) + "/" + (gz.required || []).length +
+        " confirmed · executes in ≤" + left + "s" + chips;
+    }
+    el.innerHTML = body;
+    el.style.display = "block";
+  }).catch(function () {});
+}
+setInterval(refreshGreenzone, 3000);
 
 var sse = null;
 function connect() {
