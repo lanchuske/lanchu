@@ -129,6 +129,28 @@ export function nudgeCooldownMs(): number {
   return (Number.isFinite(n) && n > 0 ? n : 5) * 60_000;
 }
 
+/**
+ * Max nudges per agent per undelivered set (nudges since its oldest undelivered
+ * notice). Past the budget the sweep stops typing and the panel flags the agent
+ * "unreachable" — the supervisor decides, the server never nags forever.
+ */
+export function nudgeBudget(): number {
+  const s = process.env.LANCHU_NUDGE_BUDGET;
+  const n = s ? Number.parseInt(s, 10) : 2;
+  return Number.isFinite(n) && n > 0 ? n : 2;
+}
+
+/**
+ * How long an undelivered broadcast stays around before it self-expires.
+ * Broadcasts are informational fan-out ("restarting the server…") — stale ones
+ * must not pile up as pending inbox forever.
+ */
+export function broadcastTtlMs(): number {
+  const s = process.env.LANCHU_BROADCAST_TTL_MINUTES;
+  const n = s ? Number.parseInt(s, 10) : 30;
+  return (Number.isFinite(n) && n > 0 ? n : 30) * 60_000;
+}
+
 // ── local settings (opt-in preferences; never leaves the machine) ──
 export interface Settings {
   notifyUpdates?: boolean;

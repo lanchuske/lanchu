@@ -954,9 +954,12 @@ export const NUDGE_LINE =
  */
 export function runNudgeSweep(
   effects: { alive?: typeof terminalAlive; nudge?: typeof nudgeTerminal } = {},
-): { nudged: string[] } {
+): { nudged: string[]; expired_broadcasts: number } {
   const alive = effects.alive ?? terminalAlive;
   const nudge = effects.nudge ?? nudgeTerminal;
+  // Notice hygiene first: stale broadcasts self-expire so they never count as
+  // pending inbox anywhere (sleeping agents, fixtures) — see store for why.
+  const expired = store.expireBroadcastNotices();
   const nudged: string[] = [];
   for (const org of store.listOrgs()) {
     for (const c of store.agentsNeedingNudge(org.id)) {
@@ -973,7 +976,7 @@ export function runNudgeSweep(
       }
     }
   }
-  return { nudged };
+  return { nudged, expired_broadcasts: expired };
 }
 
 export function startServer(): Promise<http.Server> {

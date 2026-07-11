@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { activeWindowMs, nudgeAfterMs, nudgeCooldownMs, sdlcMode, staleHours } from "../config.js";
+import { activeWindowMs, broadcastTtlMs, nudgeAfterMs, nudgeBudget, nudgeCooldownMs, sdlcMode, staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
@@ -2012,6 +2012,9 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
   const agent = getAgent(agentId);
   endSessionsForAgent(agentId);
   setAgentState(agentId, "retired");
+  // Nothing is addressed to the dead: pending notices would otherwise keep
+  // triggering the wake sweep forever.
+  const voided = voidNoticesFor(agentId);
   if (agent) {
     recordEvent({
       org_id: agent.org_id,
@@ -2019,6 +2022,7 @@ export function retireAgent(agentId: string): { retired: boolean; blockedBy: Tas
       actor_agent_id: agentId,
       subject_kind: "agent",
       subject_id: agentId,
+      data: voided ? { voided_notices: voided } : undefined,
     });
     // A retiring coordinator releases the lease — the org must never be
     // "coordinated" by a ghost.
@@ -2543,6 +2547,10 @@ export type BoardAgent = Agent & {
   live_transports: number;
   /** de-collided palette color (same across panel, tile, terminal) */
   color: AgentColor;
+  /** last auto-wake nudge, if any (panel "nudged" pill) */
+  nudged_at: string | null;
+  /** nudge budget spent and still starved — needs the supervisor, not the sweep */
+  unreachable: boolean;
 };
 
 export interface BoardSnapshot {
@@ -2609,13 +2617,15 @@ export interface Notice {
   to_agent_id: string;
   body: string;
   ref: string | null;
+  /** true when this notice was fanned out via to:'*' — informational, expirable */
+  is_broadcast: boolean;
   created_at: string;
   delivered_at: string | null;
   acked_at: string | null;
 }
 
 const NOTICE_COLS =
-  "n.id, n.org_id, n.kind, n.from_agent_id, a.name AS from_name, n.to_agent_id, n.body, n.ref, n.created_at, n.delivered_at, n.acked_at";
+  "n.id, n.org_id, n.kind, n.from_agent_id, a.name AS from_name, n.to_agent_id, n.body, n.ref, n.is_broadcast, n.created_at, n.delivered_at, n.acked_at";
 
 function loadNotice(r: Record<string, unknown>): Notice {
   return {
@@ -2627,6 +2637,7 @@ function loadNotice(r: Record<string, unknown>): Notice {
     to_agent_id: r.to_agent_id as string,
     body: r.body as string,
     ref: (r.ref as string) ?? null,
+    is_broadcast: Boolean(r.is_broadcast),
     created_at: r.created_at as string,
     delivered_at: (r.delivered_at as string) ?? null,
     acked_at: (r.acked_at as string) ?? null,
@@ -2640,10 +2651,11 @@ function insertNotice(input: {
   toAgentId: string;
   body: string;
   ref?: string | null;
+  isBroadcast?: boolean;
 }): void {
   db()
     .prepare(
-      "INSERT INTO notice(id, org_id, kind, from_agent_id, to_agent_id, body, ref, created_at) VALUES (?,?,?,?,?,?,?,?)",
+      "INSERT INTO notice(id, org_id, kind, from_agent_id, to_agent_id, body, ref, is_broadcast, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
     )
     .run(
       uuid(),
@@ -2653,6 +2665,7 @@ function insertNotice(input: {
       input.toAgentId,
       input.body,
       input.ref ?? null,
+      input.isBroadcast ? 1 : 0,
       nowIso(),
     );
 }
@@ -2674,8 +2687,9 @@ export function sendNotice(input: {
 }): { sent: number; to: string[] } {
   const kind = input.kind ?? "message";
   let recipients: Agent[];
+  const isBroadcast = input.to === "*" || input.to.toLowerCase() === "all";
 
-  if (input.to === "*" || input.to.toLowerCase() === "all") {
+  if (isBroadcast) {
     if (input.fromAgentId) {
       const now = Date.now();
       const recent = (broadcastLog.get(input.fromAgentId) ?? []).filter(
@@ -2719,6 +2733,7 @@ export function sendNotice(input: {
       toAgentId: r.id,
       body: input.body,
       ref: input.ref,
+      isBroadcast,
     });
   }
   recordEvent({
@@ -2730,7 +2745,7 @@ export function sendNotice(input: {
     data: {
       note: input.body.slice(0, 280),
       kind,
-      broadcast: recipients.length > 1,
+      broadcast: isBroadcast,
       ...(input.ref ? { ref: input.ref } : {}),
     },
   });
@@ -2802,6 +2817,57 @@ export function ackNotices(agentId: string, ids: string[]): number {
   return Number(info.changes);
 }
 
+/**
+ * Broadcast TTL: broadcasts are informational fan-out — a stale one is noise,
+ * not a to-do. Any unacked broadcast past the TTL self-expires (acked by the
+ * system), so sleeping/retired/fixture inboxes never accumulate them and the
+ * wake sweep never fires over them. Audited per org as notice.expired.
+ */
+export function expireBroadcastNotices(): number {
+  const cutoff = new Date(Date.now() - broadcastTtlMs()).toISOString();
+  const stale = db()
+    .prepare(
+      `SELECT org_id, COUNT(*) AS c FROM notice
+       WHERE is_broadcast = 1 AND acked_at IS NULL AND created_at <= ?
+       GROUP BY org_id`,
+    )
+    .all(cutoff) as { org_id: string; c: number }[];
+  if (!stale.length) return 0;
+  const now = nowIso();
+  db()
+    .prepare(
+      `UPDATE notice SET acked_at = ?, delivered_at = COALESCE(delivered_at, ?)
+       WHERE is_broadcast = 1 AND acked_at IS NULL AND created_at <= ?`,
+    )
+    .run(now, now, cutoff);
+  for (const s of stale) {
+    recordEvent({
+      org_id: s.org_id,
+      type: "notice.expired",
+      subject_kind: "notice",
+      subject_id: "broadcast",
+      data: { expired: s.c },
+    });
+  }
+  return stale.reduce((sum, s) => sum + s.c, 0);
+}
+
+/**
+ * Retirement voids the inbox: nothing is addressed to the dead. Without this,
+ * undelivered notices on retired agents kept re-triggering the wake sweep
+ * forever (2026-07-11 evidence: product hand-voided 19 stale notices).
+ */
+export function voidNoticesFor(agentId: string): number {
+  const now = nowIso();
+  const info = db()
+    .prepare(
+      `UPDATE notice SET acked_at = ?, delivered_at = COALESCE(delivered_at, ?)
+       WHERE to_agent_id = ? AND acked_at IS NULL`,
+    )
+    .run(now, now, agentId);
+  return Number(info.changes);
+}
+
 // ─────────────── auto-wake: nudge idle agents with queued notices ───────────────
 // Piggyback delivery needs a tool call; an ended turn makes none. When notices
 // sit undelivered past a grace window and the agent has a Lanchu-spawned
@@ -2827,13 +2893,19 @@ export function agentsNeedingNudge(orgId: string): NudgeCandidate[] {
   // bug). tool.response fires on every MCP call (context-spend meter), which
   // makes it the per-call liveness signal; the sweep timer is only sampling,
   // never the decision.
+  //
+  // v3 hygiene: broadcasts never trigger a wake (informational, they expire on
+  // their own), and each undelivered set carries a nudge BUDGET — past it the
+  // sweep goes silent and the agent shows "unreachable" on the panel instead
+  // (the 2026-07-11 3-5x/hour-forever bug).
   const rows = db()
     .prepare(
       `SELECT a.id AS agent_id, a.name AS agent_name, a.terminal_ref AS terminal_ref,
               COUNT(n.id) AS queued_notices, MIN(n.created_at) AS oldest_queued_at
        FROM agent a JOIN notice n ON n.to_agent_id = a.id
        WHERE a.org_id = ? AND a.state != 'retired' AND a.terminal_ref IS NOT NULL
-         AND n.delivered_at IS NULL AND n.acked_at IS NULL AND n.created_at <= ?
+         AND n.delivered_at IS NULL AND n.acked_at IS NULL AND n.is_broadcast = 0
+         AND n.created_at <= ?
          AND NOT EXISTS (
            SELECT 1 FROM event e
            WHERE e.type = 'agent.nudged' AND e.subject_id = a.id AND e.created_at >= ?)
@@ -2841,9 +2913,12 @@ export function agentsNeedingNudge(orgId: string): NudgeCandidate[] {
        HAVING COALESCE(
          (SELECT MAX(t.created_at) FROM event t
           WHERE t.actor_agent_id = a.id AND t.type = 'tool.response'), '')
-         < MIN(n.created_at)`,
+         < MIN(n.created_at)
+       AND (SELECT COUNT(*) FROM event b
+            WHERE b.type = 'agent.nudged' AND b.subject_id = a.id
+              AND b.created_at >= MIN(n.created_at)) < ?`,
     )
-    .all(orgId, graceCutoff, cooldownCutoff) as Record<string, unknown>[];
+    .all(orgId, graceCutoff, cooldownCutoff, nudgeBudget()) as Record<string, unknown>[];
   const out: NudgeCandidate[] = [];
   for (const r of rows) {
     try {
@@ -2870,7 +2945,7 @@ export function nudgeStillNeeded(agentId: string): boolean {
   const row = db()
     .prepare(
       `SELECT MIN(created_at) AS oldest FROM notice
-       WHERE to_agent_id = ? AND delivered_at IS NULL AND acked_at IS NULL`,
+       WHERE to_agent_id = ? AND delivered_at IS NULL AND acked_at IS NULL AND is_broadcast = 0`,
     )
     .get(agentId) as { oldest: string | null } | undefined;
   if (!row?.oldest) return false; // delivered or acked meanwhile — cancel
@@ -2879,7 +2954,14 @@ export function nudgeStillNeeded(agentId: string): boolean {
       `SELECT 1 FROM event WHERE actor_agent_id = ? AND type = 'tool.response' AND created_at >= ? LIMIT 1`,
     )
     .get(agentId, row.oldest);
-  return !call;
+  if (call) return false;
+  const nudges = db()
+    .prepare(
+      `SELECT COUNT(*) AS c FROM event
+       WHERE type = 'agent.nudged' AND subject_id = ? AND created_at >= ?`,
+    )
+    .get(agentId, row.oldest) as { c: number };
+  return nudges.c < nudgeBudget();
 }
 
 /** Audit one nudge (also what the cooldown checks). */
@@ -2891,6 +2973,33 @@ export function recordNudge(orgId: string, agentId: string, queued: number): voi
     subject_id: agentId,
     data: { queued_notices: queued },
   });
+}
+
+/**
+ * Agents the sweep has GIVEN UP on: still starved (undelivered non-broadcast
+ * notices, no tool call since the oldest) with the nudge budget spent. Derived
+ * live — the flag self-clears the moment the agent acts, a teammate's notice
+ * is voided/expired, or a fresh set starts. The panel shows these instead of
+ * the sweep typing at them; the supervisor decides (focus terminal or retire).
+ */
+export function unreachableAgents(orgId: string): Set<string> {
+  const rows = db()
+    .prepare(
+      `SELECT a.id AS agent_id
+       FROM agent a JOIN notice n ON n.to_agent_id = a.id
+       WHERE a.org_id = ? AND a.state != 'retired'
+         AND n.delivered_at IS NULL AND n.acked_at IS NULL AND n.is_broadcast = 0
+       GROUP BY a.id
+       HAVING COALESCE(
+         (SELECT MAX(t.created_at) FROM event t
+          WHERE t.actor_agent_id = a.id AND t.type = 'tool.response'), '')
+         < MIN(n.created_at)
+       AND (SELECT COUNT(*) FROM event b
+            WHERE b.type = 'agent.nudged' AND b.subject_id = a.id
+              AND b.created_at >= MIN(n.created_at)) >= ?`,
+    )
+    .all(orgId, nudgeBudget()) as { agent_id: string }[];
+  return new Set(rows.map((r) => r.agent_id));
 }
 
 /** Last nudge times per agent (for the panel's "nudged" pill). */
@@ -3041,6 +3150,8 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       return { ...t, owner_state: ownerState, reserved, stale, owner_name };
     });
 
+  const nudges = lastNudges(orgId);
+  const unreachable = unreachableAgents(orgId);
   const agents: BoardAgent[] = rawAgents.map((a) => {
     if (!roleName.has(a.role_id)) roleName.set(a.role_id, getRole(a.role_id)?.name ?? null);
     const owned = tasks.filter((t) => t.owner_agent_id === a.id);
@@ -3058,6 +3169,8 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       active_task_title: activeTask?.title ?? null,
       live_transports: liveSessionCount(a.id),
       color: agentColorOf(a),
+      nudged_at: nudges.get(a.id) ?? null,
+      unreachable: unreachable.has(a.id),
     };
   });
 
