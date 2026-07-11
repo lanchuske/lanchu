@@ -57,7 +57,8 @@ export type EventType =
   | "memory.written"
   | "test.reported"
   | "tool.response"
-  | "agent.nudged";
+  | "agent.nudged"
+  | "notice.expired";
 
 export interface Org {
   id: string;

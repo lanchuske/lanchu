@@ -122,6 +122,89 @@ test("v2: a tool call BEFORE the notice does not mask starvation — idle agent 
   assert.equal(candidates[0].agent_name, "sleeper");
 });
 
+// ── v3: notice hygiene — broadcasts never wake, budgets stop the nagging ──
+
+/** Backdate rows directly (second connection, WAL): tests must not wait wall-clock. */
+async function rawDb() {
+  const { DatabaseSync } = await import("node:sqlite");
+  return new DatabaseSync(path.join(dir, "lanchu.db"));
+}
+
+test("v3: a broadcast never triggers a nudge and self-expires after the TTL", async () => {
+  const { org, sender } = setup("nudge-v3-broadcast");
+  const sleeperId = store.findAgentByName(org.id, "sleeper").id;
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "*", body: "FYI: restarting soon" });
+  await graceElapsed();
+
+  // Informational fan-out is not a wake trigger — piggyback or expiry handles it.
+  assert.equal(store.agentsNeedingNudge(org.id).length, 0, "broadcasts don't wake anyone");
+  const sweep = runNudgeSweep({ alive: () => true, nudge: () => { throw new Error("must not type for a broadcast"); } });
+  assert.deepEqual(sweep.nudged, []);
+
+  // Past the TTL the broadcast expires: acked by the system, audited.
+  const raw = await rawDb();
+  const old = new Date(Date.now() - 31 * 60_000).toISOString();
+  raw.prepare("UPDATE notice SET created_at = ? WHERE org_id = ? AND is_broadcast = 1").run(old, org.id);
+  raw.close();
+  const second = runNudgeSweep({ alive: () => true, nudge: () => true });
+  assert.ok(second.expired_broadcasts >= 1, "stale broadcast expired");
+  assert.equal(store.unackedNoticeCount(sleeperId), 0, "expiry acks the broadcast");
+  assert.ok(
+    store.listAuditEvents(org.id).some((e) => e.type === "notice.expired"),
+    "expiry is on the record",
+  );
+});
+
+test("v3: the nudge budget caps at 2 per undelivered set, then the agent shows unreachable — and self-clears when it acts", async () => {
+  const { org, sender } = setup("nudge-v3-budget");
+  const sleeperId = store.findAgentByName(org.id, "sleeper").id;
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "sleeper", body: "wake" });
+  const raw = await rawDb();
+  // The set began 10 minutes ago; nudges are backdated past the cooldown so the
+  // budget (not the cooldown) is what each next sweep decision exercises.
+  raw.prepare("UPDATE notice SET created_at = ? WHERE to_agent_id = ?")
+    .run(new Date(Date.now() - 10 * 60_000).toISOString(), sleeperId);
+
+  const first = runNudgeSweep({ alive: () => true, nudge: () => true });
+  assert.deepEqual(first.nudged, ["sleeper"], "nudge 1 of the budget");
+  raw.prepare("UPDATE event SET created_at = ? WHERE type = 'agent.nudged' AND subject_id = ?")
+    .run(new Date(Date.now() - 7 * 60_000).toISOString(), sleeperId);
+
+  const second = runNudgeSweep({ alive: () => true, nudge: () => true });
+  assert.deepEqual(second.nudged, ["sleeper"], "nudge 2 of the budget");
+  raw.prepare("UPDATE event SET created_at = ? WHERE type = 'agent.nudged' AND subject_id = ? AND created_at > ?")
+    .run(new Date(Date.now() - 6 * 60_000).toISOString(), sleeperId, new Date(Date.now() - 60_000).toISOString());
+  raw.close();
+
+  // Budget spent: the sweep goes silent and the panel takes over.
+  const third = runNudgeSweep({ alive: () => true, nudge: () => { throw new Error("budget spent — must not type"); } });
+  assert.deepEqual(third.nudged, [], "no third nudge, ever");
+  assert.ok(store.unreachableAgents(org.id).has(sleeperId), "flagged unreachable");
+  const card = store.boardSnapshot(org.id).agents.find((a) => a.id === sleeperId);
+  assert.equal(card.unreachable, true, "panel card carries the flag");
+  assert.ok(card.nudged_at, "nudged_at is wired into the board (was silently missing)");
+
+  // The flag is derived state: the agent acting (any tool call) clears it.
+  store.recordToolSpend(org.id, sleeperId, "message_list", 100);
+  assert.equal(store.unreachableAgents(org.id).has(sleeperId), false, "self-clears once the agent acts");
+});
+
+test("v3: retiring an agent voids its pending notices — nothing is addressed to the dead", async () => {
+  const { org, sender } = setup("nudge-v3-retire");
+  const sleeperId = store.findAgentByName(org.id, "sleeper").id;
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "sleeper", body: "you'll never read this" });
+  await graceElapsed();
+  assert.equal(store.agentsNeedingNudge(org.id).length, 1, "pending set exists pre-retirement");
+
+  const res = store.retireAgent(sleeperId);
+  assert.equal(res.retired, true);
+  assert.equal(store.unackedNoticeCount(sleeperId), 0, "inbox voided");
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "agent.retired");
+  assert.equal(ev.data.voided_notices, 1, "voiding is audited");
+  const sweep = runNudgeSweep({ alive: () => true, nudge: () => { throw new Error("must not type at the retired"); } });
+  assert.deepEqual(sweep.nudged, [], "retired agents are never woken");
+});
+
 test("v2: a nudge is cancelled at the last second when delivery or a tool call races the sweep", async () => {
   const { org, sender } = setup("nudge-v2-race");
   const sleeperId = store.findAgentByName(org.id, "sleeper").id;

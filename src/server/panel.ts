@@ -755,8 +755,12 @@ function renderAgents(list) {
         '</div>'
       : "";
     var reveal = a.state === "active" ? "focus terminal" : "open terminal";
-    // Auto-wake trace: show "nudged" while the last nudge is recent (10 min).
-    var nudged = a.nudged_at && (Date.now() - new Date(a.nudged_at).getTime() < 600000)
+    // Auto-wake trace: show "nudged" while the last nudge is recent (10 min);
+    // "unreachable" when the sweep spent its budget and gave up — this agent
+    // needs the supervisor (focus its terminal or retire it), not more typing.
+    var nudged = a.unreachable
+      ? '<span class="pill stale-pill" title="auto-wake gave up: nudges went unanswered and notices are still waiting — focus its terminal or retire it">unreachable</span> '
+      : a.nudged_at && (Date.now() - new Date(a.nudged_at).getTime() < 600000)
       ? '<span class="pill p-in_progress" title="auto-woken at ' + esc(a.nudged_at.slice(11, 19)) + ' — queued notices were waiting">nudged</span> '
       : "";
     var coord = COORD && COORD.agent_id === a.id

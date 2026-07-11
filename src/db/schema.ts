@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS notice (
   to_agent_id   TEXT NOT NULL REFERENCES agent(id) ON DELETE CASCADE,
   body          TEXT NOT NULL,
   ref           TEXT,
+  is_broadcast  INTEGER NOT NULL DEFAULT 0,
   created_at    TEXT NOT NULL,
   delivered_at  TEXT,
   acked_at      TEXT
