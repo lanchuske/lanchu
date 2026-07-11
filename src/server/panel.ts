@@ -166,6 +166,12 @@ const TEMPLATE = `<!doctype html>
   @keyframes dotpulse { 50% { box-shadow: 0 0 0 5px var(--ok-bg); } }
   .preslegend { color: var(--faint); font-size: 12px; margin: -6px 0 12px; }
   .preslegend .dot { margin-right: 3px; }
+  /* overview: reachable-but-not-working agents collapse into one chip row */
+  .onlinerow { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .ochip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 10px 2px 8px; border: 1px solid var(--line);
+           border-radius: 999px; background: var(--surface); cursor: pointer; }
+  .ochip:hover { border-color: var(--accent); background: var(--accent-weak); }
+  .tomb { color: var(--faint); margin-left: 3px; font-size: 11px; }
 
   .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; letter-spacing: .01em; }
   .p-available { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
@@ -388,6 +394,7 @@ const TEMPLATE = `<!doctype html>
         <div class="tiles" id="tiles"></div>
         <h2 class="sub-h2">Working now</h2>
         <div class="wnow" id="wnow"></div>
+        <div class="onlinerow" id="ov-online"></div>
         <h2 class="sub-h2">Recently shipped</h2>
         <div id="ov-shipped"></div>
         <div class="cols">
@@ -668,7 +675,7 @@ document.addEventListener("click", function (e) {
   }
   // Click anywhere on an agent card (but not on its controls) → reveal its terminal.
   if (e.target.closest && !e.target.closest("button, select, a")) {
-    var card = e.target.closest(".card[data-agent]");
+    var card = e.target.closest(".card[data-agent], .ochip[data-agent]");
     if (card) { reveal(card.getAttribute("data-agent"), card.getAttribute("data-name")); return; }
     // Click a doc card → expand/collapse its content (remembered across refreshes).
     var doc = e.target.closest(".card.doc[data-doc]");
@@ -759,18 +766,18 @@ function renderProjectsView(projects, tasks, agents) {
       : '<div class="meta"><span class="k">repo</span> <span class="hint">not captured yet</span></div>';
     var path = p.local_path ? '<div class="meta"><span class="k">path</span> <span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(shortPath(p.local_path)) + '</span></div>' : "";
     var br = Object.keys(branches).map(function (b) { return '<span class="branch">⌥ ' + esc(b) + '</span>'; }).join(" ");
-    // Which GitHub account(s) this project's contributors push as.
+    // Which GitHub account(s) this project's agents push as.
     var ghLogins = {};
     Object.keys(owners).forEach(function (id) { var a = agentById[id]; if (a && a.gh_login) ghLogins[a.gh_login] = (ghLogins[a.gh_login] || 0) + 1; });
     var ghNames = Object.keys(ghLogins);
     var gh = ghNames.length
       ? '<div class="meta"><span class="k">gh</span> ' + ghNames.map(esc).join(", ") +
         (ghNames.length === 1 && Object.keys(owners).length > 1
-          ? ' <span class="pill p-available" title="GitHub-side attribution is ambiguous — per-agent commit authors still tell them apart">' + Object.keys(owners).length + ' contributors share this account</span>'
+          ? ' <span class="pill p-available" title="GitHub-side attribution is ambiguous — per-agent commit authors still tell them apart">' + Object.keys(owners).length + ' agents push as ' + esc(ghNames[0]) + '</span>'
           : "") + '</div>'
       : "";
     return '<div class="card proj-card"><div class="top"><span class="name">' + esc(p.name) + '</span>' +
-      '<span class="meta"><b>' + pts.length + '</b> tasks · <b>' + done + '</b> done · <b>' + Object.keys(owners).length + '</b> contributors</span></div>' +
+      '<span class="meta"><b>' + pts.length + '</b> tasks · <b>' + done + '</b> done · <b>' + Object.keys(owners).length + '</b> agents</span></div>' +
       repo + path + (br ? '<div class="meta"><span class="k">branches</span> ' + br + '</div>' : "") + gh + '</div>';
   }).join("") || '<div class="empty">No projects yet. A project is a repo + its local folder, so it\\'s created from inside that folder — in your terminal, run ' + cmdSnippet(initCmd()) + ' then have an agent join (it appears here with its repo and path).</div>';
 }
@@ -1182,6 +1189,10 @@ function evRow(e) {
     subj = label
       ? ' <a class="id-link" data-kind="' + (tTitle ? "task" : "doc") + '" data-ref="' + esc(e.subject_id) + '" title="' + esc(e.subject_id) + '">' +
         esc(label.length > 46 ? label.slice(0, 46) + "…" : label) + '</a>'
+      : e.subject_agent_name
+      ? ' ' + colorChip(e.subject_agent_name) + '<span class="who" title="' + esc(e.subject_id) + '">' + esc(e.subject_agent_name) + '</span>'
+      : e.subject_memory_key
+      ? ' <span class="id" title="' + esc(e.subject_id) + '">' + esc(e.subject_memory_key) + '</span>'
       : ' <span class="id">' + esc(e.subject_id) + '</span>';
   }
   var noteRaw = e.data && e.data.note ? String(e.data.note) : "";
@@ -1192,7 +1203,7 @@ function evRow(e) {
     (long ? ' <span class="evmore">' + (open ? "less ▲" : "more ▼") + '</span>' : "");
   return '<div class="ev' + (e.outcome === "rejected" ? " rej" : "") + (long ? " clamp" : "") + '"' + (long ? ' data-ev="' + e.id + '"' : "") + '>' +
     '<span class="time">' + when + '</span>' +
-    '<span>' + (e.actor_name ? colorChip(e.actor_name) : "") + '<span class="who">' + esc(e.actor_name || "—") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
+    '<span>' + (e.actor_name ? colorChip(e.actor_name) : "") + '<span class="who"' + (e.actor_name ? "" : ' title="system event — no agent actor"') + '>' + esc(e.actor_name || "lanchu") + '</span> <span class="type">' + esc(e.type) + '</span>' + subj + note + '</span>' +
     '<span class="right">' + right + '</span></div>';
 }
 
@@ -1265,27 +1276,44 @@ function renderAudit(list) {
 // branch/worktree), the freshest slice of the audit log, and any friction
 // (conflict warnings, rejected actions) — all on one screen.
 function renderOverview(board, audit) {
-  // "Working now" means WORKING — a fresh MCP call — not merely connected;
-  // idle-online teammates stay on the Team view with their amber dot.
-  var live = board.agents.filter(function (a) { return a.presence === "working"; });
-  document.getElementById("wnow").innerHTML = live.map(function (a) {
-    var task = a.active_task_title ? (a.active_task_title.length > 76 ? a.active_task_title.slice(0, 76) + "…" : a.active_task_title) : "";
+  // "Working now" means WORKING ON SOMETHING: fresh MCP calls AND an active
+  // task. Everyone else who is reachable collapses into the Online chip row.
+  var working = board.agents.filter(function (a) { return a.presence === "working" && a.active_task_id; });
+  var online = board.agents.filter(function (a) {
+    return a.presence !== "off" && !(a.presence === "working" && a.active_task_id);
+  });
+  document.getElementById("wnow").innerHTML = working.map(function (a) {
+    var task = a.active_task_title.length > 76 ? a.active_task_title.slice(0, 76) + "…" : a.active_task_title;
     var branch = a.branch ? '<span class="branch">⌥ ' + esc(a.branch) + '</span>' : "";
     var wt = a.worktree ? '<div class="meta"><span class="k">wt</span> <span style="font-family:var(--mono);font-size:11px">' + esc(shortPath(a.worktree)) + '</span></div>' : "";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to focus its terminal">' +
       '<div class="top"><span class="name">' + presDot(a.presence) + colorChip(a.name) + esc(a.name) + '</span>' + branch + '</div>' +
-      '<div class="meta">' + (task ? '<span class="k">task</span> <span title="' + esc(a.active_task_title) + '">' + esc(task) + '</span>' : '<span class="empty-inline">no active task</span>') + '</div>' + wt + '</div>';
-  }).join("") || '<div class="empty">Nobody is working right now — agents appear here while their MCP calls are fresh.</div>';
+      '<div class="meta"><span class="k">task</span> <span title="' + esc(a.active_task_title) + '">' + esc(task) + '</span></div>' + wt + '</div>';
+  }).join("") || '<div class="empty">Nobody is working on a task right now — agents appear here while they hold one and their MCP calls are fresh.</div>';
+  document.getElementById("ov-online").innerHTML = online.length
+    ? '<span class="k" style="margin-right:6px">online</span>' + online.map(function (a) {
+        return '<span class="ochip clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="' +
+          (a.presence === "working" ? "calling tools, no task claimed" : "at the prompt — no recent calls") +
+          ' — click to focus its terminal">' + presDot(a.presence) + colorChip(a.name) + esc(a.name) + '</span>';
+      }).join(" ")
+    : "";
 
   // Momentum without leaving home: the last 8 shipped tasks, PR link prominent.
-  var shipped = board.tasks.filter(function (t) { return stageOf(t) === "done"; })
-    .sort(function (a, b) { return doneStamp(a) < doneStamp(b) ? 1 : -1; }).slice(0, 8);
+  // QA verification tasks are the gate's own instrument — the shipped feed
+  // shows the work itself, not the checks that closed it.
+  var shipped = board.tasks.filter(function (t) {
+    return stageOf(t) === "done" && !(t.parent_task_id && t.title.indexOf("QA: verify") === 0);
+  }).sort(function (a, b) { return doneStamp(a) < doneStamp(b) ? 1 : -1; }).slice(0, 8);
   document.getElementById("ov-shipped").innerHTML = shipped.map(function (t) {
     var m = (t.pr_url || "").match(/\\/pull\\/(\\d+)/);
     var pr = t.pr_url ? ' <a href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">' + (m ? "PR #" + m[1] : "PR") + '</a>' : "";
     var title = t.title.length > 96 ? t.title.slice(0, 96) + "…" : t.title;
+    var owner = t.owner_name || "—";
+    var retired = / \\(retired\\)$/.test(owner);
+    if (retired) owner = owner.replace(/ \\(retired\\)$/, "");
     return '<div class="conf ship"><span class="time">' + esc(doneStamp(t).slice(5, 16).replace("T", " ")) + '</span>' +
-      '<span class="who">' + esc(t.owner_name || "—") + '</span> <span title="' + esc(t.title) + '">' + esc(title) + '</span>' + pr + '</div>';
+      '<span class="who">' + esc(owner) + (retired ? '<span class="tomb" title="shipped by a since-retired agent">†</span>' : "") + '</span>' +
+      ' <span title="' + esc(t.title) + '">' + esc(title) + '</span>' + pr + '</div>';
   }).join("") || '<div class="empty">Nothing shipped yet — done tasks land here, newest first.</div>';
 
   var confs = audit.filter(function (e) {
@@ -1295,9 +1323,14 @@ function renderOverview(board, audit) {
     var whom = e.type === "conflict.detected" && e.data && e.data.conflicts && e.data.conflicts.length
       ? " overlaps " + esc(e.data.conflicts.map(function (c) { return c.with_agent; }).join(", "))
       : "";
+    var subj = e.subject_id
+      ? (evTaskTitles[e.subject_id]
+          ? (evTaskTitles[e.subject_id].length > 40 ? evTaskTitles[e.subject_id].slice(0, 40) + "…" : evTaskTitles[e.subject_id])
+          : e.subject_agent_name || e.subject_id)
+      : "";
     return '<div class="conf"><span class="time">' + esc((e.created_at || "").slice(11, 19)) + '</span>' +
-      '<span class="who">' + esc(e.actor_name || "—") + '</span> ' + esc(e.type) + whom +
-      (e.subject_id ? ' · <span class="id">' + esc(e.subject_id) + '</span>' : "") + '</div>';
+      '<span class="who">' + esc(e.actor_name || "lanchu") + '</span> ' + esc(e.type) + whom +
+      (subj ? ' · <span class="id" title="' + esc(e.subject_id) + '">' + esc(subj) + '</span>' : "") + '</div>';
   }).join("") || '<div class="empty">No conflicts or rejected actions in the recent log — healthy.</div>';
 }
 
