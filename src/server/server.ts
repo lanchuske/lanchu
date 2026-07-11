@@ -644,10 +644,14 @@ export function createServer(): http.Server {
         if (!orgName) return sendJson(res, 400, { error: "org required" });
         const org = store.getOrgByName(orgName);
         if (!org) return sendJson(res, 200, []);
-        const docs = store.listDocs(org.id).map((d) => ({
+        const docs = store
+          .listDocs(org.id, { includeArchived: url.searchParams.get("archived") === "1" })
+          .map((d) => ({
           id: d.id,
           title: d.title,
           category: d.category,
+          lifecycle: d.lifecycle,
+          archived_at: d.archived_at,
           content: d.content,
           created_at: d.created_at,
           updated_at: d.updated_at,
@@ -860,6 +864,16 @@ export function createServer(): http.Server {
             200,
             store.supersedeTask({ oldTaskId: body.oldTaskId, newTaskId: body.newTaskId, note: body.note, override: true }),
           );
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
+      // Docs hygiene (supervisor): soft-hide an outdated record; audited, never deleted.
+      if (url.pathname === "/doc/archive" && req.method === "POST") {
+        const body = (await readJson(req)) as { id: string; reason?: string };
+        if (!body?.id) return sendJson(res, 400, { error: "id required" });
+        try {
+          return sendJson(res, 200, store.archiveDoc({ docId: body.id, reason: body.reason }));
         } catch (err) {
           return sendJson(res, 400, { error: (err as Error).message });
         }

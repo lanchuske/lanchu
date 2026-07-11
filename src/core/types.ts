@@ -51,6 +51,7 @@ export type EventType =
   | "doc.created"
   | "doc.updated"
   | "doc.read"
+  | "doc.archived"
   | "role.updated"
   | "message.sent"
   | "session.rotated"

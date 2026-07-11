@@ -601,6 +601,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           title: d.title,
           abstract: store.docAbstract(d.content),
           category: d.category,
+          lifecycle: d.lifecycle,
           updated_at: d.updated_at,
         })),
       );
@@ -648,17 +649,29 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       title: "Create or update doc",
       description:
         "Creates or updates a shared doc (upsert by id or title). Keeps knowledge current. " +
-        "Set category to file it under the standard type: design, technical, product, backlog, bug (defaults to general).",
+        "Set category to file it under the standard type: design, technical, product, backlog, bug (defaults to general). " +
+        "Set lifecycle: 'living' for canonical docs updated in place (Vision, Roadmap, Designs), 'record' for point-in-time evidence (QA reports, incidents, feedback logs). " +
+        "Unset, it's inferred from the title — records use the Design:/QA:/Incident: naming convention with a date.",
       inputSchema: {
         id: z.string().optional(),
         title: z.string(),
         content: z.string(),
         category: z.enum(store.DOC_CATEGORIES).optional(),
+        lifecycle: z.enum(store.DOC_LIFECYCLES).optional(),
       },
     },
-    async ({ id, title, content, category }) => {
+    async ({ id, title, content, category, lifecycle }) => {
       try {
-        return text(store.upsertDoc({ orgId: ctx.orgId, agentId: ctx.agentId, id, title, content, category }));
+        const doc = store.upsertDoc({ orgId: ctx.orgId, agentId: ctx.agentId, id, title, content, category, lifecycle });
+        // Soft naming-convention nudge: never blocks, just teaches the prefixes.
+        const looksRecord = store.inferDocLifecycle(doc.title) === "record";
+        const hint =
+          doc.lifecycle === "record" && !looksRecord
+            ? "Records read best with a typed, dated title — e.g. 'QA batch 2026-07-11 …' or 'Incident: … (2026-07-11)'."
+            : doc.lifecycle === "living" && looksRecord
+              ? "This title reads like a point-in-time record (QA/Incident/dated). If it is one, set lifecycle: 'record' so it files under Records instead of the living documentation."
+              : undefined;
+        return text({ ...doc, ...(hint ? { naming_hint: hint } : {}) });
       } catch (err) {
         return fail(err);
       }

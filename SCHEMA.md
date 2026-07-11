@@ -158,6 +158,8 @@ CREATE TABLE doc (
   title               TEXT NOT NULL,
   content             TEXT NOT NULL DEFAULT '',
   category            TEXT NOT NULL DEFAULT 'general',  -- design | technical | product | backlog | bug | general
+  lifecycle           TEXT NOT NULL DEFAULT 'living',   -- living (canonical, updated in place) | record (point-in-time evidence)
+  archived_at         TEXT,                             -- audited soft-hide for outdated records; NULL = visible
   updated_at          TEXT NOT NULL,
   updated_by_agent_id TEXT REFERENCES agent(id),
   created_at          TEXT NOT NULL
@@ -203,7 +205,14 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   `agent.retired` · `task.created` · `task.claimed` · `task.released` · `task.started` ·
   `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` ·
   `task.stage_changed` · `task.bounced` · `task.archived` · `task.superseded` ·
-  `task.handoff` · `doc.created` · `doc.updated` · `scope.violation`.
+  `task.handoff` · `doc.created` · `doc.updated` · `doc.archived` · `scope.violation`.
+- **doc.lifecycle (taxonomy v2):** `living` (the org's constitution — Vision, Roadmap,
+  Designs; curated, updated in place, shown first) · `record` (immutable point-in-time
+  evidence — QA batch reports, incidents, feedback logs; dated, folded away in the
+  panel). Producers set it on `doc_update`; unset, it's inferred from the title
+  (QA/Incident/Bug/Report prefixes, feedback logs, postmortems, full dates). A
+  version-gated migration (schema v15) reclassified pre-existing docs once.
+  Records archive via `POST /doc/archive` — audited `doc.archived`, soft-hide only.
 - **Archive (terminal, soft):** `archived_at IS NOT NULL` removes the task from the
   board and every open-work query (claims, overlap checks, dependency unblocking,
   landing queue) while the row and its audit trail stay — never hard-delete.

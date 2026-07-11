@@ -76,6 +76,8 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "task", "archived_at", "TEXT");
   addColumn(db, "task", "archived_reason", "TEXT");
   addColumn(db, "task", "superseded_by_task_id", "TEXT REFERENCES task(id)");
+  addColumn(db, "doc", "lifecycle", "TEXT NOT NULL DEFAULT 'living'");
+  addColumn(db, "doc", "archived_at", "TEXT");
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }
@@ -83,6 +85,20 @@ function migrate(db: DatabaseSync): void {
   if (!row) {
     db.prepare("INSERT INTO schema_meta(version) VALUES (?)").run(SCHEMA_VERSION);
   } else if (row.version < SCHEMA_VERSION) {
+    // One-time reclassification for docs that predate the lifecycle column
+    // (Docs taxonomy v2): point-in-time evidence becomes 'record'. Version-
+    // gated so a later manual reclassification is never overwritten. Keep the
+    // patterns in sync with inferDocLifecycle in store.ts.
+    if (row.version < 15) {
+      db.exec(
+        `UPDATE doc SET lifecycle = 'record' WHERE lifecycle = 'living' AND (
+           title LIKE 'qa %' OR title LIKE 'qa:%' OR title LIKE 'incident%' OR
+           title LIKE 'bug:%' OR title LIKE 'report %' OR title LIKE 'report:%' OR
+           title LIKE '%feedback log%' OR title LIKE '%postmortem%' OR
+           title GLOB '*2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
+         )`,
+      );
+    }
     db.prepare("UPDATE schema_meta SET version = ?").run(SCHEMA_VERSION);
   }
 }

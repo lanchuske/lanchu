@@ -2813,12 +2813,43 @@ export function normalizeDocCategory(value: string | null | undefined): DocCateg
   return (DOC_CATEGORIES as readonly string[]).includes(value ?? "") ? (value as DocCategory) : "general";
 }
 
+/**
+ * Docs taxonomy v2 (task-mrgkiy7h6) — the lifecycle dimension, orthogonal to
+ * category: `living` docs are the org's constitution (Vision, Roadmap, Designs
+ * — canonical, updated in place, always few); `record` docs are immutable
+ * point-in-time evidence (QA batch reports, incidents, feedback logs). The
+ * panel shows living docs first and folds records away so nothing important
+ * drowns.
+ */
+export const DOC_LIFECYCLES = ["living", "record"] as const;
+export type DocLifecycle = (typeof DOC_LIFECYCLES)[number];
+
+export function normalizeDocLifecycle(value: string | null | undefined): DocLifecycle {
+  return (DOC_LIFECYCLES as readonly string[]).includes(value ?? "") ? (value as DocLifecycle) : "living";
+}
+
+/**
+ * Title-pattern fallback when the producer didn't say: QA/Incident/Bug/Report
+ * prefixes, feedback logs, postmortems and full-date titles are records.
+ * Mirror of the version-gated migration SQL in db.ts — keep them in sync.
+ */
+export function inferDocLifecycle(title: string): DocLifecycle {
+  const t = title.trim().toLowerCase();
+  if (/^(qa[\s:]|incident|bug:|report[\s:])/.test(t)) return "record";
+  if (/feedback log|postmortem/.test(t)) return "record";
+  if (/\b2\d{3}-\d{2}-\d{2}\b/.test(title)) return "record";
+  return "living";
+}
+
 export interface Doc {
   id: string;
   org_id: string;
   title: string;
   content: string;
   category: DocCategory;
+  lifecycle: DocLifecycle;
+  /** Audited soft-hide for outdated records — the doc stays, the view forgets it. */
+  archived_at: string | null;
   read_count: number;
   last_read_at: string | null;
   last_read_by_agent_id: string | null;
@@ -2827,19 +2858,41 @@ export interface Doc {
   created_at: string;
 }
 
-export function listDocs(orgId: string): Doc[] {
+/** Living docs first (the constitution), then records; archived hidden unless asked. */
+const DOC_ORDER = "ORDER BY CASE lifecycle WHEN 'living' THEN 0 ELSE 1 END, updated_at DESC";
+
+export function listDocs(orgId: string, opts: { includeArchived?: boolean } = {}): Doc[] {
+  const where = opts.includeArchived ? "" : "AND archived_at IS NULL";
   return db()
-    .prepare("SELECT * FROM doc WHERE org_id = ? ORDER BY updated_at DESC")
+    .prepare(`SELECT * FROM doc WHERE org_id = ? ${where} ${DOC_ORDER}`)
     .all(orgId) as unknown as Doc[];
 }
 
-export function searchDocs(orgId: string, query: string): Doc[] {
+export function searchDocs(orgId: string, query: string, opts: { includeArchived?: boolean } = {}): Doc[] {
   const like = `%${query}%`;
+  const where = opts.includeArchived ? "" : "AND archived_at IS NULL";
   return db()
     .prepare(
-      "SELECT * FROM doc WHERE org_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY updated_at DESC",
+      `SELECT * FROM doc WHERE org_id = ? AND (title LIKE ? OR content LIKE ?) ${where} ${DOC_ORDER}`,
     )
     .all(orgId, like, like) as unknown as Doc[];
+}
+
+/** Audited soft-hide (hygiene loop): outdated records leave the view, never the database. */
+export function archiveDoc(input: { docId: string; byAgentId?: string | null; reason?: string }): Doc {
+  const doc = getDoc(input.docId);
+  if (!doc) throw new Error("unknown doc");
+  if (doc.archived_at) return doc; // idempotent
+  db().prepare("UPDATE doc SET archived_at = ? WHERE id = ?").run(nowIso(), doc.id);
+  recordEvent({
+    org_id: doc.org_id,
+    type: "doc.archived",
+    actor_agent_id: input.byAgentId ?? null,
+    subject_kind: "doc",
+    subject_id: doc.id,
+    data: { title: doc.title, ...(input.reason ? { reason: input.reason } : {}) },
+  });
+  return getDoc(doc.id)!;
 }
 
 export function getDoc(docId: string): Doc | null {
@@ -2894,6 +2947,7 @@ export function upsertDoc(input: {
   title: string;
   content: string;
   category?: string;
+  lifecycle?: string;
 }): Doc {
   const now = nowIso();
   const existing =
@@ -2904,11 +2958,15 @@ export function upsertDoc(input: {
       null);
 
   if (existing) {
-    // Keep the existing category unless the caller explicitly sets a new one.
+    // Keep the existing category/lifecycle unless the caller explicitly sets new ones.
     const category = input.category !== undefined ? normalizeDocCategory(input.category) : existing.category;
+    const lifecycle =
+      input.lifecycle !== undefined ? normalizeDocLifecycle(input.lifecycle) : existing.lifecycle;
     db()
-      .prepare("UPDATE doc SET content = ?, title = ?, category = ?, updated_at = ?, updated_by_agent_id = ? WHERE id = ?")
-      .run(input.content, input.title, category, now, input.agentId, existing.id);
+      .prepare(
+        "UPDATE doc SET content = ?, title = ?, category = ?, lifecycle = ?, updated_at = ?, updated_by_agent_id = ? WHERE id = ?",
+      )
+      .run(input.content, input.title, category, lifecycle, now, input.agentId, existing.id);
     recordEvent({
       org_id: input.orgId,
       type: "doc.updated",
@@ -2922,11 +2980,14 @@ export function upsertDoc(input: {
   }
 
   const id = input.id ?? uuid();
+  // Producers say what they're writing; the title-pattern fallback catches the rest.
+  const lifecycle =
+    input.lifecycle !== undefined ? normalizeDocLifecycle(input.lifecycle) : inferDocLifecycle(input.title);
   db()
     .prepare(
-      "INSERT INTO doc(id, org_id, title, content, category, updated_at, updated_by_agent_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+      "INSERT INTO doc(id, org_id, title, content, category, lifecycle, updated_at, updated_by_agent_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
     )
-    .run(id, input.orgId, input.title, input.content, normalizeDocCategory(input.category), now, input.agentId, now);
+    .run(id, input.orgId, input.title, input.content, normalizeDocCategory(input.category), lifecycle, now, input.agentId, now);
   recordEvent({
     org_id: input.orgId,
     type: "doc.created",
