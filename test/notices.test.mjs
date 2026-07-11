@@ -117,6 +117,54 @@ test("overlapping work by a PRESENT agent yields a conflict + notice to the othe
   presence.removeLiveSession(alice.id);
 });
 
+test("repeat warnings for the same task-pair are suppressed: no duplicate notice or audit event", () => {
+  const { org, project, alice, bob } = setup("dedupe-org");
+
+  presence.addLiveSession(alice.id);
+  const aliceTask = store.createTask({
+    projectId: project.id, orgId: org.id, agentId: alice.id,
+    title: "Alice works the panel", tags: ["panel"],
+  });
+  store.claimTask({ agentId: alice.id, taskId: aliceTask.id });
+
+  const bobTask = store.createTask({
+    projectId: project.id, orgId: org.id, agentId: bob.id,
+    title: "Bob claims panel work too", tags: ["panel"],
+  });
+  const args = { orgId: org.id, agentId: bob.id, taskId: bobTask.id, tags: ["panel"] };
+
+  const first = store.warnWorkConflicts(args);
+  assert.equal(first.length, 1);
+  assert.equal(store.takeUndeliveredNotices(alice.id).length, 1, "first warning notifies alice");
+
+  // Same pair again (e.g. a retried claim): caller still sees the conflict,
+  // but alice is not pinged again.
+  const second = store.warnWorkConflicts(args);
+  assert.equal(second.length, 1, "conflict still returned to the caller");
+  assert.equal(store.takeUndeliveredNotices(alice.id).length, 0, "no duplicate notice");
+
+  presence.removeLiveSession(alice.id);
+});
+
+test("create-without-claim path (checkWorkOverlap) reports overlap without notifying anyone", () => {
+  const { org, project, alice, bob } = setup("fyi-org");
+
+  presence.addLiveSession(alice.id);
+  const aliceTask = store.createTask({
+    projectId: project.id, orgId: org.id, agentId: alice.id,
+    title: "Alice builds the server", tags: ["server"],
+  });
+  store.claimTask({ agentId: alice.id, taskId: aliceTask.id });
+
+  // Bob FILES a task on the same surface but does not claim it: informational.
+  const overlaps = store.checkWorkOverlap({ orgId: org.id, agentId: bob.id, tags: ["server"] });
+  assert.equal(overlaps.length, 1);
+  assert.equal(overlaps[0].with_agent, "alice");
+  assert.equal(store.takeUndeliveredNotices(alice.id).length, 0, "filing a task must not ping the busy agent");
+
+  presence.removeLiveSession(alice.id);
+});
+
 test("no conflict when the other agent is not present, or tags don't overlap", () => {
   const { org, project, alice, bob } = setup("quiet-org");
 
