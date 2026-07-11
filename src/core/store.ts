@@ -1405,6 +1405,16 @@ export function updateTaskStatus(input: {
   }
 
   if (effectiveStatus === "done") unblockDependents(task.project_id);
+  // Done that bypassed the gate (mode off, or work already verified): the
+  // comms gate still owes user-facing features their communication task.
+  if (
+    effectiveStatus === "done" &&
+    !gated &&
+    !isVerificationTask(task) &&
+    !isBatchVerificationTask(task)
+  ) {
+    queueCommsTask(getTask(input.taskId)!, agent.org_id);
+  }
 
   // A completed verification resolves its parent: pass → done; FAIL… → bounce.
   if (effectiveStatus === "done" && isVerificationTask(task) && task.parent_task_id) {
@@ -1651,6 +1661,8 @@ function createVerificationTask(orig: Task, orgId: string): Task {
   const id = nextTaskId();
   const now = nowIso();
   // Untagged on purpose: claimable by the qa role (or anyone, in orgs without one).
+  // The checklist replaces the old done-nudge that scrolled away with the tool
+  // result — now it's part of the verification work itself.
   db()
     .prepare(
       `INSERT INTO task(id, project_id, parent_task_id, title, status, stage, created_at, updated_at)
@@ -1660,7 +1672,9 @@ function createVerificationTask(orig: Task, orgId: string): Task {
       id,
       orig.project_id,
       orig.id,
-      `QA: verify ${orig.id} against its acceptance criteria — ${orig.title.slice(0, 120)}`,
+      `QA: verify ${orig.id} against its acceptance criteria — ${orig.title.slice(0, 120)} | ` +
+        `Checklist: (1) acceptance criteria hold; (2) docs updated for the change (doc_update); ` +
+        `(3) learnings persisted (memory_set).`,
       now,
       now,
     );
@@ -1762,6 +1776,7 @@ function flipVerifiedOriginal(
     data: { via: "qa-verification", verification: verificationId, ...(note ? { note } : {}) },
   });
   unblockDependents(parent.project_id);
+  queueCommsTask(parent, orgId); // user-facing work that just became REAL done
   if ((opts?.notifyOwner ?? true) && parent.owner_agent_id && parent.owner_agent_id !== qaAgentId) {
     insertNotice({
       orgId,
@@ -3654,6 +3669,76 @@ function noticeLandingTurn(orgId: string, projectId: string): void {
   }
 }
 
+// ───────────────────────── docs & comms gate ─────────────────────────
+// Design (task-mrg029369): user-facing features shipped with zero
+// changelog/site updates — the work was invisible to users. Product tags a
+// task `user-facing` at definition; when that task truly reaches done (QA
+// pass, or plain done with the gate off) the server queues the communication
+// work as a linked task in the distribution lane. The gate only queues the
+// WRITING — the distribution pause still governs whether anything publishes.
+
+export const USER_FACING_TAG = "user-facing";
+
+/** One comms child per original, whatever its status — the dedupe marker. */
+function commsTaskExistsFor(taskId: string): boolean {
+  return (
+    db()
+      .prepare("SELECT 1 FROM task WHERE parent_task_id = ? AND title LIKE 'Communicate %' LIMIT 1")
+      .get(taskId) !== undefined
+  );
+}
+
+/** Queue the communication task for a completed user-facing original. */
+function queueCommsTask(orig: Task, orgId: string): void {
+  if (!orig.tags.includes(USER_FACING_TAG) || commsTaskExistsFor(orig.id)) return;
+  const id = nextTaskId();
+  const now = nowIso();
+  db()
+    .prepare(
+      `INSERT INTO task(id, project_id, parent_task_id, title, status, stage, created_at, updated_at)
+       VALUES (?,?,?,?, 'available', 'build', ?, ?)`,
+    )
+    .run(
+      id,
+      orig.project_id,
+      orig.id,
+      `Communicate ${orig.id}: changelog entry (docs/changelog) + README/site section if warranted — ` +
+        `"${orig.title.slice(0, 100)}". Write the content only: the distribution pause governs publishing.`,
+      now,
+      now,
+    );
+  for (const tag of ["distribution", "docs"]) {
+    db().prepare("INSERT OR IGNORE INTO task_tag(task_id, tag) VALUES (?,?)").run(id, tag);
+  }
+  recordEvent({
+    org_id: orgId,
+    project_id: orig.project_id,
+    type: "task.created",
+    actor_agent_id: null,
+    subject_kind: "task",
+    subject_id: id,
+    data: { source: "comms-gate", ref: orig.id },
+  });
+  // Tell the distribution lane (explicit-tag roles; wildcards would make this
+  // a broadcast). Orgs without one fall back to product.
+  let targets = listAgents(orgId).filter((a) => {
+    if (a.state === "retired") return false;
+    const role = getRole(a.role_id);
+    return role !== null && !role.is_wildcard && roleCoversTags(role, ["distribution"]);
+  });
+  if (!targets.length) targets = agentsOfRole(orgId, "product");
+  for (const a of targets) {
+    insertNotice({
+      orgId,
+      kind: "system",
+      fromAgentId: null,
+      toAgentId: a.id,
+      body: `${orig.id} (user-facing) is done — ${id} queues its comms: changelog + site/README if warranted. Writing only; publishing stays paused/authorized.`,
+      ref: id,
+    });
+  }
+}
+
 // ───────────────────────── release train (pressure + checklist) ─────────────────────────
 // Design (task-mrg01wof8): merged-but-unreleased work is invisible debt —
 // v0.5.10 shipped, then PRs kept landing with no release plan while npm users
@@ -3741,6 +3826,16 @@ export function runReleaseSweep(opts?: {
         .prepare("SELECT 1 FROM task WHERE project_id = ? AND title LIKE ? LIMIT 1")
         .get(project.id, `Release train:%${marker}%`);
       if (already) continue;
+      // Release notes draft themselves from the comms gate's output: open
+      // "Communicate …" tasks plus those completed within this episode.
+      const commsIds = (
+        db()
+          .prepare(
+            `SELECT id FROM task WHERE project_id = ? AND title LIKE 'Communicate %'
+             AND (status <> 'done' OR done_at >= ?) ORDER BY created_at LIMIT 8`,
+          )
+          .all(project.id, info.oldestIso ?? nowIso()) as { id: string }[]
+      ).map((r) => r.id);
       const task = createTaskSystem({
         orgId: org.id,
         projectId: project.id,
@@ -3748,7 +3843,8 @@ export function runReleaseSweep(opts?: {
           `Release train: ship what's merged ${marker} — ${pressure.unreleased} unreleased change(s), ` +
           `oldest ${Math.round(pressure.oldest_hours)}h. Checklist: rebase/verify main green, bump patch version, ` +
           `update changelog, tag, publish to npm. NEVER auto-published — a human or explicitly authorized agent ` +
-          `runs the publish step (org rule: publishing is product/supervisor-only).`,
+          `runs the publish step (org rule: publishing is product/supervisor-only).` +
+          (commsIds.length ? ` Release notes: aggregate from ${commsIds.join(", ")}.` : ""),
         tags: ["governance", "process"],
       });
       created.push(task.id);
