@@ -343,6 +343,35 @@ async function cmdRolesAdd(): Promise<void> {
   console.log("role:", JSON.stringify(r));
 }
 
+async function cmdRolesEdit(): Promise<void> {
+  const name = positional()[2];
+  const csv = (v: string | undefined): string[] | undefined =>
+    v === undefined ? undefined : v.split(",").map((x) => x.trim()).filter(Boolean);
+  const body: Record<string, unknown> = {
+    org: await orgOf(),
+    name,
+    addTags: csv(flag("add-tags")),
+    rmTags: csv(flag("rm-tags")),
+    tags: csv(flag("tags")),
+  };
+  if (hasFlag("wildcard")) body.wildcard = true;
+  if (hasFlag("no-wildcard")) body.wildcard = false;
+  const hasChange = body.addTags || body.rmTags || body.tags || body.wildcard !== undefined;
+  if (!name || !hasChange) {
+    return console.log(
+      "usage: lanchu roles edit <name> --add-tags a,b --rm-tags c | --tags x,y | --wildcard | --no-wildcard",
+    );
+  }
+  const res = await api("/api/roles", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const r = (await res.json()) as { error?: string };
+  if (!res.ok) return console.log(`error: ${r.error ?? res.statusText}`);
+  console.log("role:", JSON.stringify(r));
+}
+
 async function cmdRules(): Promise<void> {
   const org = await orgOf();
   if (positional()[1] === "set") {
@@ -828,6 +857,7 @@ const HELP_SECTIONS: HelpSection[] = [
     rows: [
       ["lanchu roles | stats", "list roles / local stats"],
       ["lanchu roles add <name> --tags a,b", "create a role (or --wildcard)"],
+      ["lanchu roles edit <name> --add-tags a,b --rm-tags c", "edit a role's tags (--tags replaces; --wildcard/--no-wildcard)"],
       ['lanchu rules [set "<text>"]', "view / set the org's rules"],
       ['lanchu skills [add <name> --tags a,b --instructions "…"]', "skills per task type"],
       ["lanchu skills load <url|file> [--name n] [--tags a,b]", "load a reusable SKILL.md"],
@@ -942,7 +972,11 @@ async function main(): Promise<void> {
     case "projects":
       return cmdProjects();
     case "roles":
-      return positional()[1] === "add" ? cmdRolesAdd() : cmdRoles();
+      return positional()[1] === "add"
+        ? cmdRolesAdd()
+        : positional()[1] === "edit"
+          ? cmdRolesEdit()
+          : cmdRoles();
     case "rules":
       return cmdRules();
     case "skills":

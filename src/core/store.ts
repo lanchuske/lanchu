@@ -259,6 +259,58 @@ export function defineRole(
   return getRole(role.id)!;
 }
 
+/**
+ * Edit an existing role's scope: add/remove tags, replace the whole tag set,
+ * or toggle wildcard. Returns null if the role doesn't exist (editing never
+ * creates roles — that's defineRole's job). Governance surface: every change
+ * is audit-logged as role.updated with the before/after scope.
+ */
+export function updateRole(
+  orgId: string,
+  name: string,
+  opts: { addTags?: string[]; rmTags?: string[]; tags?: string[]; wildcard?: boolean },
+  actorAgentId?: string | null,
+): Role | null {
+  const row = db()
+    .prepare("SELECT id, org_id, name, is_wildcard, created_at FROM role WHERE org_id = ? AND name = ?")
+    .get(orgId, name) as
+    | { id: string; org_id: string; name: string; is_wildcard: number; created_at: string }
+    | undefined;
+  if (!row) return null;
+
+  const before = loadRole(row);
+  if (opts.tags !== undefined) {
+    db().prepare("DELETE FROM role_tag WHERE role_id = ?").run(before.id);
+    for (const tag of opts.tags) {
+      db().prepare("INSERT OR IGNORE INTO role_tag(role_id, tag) VALUES (?,?)").run(before.id, tag);
+    }
+  }
+  for (const tag of opts.addTags ?? []) {
+    db().prepare("INSERT OR IGNORE INTO role_tag(role_id, tag) VALUES (?,?)").run(before.id, tag);
+  }
+  for (const tag of opts.rmTags ?? []) {
+    db().prepare("DELETE FROM role_tag WHERE role_id = ? AND tag = ?").run(before.id, tag);
+  }
+  if (opts.wildcard !== undefined) {
+    db().prepare("UPDATE role SET is_wildcard = ? WHERE id = ?").run(opts.wildcard ? 1 : 0, before.id);
+  }
+
+  const after = getRole(before.id)!;
+  recordEvent({
+    org_id: orgId,
+    type: "role.updated",
+    actor_agent_id: actorAgentId ?? null,
+    subject_kind: "role",
+    subject_id: after.id,
+    data: {
+      role: after.name,
+      before: { wildcard: before.is_wildcard, tags: before.allowed_tags },
+      after: { wildcard: after.is_wildcard, tags: after.allowed_tags },
+    },
+  });
+  return after;
+}
+
 export function getRole(roleId: string): Role | null {
   const row = db()
     .prepare("SELECT id, org_id, name, is_wildcard, created_at FROM role WHERE id = ?")
