@@ -10,6 +10,8 @@ Governance hardening after the wake v5.1 drill.
 - Wake v5.1: typing abolished; asyncRewake long-poll push for live idle TUIs (#93).
 - Governance: retire attribution + agents can never `--force` — the 18:38Z bypass is closed and diagnosable (#94).
 - Governance: a denied `--force` leaves a trace — the attempt files the request and is audited (#96).
+- Governance: the QA verification router only picks agents that can actually pick up the work — a parked or probe-flagged agent no longer swallows real verifications (#95).
+- Wake: zombie MCP transport refcount no longer blocks park & refire — parked/crashed agents were never refired since v5.0, closed by a proactive session-forget on exit plus a ping-verified reaper backstop (#100).
 - Governance: every role covers the taxonomy implicitly — detection is everyone's job (#97).
 
 ## 0.5.13 — 2026-07-11
