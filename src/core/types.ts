@@ -61,6 +61,7 @@ export type EventType =
   | "message.sent"
   | "session.rotated"
   | "greenzone.requested"
+  | "greenzone.extended"
   | "greenzone.confirmed"
   | "greenzone.executed"
   | "greenzone.expired"

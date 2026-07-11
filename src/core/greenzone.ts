@@ -15,6 +15,23 @@ import * as store from "./store.js";
 export const GREENZONE_DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
+ * Adaptive window (task-mrg7x5je9): 45-60s windows expired before the request
+ * notice even REACHED idle agents (delivery is piggyback/wake-based), so acks
+ * raced the timeout and the confirm protocol never gathered confirmations.
+ * Two guards: a floor on the window while confirmations are required
+ * (LANCHU_GREENZONE_MIN_MS, default 120s), and one delivery-aware extension —
+ * if the deadline hits while some required agent has not RECEIVED the notice
+ * yet, the window extends once instead of executing over their heads.
+ */
+export const GREENZONE_MIN_TIMEOUT_MS = 120_000;
+
+function minTimeoutMs(): number {
+  const s = process.env.LANCHU_GREENZONE_MIN_MS;
+  const n = s ? Number.parseInt(s, 10) : GREENZONE_MIN_TIMEOUT_MS;
+  return Number.isFinite(n) && n >= 0 ? n : GREENZONE_MIN_TIMEOUT_MS;
+}
+
+/**
  * Belt-and-braces TTL past the deadline: if the arming timer ever dies without
  * executing (the 2026-07-11 orphan blocked the org's greenzones for 20+ min
  * with no way to clear it), any later touch — status read, ack, new request —
@@ -37,6 +54,10 @@ export interface GreenzoneStatus {
   /** Live agents whose confirmation is awaited (plus late voluntary confirms). */
   required: { id: string; name: string; confirmed_at: string | null }[];
   confirmed?: number;
+  /** Required agents whose request notice has not been DELIVERED yet. */
+  undelivered?: number;
+  /** Times the deadline was pushed because delivery hadn't reached everyone. */
+  extended?: number;
   executed_at?: string;
   ended_at?: string;
   timed_out?: boolean;
@@ -47,6 +68,10 @@ interface Zone {
   action: string;
   requestedAt: number;
   timeoutMs: number;
+  /** Current deadline (moves on a delivery-aware extension). */
+  deadlineAt: number;
+  /** Delivery-aware extensions used (max 1). */
+  extensions: number;
   timer: NodeJS.Timeout | null;
   required: Map<string, { name: string; confirmedAt: number | null }>;
   execute: () => void;
@@ -71,9 +96,11 @@ function statusOf(zone: Zone): GreenzoneStatus {
     state,
     action: zone.action,
     requested_at: new Date(zone.requestedAt).toISOString(),
-    deadline: new Date(zone.requestedAt + zone.timeoutMs).toISOString(),
+    deadline: new Date(zone.deadlineAt).toISOString(),
     required,
     confirmed: required.filter((r) => r.confirmed_at).length,
+    undelivered: zone.endedAt === null ? undeliveredRequired(zone).length : undefined,
+    extended: zone.extensions || undefined,
     ...(zone.endedAt
       ? {
           ended_at: new Date(zone.endedAt).toISOString(),
@@ -92,8 +119,14 @@ function statusOf(zone: Zone): GreenzoneStatus {
  */
 function maybeExpire(zone: Zone): void {
   if (zone.endedAt !== null) return;
-  if (Date.now() <= zone.requestedAt + zone.timeoutMs + expiryGraceMs()) return;
+  if (Date.now() <= zone.deadlineAt + expiryGraceMs()) return;
   endZone(zone, "expired");
+}
+
+/** Required agents whose greenzone request notice is still sitting undelivered. */
+function undeliveredRequired(zone: Zone): string[] {
+  const pending = store.undeliveredNoticeAgents(zone.orgId, "greenzone", new Date(zone.requestedAt).toISOString());
+  return [...zone.required.keys()].filter((id) => pending.has(id));
 }
 
 export function greenzoneStatus(orgId: string): GreenzoneStatus {
@@ -129,16 +162,21 @@ export function requestGreenzone(input: {
     throw new Error("a greenzone is already in progress for this org");
   }
   const action = input.action ?? "restart";
-  const timeoutMs = input.timeoutMs ?? GREENZONE_DEFAULT_TIMEOUT_MS;
   const live = store
     .listAgents(input.orgId)
     .filter((a) => a.state !== "retired" && isAgentLive(a.id) && a.id !== input.byAgentId);
+  // The floor only matters while confirmations are required — with nobody to
+  // hear the notice, any window would just delay the op.
+  const requested = input.timeoutMs ?? GREENZONE_DEFAULT_TIMEOUT_MS;
+  const timeoutMs = live.length ? Math.max(requested, minTimeoutMs()) : requested;
 
   const zone: Zone = {
     orgId: input.orgId,
     action,
     requestedAt: Date.now(),
     timeoutMs,
+    deadlineAt: Date.now() + timeoutMs,
+    extensions: 0,
     timer: null,
     required: new Map(live.map((a) => [a.id, { name: a.name, confirmedAt: null }])),
     execute: input.execute,
@@ -173,10 +211,45 @@ export function requestGreenzone(input: {
   if (!zone.required.size) {
     executeZone(zone, false);
   } else {
-    zone.timer = setTimeout(() => executeZone(zone, true), timeoutMs);
-    zone.timer.unref?.();
+    armDeadline(zone, timeoutMs);
   }
   return statusOf(zone);
+}
+
+/**
+ * Deadline handling: when the timer fires with required agents whose request
+ * notice was never even DELIVERED (piggyback hadn't reached them), executing
+ * would restart the org over agents that never got a chance to confirm — the
+ * exact race in the evidence (acks arriving after execution). Extend ONCE by
+ * the same window, audited; a second expiry executes regardless (idle agents
+ * must never block the op forever).
+ */
+function armDeadline(zone: Zone, delayMs: number): void {
+  zone.deadlineAt = Date.now() + delayMs;
+  zone.timer = setTimeout(() => onDeadline(zone), delayMs);
+  zone.timer.unref?.();
+}
+
+function onDeadline(zone: Zone): void {
+  if (zone.endedAt !== null) return;
+  const pending = undeliveredRequired(zone);
+  if (pending.length && zone.extensions < 1) {
+    zone.extensions += 1;
+    store.recordEvent({
+      org_id: zone.orgId,
+      type: "greenzone.extended",
+      subject_kind: "org",
+      subject_id: zone.orgId,
+      data: {
+        action: zone.action,
+        undelivered: pending.map((id) => zone.required.get(id)?.name ?? id),
+        extension_ms: zone.timeoutMs,
+      },
+    });
+    armDeadline(zone, zone.timeoutMs);
+    return;
+  }
+  executeZone(zone, true);
 }
 
 /** An agent confirms it reached a safe point. All confirmed → execute early. */

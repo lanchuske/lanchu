@@ -9,6 +9,8 @@ const dir = path.join(os.tmpdir(), "lanchu-greenzone-test-" + process.pid);
 fs.rmSync(dir, { recursive: true, force: true });
 process.env.LANCHU_STATE_DIR = dir;
 delete process.env.LANCHU_ACCESS_KEY;
+// Tests drive millisecond windows; disable the production 120s floor.
+process.env.LANCHU_GREENZONE_MIN_MS = "0";
 
 const store = await import("../dist/core/store.js");
 const presence = await import("../dist/core/presence.js");
@@ -268,4 +270,62 @@ test("HTTP surface: /greenzone/request opens the window and /api/greenzone repor
     void org;
     server.close();
   }
+});
+
+// ── adaptive window (task-mrg7x5je9): floor + delivery-aware extension ──
+// Evidence: 45-60s windows expired before the request notice even reached
+// idle agents (piggyback delivery), so acks raced the timeout.
+
+test("the window floor applies while confirmations are required", () => {
+  process.env.LANCHU_GREENZONE_MIN_MS = "300000"; // 5 min floor
+  try {
+    const { org, a, b } = setup("gz-floor-org");
+    const status = gz.requestGreenzone({ orgId: org.id, timeoutMs: 45_000, execute: () => {} });
+    const windowMs = new Date(status.deadline).getTime() - new Date(status.requested_at).getTime();
+    assert.ok(windowMs >= 300000, "a 45s request is floored to the configured minimum");
+    teardown(a, b);
+
+    // With nobody to confirm, the floor is pointless — immediate execution stands.
+    const empty = store.getOrCreateOrg("gz-floor-empty");
+    let executed = 0;
+    assert.equal(gz.requestGreenzone({ orgId: empty.id, timeoutMs: 10, execute: () => executed++ }).state, "done");
+    assert.equal(executed, 1);
+  } finally {
+    process.env.LANCHU_GREENZONE_MIN_MS = "0";
+    gz.resetGreenzones();
+  }
+});
+
+test("deadline with UNDELIVERED request notices extends once instead of executing over absent agents", async () => {
+  const { org, a, b } = setup("gz-extend-org");
+  let executed = 0;
+  gz.requestGreenzone({ orgId: org.id, timeoutMs: 60, execute: () => executed++ });
+  // Nobody takes their notices: delivery never happened.
+  await new Promise((r) => setTimeout(r, 90));
+  assert.equal(executed, 0, "first deadline extends rather than executes");
+  const mid = gz.greenzoneStatus(org.id);
+  assert.equal(mid.state, "requested");
+  assert.equal(mid.extended, 1);
+  assert.ok(mid.undelivered >= 1, "status shows who never heard the request");
+  const ext = store.listAuditEvents(org.id).find((e) => e.type === "greenzone.extended");
+  assert.ok(ext, "the extension is audited");
+  assert.ok(ext.data.undelivered.length >= 1);
+
+  await new Promise((r) => setTimeout(r, 90));
+  assert.equal(executed, 1, "the second deadline executes regardless — idle agents never block forever");
+  assert.equal(gz.greenzoneStatus(org.id).timed_out, true);
+  teardown(a, b);
+});
+
+test("deadline with everyone DELIVERED executes at the first deadline — no pointless extension", async () => {
+  const { org, a, b } = setup("gz-nodeliver-ext-org");
+  let executed = 0;
+  gz.requestGreenzone({ orgId: org.id, timeoutMs: 60, execute: () => executed++ });
+  // Both agents receive (piggyback) their notices but never confirm.
+  store.takeUndeliveredNotices(a.id);
+  store.takeUndeliveredNotices(b.id);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(executed, 1, "delivered-but-silent agents don't earn an extension");
+  assert.equal(gz.greenzoneStatus(org.id).extended, undefined);
+  teardown(a, b);
 });
