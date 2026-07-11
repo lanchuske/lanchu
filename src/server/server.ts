@@ -11,7 +11,7 @@ import { greenzoneStatus, requestGreenzone } from "../core/greenzone.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
-import { ensureAgentWorktree, removeAgentWorktree } from "../core/worktree.js";
+import { ensureAgentWorktree, ghLogin, gitAuthorIn, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
 import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { clearContexts, getContext, putContext } from "./context.js";
@@ -205,7 +205,7 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
   let worktree: string | null = null;
   let branch: string | null = null;
   if (body.isolate && body.cwd && fs.existsSync(body.cwd)) {
-    const wt = ensureAgentWorktree(body.cwd, agentName);
+    const wt = ensureAgentWorktree(body.cwd, agentName, org.name);
     if (wt) {
       cwd = wt.path;
       worktree = wt.path;
@@ -218,6 +218,10 @@ function handleSession(req: http.IncomingMessage, body: SessionRequest, res: htt
   // workspace then points at its isolated worktree when one was created.
   store.captureWorkspace(project.id, agentId, body.cwd);
   if (worktree) store.setAgentWorkspace(agentId, { cwd, branch, worktree });
+  // GitHub identity, Phase 1: what this checkout will push as (read-only).
+  if (cwd && fs.existsSync(cwd)) {
+    store.setAgentGitIdentity(agentId, { ...gitAuthorIn(cwd), ghLogin: ghLogin() });
+  }
   putContext({
     token,
     agentId,
@@ -269,12 +273,13 @@ function revealAgent(agentId: string): {
     // Its worktree was pruned (or the dir moved) — recreate the isolated
     // worktree from the project's main checkout instead of failing the spawn.
     const base = project?.local_path && fs.existsSync(project.local_path) ? project.local_path : process.cwd();
-    const wt = ensureAgentWorktree(base, agent.name);
+    const wt = ensureAgentWorktree(base, agent.name, org?.name);
     cwd = wt?.path ?? base;
     if (wt) store.setAgentWorkspace(agent.id, { cwd: wt.path, branch: wt.branch, worktree: wt.path });
   }
   const { token } = store.openSession(agent.id);
   if (project) store.captureWorkspace(project.id, agent.id, cwd);
+  if (fs.existsSync(cwd)) store.setAgentGitIdentity(agent.id, { ...gitAuthorIn(cwd), ghLogin: ghLogin() });
   putContext({
     token,
     agentId: agent.id,

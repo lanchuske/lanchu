@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS agent (
   worktree         TEXT,
   terminal_ref     TEXT,
   color_slot       INTEGER,
+  git_author_name  TEXT,
+  git_author_email TEXT,
+  gh_login         TEXT,
   created_at       TEXT NOT NULL,
   retired_at       TEXT,
   UNIQUE (org_id, name)

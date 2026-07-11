@@ -731,13 +731,16 @@ function loadAgent(row: Record<string, unknown>): Agent {
     branch: (row.branch as string) ?? null,
     worktree: (row.worktree as string) ?? null,
     color_slot: (row.color_slot as number) ?? null,
+    git_author_name: (row.git_author_name as string) ?? null,
+    git_author_email: (row.git_author_email as string) ?? null,
+    gh_login: (row.gh_login as string) ?? null,
     created_at: row.created_at as string,
     retired_at: (row.retired_at as string) ?? null,
   };
 }
 
 const AGENT_COLS =
-  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, created_at, retired_at";
+  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, git_author_name, git_author_email, gh_login, created_at, retired_at";
 
 /**
  * Per-org color de-collision (bug from #22: 'qa-gate' and 'product' hashed to
@@ -3103,4 +3106,18 @@ export function testRegistry(orgId: string): TestSuiteView[] {
       last_ran_at: ranAts[ranAts.length - 1] ?? null,
     };
   });
+}
+
+/**
+ * GitHub-identity Phase 1 capture: which git author + GitHub account this
+ * agent's checkout will push as. Read-only observation — public login and
+ * author strings only, never credentials.
+ */
+export function setAgentGitIdentity(
+  agentId: string,
+  identity: { name: string | null; email: string | null; ghLogin: string | null },
+): void {
+  db()
+    .prepare("UPDATE agent SET git_author_name = ?, git_author_email = ?, gh_login = ? WHERE id = ?")
+    .run(identity.name, identity.email, identity.ghLogin, agentId);
 }

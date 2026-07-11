@@ -7,7 +7,7 @@ import { ackGreenzone, greenzoneStatus, isGreenzoneActive } from "../core/greenz
 import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { QuotaError, ScopeError } from "../core/types.js";
-import { ensureAgentWorktree } from "../core/worktree.js";
+import { ensureAgentWorktree, ghLogin, gitAuthorIn } from "../core/worktree.js";
 import { spawnTerminal, tileTerminals } from "./cockpit.js";
 import { putContext, type SessionContext } from "./context.js";
 
@@ -798,9 +798,11 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         store.captureWorkspace(ctx.projectId, agent.id, ctx.cwd);
         // Isolation: dedicated worktree + branch for the new teammate (falls back
         // to the shared directory when this isn't a git repo).
-        const wt = isolate && ctx.cwd ? ensureAgentWorktree(ctx.cwd, agent.name) : null;
+        const wt = isolate && ctx.cwd ? ensureAgentWorktree(ctx.cwd, agent.name, ctx.orgName) : null;
         const cwd = wt?.path ?? ctx.cwd ?? process.cwd();
         if (wt) store.setAgentWorkspace(agent.id, { cwd: wt.path, branch: wt.branch, worktree: wt.path });
+        // GitHub identity, Phase 1: what the newborn's checkout will push as.
+        store.setAgentGitIdentity(agent.id, { ...gitAuthorIn(cwd), ghLogin: ghLogin() });
         putContext({
           token, agentId: agent.id, agentName: agent.name,
           orgId: ctx.orgId, orgName: ctx.orgName, projectId: ctx.projectId, projectName: ctx.projectName, cwd,

@@ -78,7 +78,7 @@ function excludeWorktreesDir(repoRoot: string): void {
  * is not inside a git repository or git itself fails — callers fall back to
  * the shared directory, which is the pre-isolation behavior.
  */
-export function ensureAgentWorktree(dir: string, agentName: string): AgentWorktree | null {
+export function ensureAgentWorktree(dir: string, agentName: string, orgName?: string): AgentWorktree | null {
   const top = git(dir, ["rev-parse", "--show-toplevel"]);
   if (!top.ok || !top.out) return null;
   // Nested isolation guard: spawning from inside an agent worktree must anchor
@@ -94,6 +94,7 @@ export function ensureAgentWorktree(dir: string, agentName: string): AgentWorktr
   // Reattach: the worktree is already there and still a valid checkout.
   if (fs.existsSync(wtPath) && git(wtPath, ["rev-parse", "--is-inside-work-tree"]).ok) {
     const cur = git(wtPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    setWorktreeAuthor(repoRoot, wtPath, agentName, orgName); // idempotent — upgrades pre-identity worktrees
     return { path: wtPath, branch: cur.ok && cur.out ? cur.out : branch, created: false };
   }
 
@@ -107,7 +108,47 @@ export function ensureAgentWorktree(dir: string, agentName: string): AgentWorktr
     ? git(repoRoot, ["worktree", "add", wtPath, branch])
     : git(repoRoot, ["worktree", "add", wtPath, "-b", branch, baseRef(repoRoot)]);
   if (!add.ok) return null;
+  setWorktreeAuthor(repoRoot, wtPath, agentName, orgName);
   return { path: wtPath, branch, created: true };
+}
+
+/**
+ * GitHub-identity Phase 2: per-worktree git author, so commits name WHICH
+ * agent wrote them even when every agent pushes from one shared account.
+ * Uses git's per-worktree config (extensions.worktreeConfig) so agents never
+ * clobber each other's author or the human's global identity.
+ */
+function setWorktreeAuthor(repoRoot: string, wtPath: string, agentName: string, orgName?: string): void {
+  git(repoRoot, ["config", "extensions.worktreeConfig", "true"]);
+  git(wtPath, ["config", "--worktree", "user.name", `${agentName} (lanchu)`]);
+  git(wtPath, ["config", "--worktree", "user.email", `${slugify(agentName)}@agents.${slugify(orgName ?? "org")}.lanchu`]);
+}
+
+/** Effective git author in a directory (worktree-local config included). Read-only. */
+export function gitAuthorIn(dir: string): { name: string | null; email: string | null } {
+  const name = git(dir, ["config", "user.name"]);
+  const email = git(dir, ["config", "user.email"]);
+  return {
+    name: name.ok && name.out ? name.out : null,
+    email: email.ok && email.out ? email.out : null,
+  };
+}
+
+/**
+ * GitHub-identity Phase 1: best-effort active GitHub account via the gh CLI,
+ * cached for the server's lifetime (the machine holds one auth). Read-only —
+ * only the public login ever leaves this function, never a credential.
+ */
+let ghLoginCache: { value: string | null } | null = null;
+export function ghLogin(): string | null {
+  if (ghLoginCache) return ghLoginCache.value;
+  try {
+    const r = spawnSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8", timeout: 4000 });
+    ghLoginCache = { value: r.status === 0 ? (r.stdout ?? "").trim() || null : null };
+  } catch {
+    ghLoginCache = { value: null };
+  }
+  return ghLoginCache.value;
 }
 
 /**

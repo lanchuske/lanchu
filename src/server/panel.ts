@@ -691,9 +691,19 @@ function renderProjectsView(projects, tasks, agents) {
       : '<div class="meta"><span class="k">repo</span> <span class="hint">not captured yet</span></div>';
     var path = p.local_path ? '<div class="meta"><span class="k">path</span> <span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(shortPath(p.local_path)) + '</span></div>' : "";
     var br = Object.keys(branches).map(function (b) { return '<span class="branch">⌥ ' + esc(b) + '</span>'; }).join(" ");
+    // Which GitHub account(s) this project's contributors push as.
+    var ghLogins = {};
+    Object.keys(owners).forEach(function (id) { var a = agentById[id]; if (a && a.gh_login) ghLogins[a.gh_login] = (ghLogins[a.gh_login] || 0) + 1; });
+    var ghNames = Object.keys(ghLogins);
+    var gh = ghNames.length
+      ? '<div class="meta"><span class="k">gh</span> ' + ghNames.map(esc).join(", ") +
+        (ghNames.length === 1 && Object.keys(owners).length > 1
+          ? ' <span class="pill p-available" title="GitHub-side attribution is ambiguous — per-agent commit authors still tell them apart">' + Object.keys(owners).length + ' contributors share this account</span>'
+          : "") + '</div>'
+      : "";
     return '<div class="card proj-card"><div class="top"><span class="name">' + esc(p.name) + '</span>' +
       '<span class="meta"><b>' + pts.length + '</b> tasks · <b>' + done + '</b> done · <b>' + Object.keys(owners).length + '</b> contributors</span></div>' +
-      repo + path + (br ? '<div class="meta"><span class="k">branches</span> ' + br + '</div>' : "") + '</div>';
+      repo + path + (br ? '<div class="meta"><span class="k">branches</span> ' + br + '</div>' : "") + gh + '</div>';
   }).join("") || '<div class="empty">No projects yet. A project is a repo + its local folder, so it\\'s created from inside that folder — in your terminal, run ' + cmdSnippet(initCmd()) + ' then have an agent join (it appears here with its repo and path).</div>';
 }
 
@@ -719,11 +729,24 @@ function colorChip(name) {
 
 function renderAgents(list) {
   document.getElementById("c-agents").textContent = list.length;
+  // GitHub-side attribution is ambiguous when several agents push as one
+  // account — count logins so shared identities get a visible chip.
+  var ghCounts = {};
+  list.forEach(function (a) { if (a.gh_login) ghCounts[a.gh_login] = (ghCounts[a.gh_login] || 0) + 1; });
   document.getElementById("agents").innerHTML = list.map(function (a) {
     var branch = a.branch ? ' · <span class="branch">⌥ ' + esc(a.branch) + '</span>' : "";
     var wt = a.worktree ? '<div class="meta"><span class="k">wt</span> <span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(shortPath(a.worktree)) + '</span></div>' : "";
     var taskTitle = a.active_task_title ? (a.active_task_title.length > 90 ? a.active_task_title.slice(0, 90) + "…" : a.active_task_title) : "";
     var task = a.active_task_id ? '<div class="meta"><span class="k">task</span> <span title="' + esc(a.active_task_title || "") + '">' + esc(taskTitle) + '</span></div>' : "";
+    var gh = a.gh_login || a.git_author_name
+      ? '<div class="meta">' +
+        (a.gh_login
+          ? '<span class="k">gh</span> ' + esc(a.gh_login) +
+            (ghCounts[a.gh_login] > 1 ? ' <span class="pill p-available" title="GitHub sees one author for these agents — commit authors still tell them apart">' + ghCounts[a.gh_login] + ' agents share this account</span>' : "")
+          : '<span class="k">gh</span> <span class="hint">not detected</span>') +
+        (a.git_author_name ? ' · <span class="k">author</span> ' + esc(a.git_author_name) : "") +
+        '</div>'
+      : "";
     var reveal = a.state === "active" ? "focus terminal" : "open terminal";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to ' + reveal + '">' +
       '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
@@ -734,6 +757,7 @@ function renderAgents(list) {
       (a.live_transports > 1 ? ' <span class="pill stale-pill" title="two terminals sharing one identity causes misattribution">' + a.live_transports + ' transports</span>' : "") +
       '</div>' + wt + task +
       (a.objective ? '<div class="meta"><span class="k">obj</span> ' + esc(a.objective) + '</div>' : "") +
+      gh +
       '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") + '</div>' +
       '<div class="hint">' + (a.state === "active" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
       '<div class="meta" style="color:var(--bad)" id="retire-msg-' + a.id + '"></div></div>';
