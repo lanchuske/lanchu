@@ -629,6 +629,32 @@ async function cmdStop(): Promise<void> {
   console.log("server stopped");
 }
 
+/** Shell completion: print a script, list dynamic values (hidden), or install. */
+async function cmdCompletion(): Promise<void> {
+  const { completionValues, detectShell, installCompletion, scriptFor } = await import("./completion.js");
+  const sub = positional()[1];
+  if (sub === "values") {
+    // Hidden hook the generated scripts call; silent and fast by design.
+    const values = await completionValues(positional()[2] as never);
+    if (values.length) console.log(values.join("\n"));
+    return;
+  }
+  if (sub === "install") {
+    const forced = flag("shell") as "bash" | "zsh" | "fish" | undefined;
+    const r = installCompletion(forced);
+    console.log(r.installed ? `✓ completion wired for ${r.shell} → ${r.file}` : `already installed for ${r.shell} (${r.file})`);
+    console.log(r.shell === "fish" ? r.ghostHint : `restart your shell (or: source ${r.file}) to activate Tab completion.`);
+    if (r.shell !== "fish") console.log(r.ghostHint);
+    return;
+  }
+  const shell = sub ?? detectShell();
+  const script = shell ? scriptFor(shell) : null;
+  if (!script) {
+    return console.log("usage: lanchu completion [bash|zsh|fish]   ·   lanchu completion install [--shell bash|zsh|fish]");
+  }
+  process.stdout.write(script);
+}
+
 /**
  * Restart the server. --greenzone opens a coordinated maintenance window first:
  * live agents are noticed to reach a safe point and confirm (greenzone_ack);
@@ -1106,6 +1132,7 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu serve", "run the local server (foreground)"],
       ["lanchu stop", "stop the background server"],
       ["lanchu restart [--greenzone] [--timeout <s>]", "restart the server; --greenzone coordinates it (agents confirm a safe point first)"],
+      ["lanchu completion [bash|zsh|fish] | install", "shell Tab-completion (commands, flags, live agent/task/org names); install wires your shell rc"],
       ["lanchu panel", "open the panel in your browser"],
       ["lanchu statusline", "status line for Claude Code (setup shown when run)"],
       ["lanchu doctor", "environment checks"],
@@ -1226,6 +1253,8 @@ async function main(): Promise<void> {
       return cmdStop();
     case "restart":
       return cmdRestart();
+    case "completion":
+      return cmdCompletion();
     case "spawn":
       return cmdSpawn();
     case "tile":
