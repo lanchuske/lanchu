@@ -749,8 +749,11 @@ const AGENT_COLS =
  * created_at order so assignments never depend on read order.
  */
 export function ensureColorSlots(orgId: string): void {
+  // Tie-break equal timestamps by rowid (true insertion order) — created_at
+  // has millisecond grain, and a random-uuid tie-break would make backfill
+  // order (and thus colors) platform-dependent.
   const missing = db()
-    .prepare("SELECT id, name FROM agent WHERE org_id = ? AND color_slot IS NULL ORDER BY created_at, id")
+    .prepare("SELECT id, name FROM agent WHERE org_id = ? AND color_slot IS NULL ORDER BY created_at, rowid")
     .all(orgId) as { id: string; name: string }[];
   if (!missing.length) return;
   for (const a of missing) {
