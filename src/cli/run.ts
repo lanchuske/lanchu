@@ -470,6 +470,14 @@ async function cmdRules(): Promise<void> {
   }
 }
 
+/** Kill every open session token in the org (after an exposure); agents re-register for fresh ones. */
+async function cmdRotateTokens(): Promise<void> {
+  const org = await orgOf();
+  const r = (await post("/tokens/rotate", { org })) as { agents: number; sessions: number };
+  console.log(`rotated: ended ${r.sessions} open session(s) across ${r.agents} agent(s) in '${org}'`);
+  console.log("agents re-register through the launcher on their next connect (lanchu spawn / panel reveal).");
+}
+
 async function cmdSkills(): Promise<void> {
   const org = await orgOf();
   const sub = positional()[1];
@@ -996,6 +1004,7 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu roles edit <name> --add-tags a,b --rm-tags c", "edit a role's tags (--tags replaces; --wildcard/--no-wildcard)"],
       ["lanchu roles edit <name> --quota <tokens> | --no-quota", "set/clear the role's self-reported token budget"],
       ['lanchu rules [set "<text>"]', "view / set the org's rules"],
+      ["lanchu rotate-tokens", "end every open session token (run after a token exposure)"],
       ['lanchu skills [add <name> --tags a,b --instructions "…"]', "skills per task type"],
       ["lanchu skills load <url|file> [--name n] [--tags a,b]", "load a reusable SKILL.md"],
       ["lanchu skills reload <id> | rm <id>", "re-fetch a loaded skill / remove one"],
@@ -1116,6 +1125,8 @@ async function main(): Promise<void> {
           : cmdRoles();
     case "rules":
       return cmdRules();
+    case "rotate-tokens":
+      return cmdRotateTokens();
     case "skills":
       return cmdSkills();
     case "webhooks":

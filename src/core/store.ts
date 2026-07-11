@@ -836,6 +836,31 @@ export function agentIdForToken(token: string): string | null {
   return row?.agent_id ?? null;
 }
 
+/**
+ * Rotate an org's session tokens: end every open session so their tokens stop
+ * authenticating (agentIdForToken only matches open rows). Run after a token
+ * exposure; agents re-register through the launcher and get fresh tokens.
+ * Callers holding an in-memory context cache must clear it too.
+ */
+export function rotateOrgSessions(orgId: string): { agents: number; sessions: number } {
+  const rows = db()
+    .prepare(
+      `SELECT s.id, s.agent_id FROM session s JOIN agent a ON a.id = s.agent_id
+       WHERE a.org_id = ? AND s.ended_at IS NULL`,
+    )
+    .all(orgId) as { id: string; agent_id: string }[];
+  const agents = new Set(rows.map((r) => r.agent_id));
+  for (const agentId of agents) endSessionsForAgent(agentId);
+  recordEvent({
+    org_id: orgId,
+    type: "session.rotated",
+    subject_kind: "org",
+    subject_id: orgId,
+    data: { sessions: rows.length, agents: agents.size },
+  });
+  return { agents: agents.size, sessions: rows.length };
+}
+
 export function endSessionsForAgent(agentId: string): void {
   db()
     .prepare("UPDATE session SET ended_at = ? WHERE agent_id = ? AND ended_at IS NULL")

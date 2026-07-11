@@ -39,6 +39,7 @@ export type EventType =
   | "doc.read"
   | "role.updated"
   | "message.sent"
+  | "session.rotated"
   | "conflict.detected"
   | "agent.duplicate_session"
   | "scope.violation"
