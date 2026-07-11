@@ -33,6 +33,7 @@ export type EventType =
   | "task.completed"
   | "task.blocked"
   | "task.reassigned"
+  | "task.rejected"
   | "task.handoff"
   | "doc.created"
   | "doc.updated"
@@ -89,6 +90,22 @@ export interface Agent {
   retired_at: string | null;
 }
 
+/** Why an agent bounced a task back to definition instead of guessing. */
+export type RejectReason =
+  | "out_of_scope"
+  | "underspecified"
+  | "missing_docs"
+  | "blocked_dependency"
+  | "other";
+
+export interface TaskRejection {
+  reason: RejectReason;
+  note: string;
+  /** Display name of the agent who rejected it. */
+  by: string;
+  at: string;
+}
+
 export interface Task {
   id: string;
   project_id: string;
@@ -105,6 +122,9 @@ export interface Task {
   claimed_at: string | null;
   updated_at: string | null;
   done_at: string | null;
+  /** How many times agents bounced this task back to definition. 2+ = needs definition. */
+  rejection_count: number;
+  last_rejection: TaskRejection | null;
 }
 
 export interface LanchuEvent {

@@ -17,6 +17,7 @@ import {
   type MemoryEntry,
   type MemoryScope,
   type MemorySource,
+  type RejectReason,
   type Role,
   type Task,
   type TaskStage,
@@ -1053,11 +1054,15 @@ function loadTask(row: Record<string, unknown>): Task {
     claimed_at: (row.claimed_at as string) ?? null,
     updated_at: (row.updated_at as string) ?? null,
     done_at: (row.done_at as string) ?? null,
+    rejection_count: Number(row.rejection_count ?? 0),
+    last_rejection: row.last_rejection
+      ? (JSON.parse(row.last_rejection as string) as Task["last_rejection"])
+      : null,
   };
 }
 
 const TASK_COLS =
-  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at";
+  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection";
 
 export function getTask(taskId: string): Task | null {
   const row = db().prepare(`SELECT ${TASK_COLS} FROM task WHERE id = ?`).get(taskId) as
@@ -1320,6 +1325,76 @@ export function releaseTask(input: {
     data: input.override ? { override: true } : null,
   });
   return getTask(input.taskId)!;
+}
+
+/**
+ * Reject a task: the agent bounces it back to definition with an explicit
+ * reason instead of guessing. Complements the hard scope block on claim —
+ * this is the quality loop for bad definitions, on the record like everything
+ * else (task.rejected event + notices to the creator and the product role).
+ * 2+ rejections flag the task "needs definition" on the panel.
+ */
+export function rejectTask(input: {
+  agentId: string;
+  taskId: string;
+  reason: RejectReason;
+  note: string;
+}): Task {
+  const task = getTask(input.taskId);
+  const me = getAgent(input.agentId);
+  if (!task || !me) throw new Error("unknown task or agent");
+  if (task.owner_agent_id && task.owner_agent_id !== input.agentId) {
+    throw new ScopeError(`${task.id} is owned by another agent; only its owner can reject it.`);
+  }
+  if (task.status === "done") throw new Error(`${task.id} is done; nothing to reject.`);
+
+  const now = nowIso();
+  const rejection = { reason: input.reason, note: input.note, by: me.name, at: now };
+  db()
+    .prepare(
+      `UPDATE task SET status = 'available', owner_agent_id = NULL, stage = 'definition',
+                       rejection_count = rejection_count + 1, last_rejection = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(JSON.stringify(rejection), now, input.taskId);
+  const updated = getTask(input.taskId)!;
+
+  recordEvent({
+    org_id: me.org_id,
+    project_id: task.project_id,
+    type: "task.rejected",
+    actor_agent_id: input.agentId,
+    subject_kind: "task",
+    subject_id: task.id,
+    data: { reason: input.reason, note: input.note, rejections: updated.rejection_count },
+  });
+  touchActivity(input.agentId, `rejected ${task.id} (${input.reason})`);
+
+  // Tell the people who can fix the definition: the creator and the product
+  // role. One notice each, never the rejecter, never a retired agent.
+  const recipients = new Map<string, Agent>();
+  if (task.created_by_agent_id) {
+    const creator = getAgent(task.created_by_agent_id);
+    if (creator) recipients.set(creator.id, creator);
+  }
+  for (const a of listAgents(me.org_id)) {
+    if (getRole(a.role_id)?.name === "product") recipients.set(a.id, a);
+  }
+  const needsDefinition = updated.rejection_count >= 2 ? ` This is rejection #${updated.rejection_count} — it needs definition before anyone retries.` : "";
+  for (const r of recipients.values()) {
+    if (r.id === input.agentId || r.state === "retired") continue;
+    insertNotice({
+      orgId: me.org_id,
+      kind: "message",
+      fromAgentId: input.agentId,
+      toAgentId: r.id,
+      body:
+        `${me.name} rejected ${task.id} (${input.reason.replace(/_/g, " ")}): ${input.note} ` +
+        `Bounced to the definition lane.${needsDefinition}`,
+      ref: task.id,
+    });
+  }
+  return updated;
 }
 
 export function reassignTask(input: {

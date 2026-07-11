@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -84,7 +84,9 @@ CREATE TABLE IF NOT EXISTS task (
   created_at          TEXT NOT NULL,
   claimed_at          TEXT,
   updated_at          TEXT NOT NULL,
-  done_at             TEXT
+  done_at             TEXT,
+  rejection_count     INTEGER NOT NULL DEFAULT 0,
+  last_rejection      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_tag (
