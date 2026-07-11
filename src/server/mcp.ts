@@ -449,14 +449,16 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     {
       title: "Spawn a new agent",
       description:
-        "Creates a new teammate in this org and opens a terminal running Claude, already joined to Lanchu, that will ask the user which task to do. Use when the user asks to add/create a new agent.",
-      inputSchema: { objective: z.string().optional(), role: z.string().optional() },
+        "Creates a new teammate in this org and opens a terminal running Claude, already joined to Lanchu, that will ask the user which task to do. Use when the user asks to add/create a new agent. Pass `name` for a short, readable agent name; if omitted it defaults to the role name (e.g. \"product\"), not a long slug of the objective.",
+      inputSchema: { objective: z.string().optional(), role: z.string().optional(), name: z.string().optional() },
     },
-    async ({ objective, role }) => {
+    async ({ objective, role, name }) => {
       try {
         const roleName = role || "generalist";
         const roleObj = store.getOrCreateRole(ctx.orgId, roleName, roleName === "generalist" ? { wildcard: true } : {});
-        const agent = store.createAgent({ orgId: ctx.orgId, roleId: roleObj.id, objective });
+        // Prefer an explicit name; otherwise a tidy role-based default beats a
+        // 40-char slug of the objective. Uniqueness (-2, -3…) is handled downstream.
+        const agent = store.createAgent({ orgId: ctx.orgId, roleId: roleObj.id, objective, name: name || roleName });
         const { token } = store.openSession(agent.id);
         store.captureWorkspace(ctx.projectId, agent.id, ctx.cwd);
         putContext({

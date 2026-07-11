@@ -309,14 +309,17 @@ export function createAgent(input: {
   name?: string;
 }): Agent {
   const id = uuid();
-  let name = input.name ?? slugify(input.objective ?? "agent");
-  // Ensures name uniqueness per org.
+  // Slugify whatever base we were given (explicit name or objective) so an
+  // explicit name is normalized the same way, then suffix THAT base for
+  // uniqueness — not a fresh slug of the objective.
+  const base = slugify(input.name ?? input.objective ?? "agent");
+  let name = base;
   let suffix = 1;
   while (
     db().prepare("SELECT 1 FROM agent WHERE org_id = ? AND name = ?").get(input.orgId, name)
   ) {
     suffix += 1;
-    name = `${slugify(input.objective ?? "agent")}-${suffix}`;
+    name = `${base}-${suffix}`;
   }
 
   db()
