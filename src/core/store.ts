@@ -315,6 +315,28 @@ export function memorySet(input: {
   return entry;
 }
 
+/**
+ * Supervisor delete: the entry goes, the record of it stays — the audit event
+ * snapshots key/scope/value so a deletion is always accountable.
+ */
+export function memoryDelete(orgId: string, id: string, actorAgentId?: string | null): boolean {
+  const row = db()
+    .prepare(`SELECT ${MEMORY_COLS} FROM memory WHERE id = ? AND org_id = ?`)
+    .get(id, orgId) as Record<string, unknown> | undefined;
+  if (!row) return false;
+  const entry = loadMemory(row);
+  db().prepare("DELETE FROM memory WHERE id = ?").run(id);
+  recordEvent({
+    org_id: orgId,
+    type: "memory.deleted",
+    actor_agent_id: actorAgentId ?? null,
+    subject_kind: "memory",
+    subject_id: entry.id,
+    data: { scope: entry.scope, key: entry.key, value: entry.value.slice(0, 200) },
+  });
+  return true;
+}
+
 /** Query memories, optionally narrowed by scope/subject and a substring. */
 export function memoryGet(
   orgId: string,

@@ -172,6 +172,14 @@ const TEMPLATE = `<!doctype html>
            border-radius: 999px; background: var(--surface); cursor: pointer; }
   .ochip:hover { border-color: var(--accent); background: var(--accent-weak); }
   .tomb { color: var(--faint); margin-left: 3px; font-size: 11px; }
+  /* memory view: filter bar + provenance distinction (distilled = machine-derived) */
+  .membar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .membar .gwin { display: inline-flex; }
+  .membar input { font: inherit; font-size: 12.5px; padding: 5px 10px; border: 1px solid var(--line);
+                  border-radius: 8px; background: var(--surface); color: var(--fg); min-width: 230px; }
+  .membar input:focus { outline: none; border-color: var(--accent); }
+  .card.mem-distilled { box-shadow: var(--shadow), inset 2px 0 0 var(--info); }
+  .memmore { color: var(--accent); font-size: 11px; font-weight: 600; cursor: pointer; }
 
   .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; letter-spacing: .01em; }
   .p-available { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
@@ -484,7 +492,17 @@ const TEMPLATE = `<!doctype html>
 
       <section class="view" id="v-memory">
         <h1 class="vhead">Memory</h1>
-        <p class="vsub">Persistent learnings in three scopes — org, project, agent — each with provenance: who or what wrote it, and when. Event-derived entries are distilled automatically from the audit log; agents add their own with <code>memory_set</code>. Read-only here.</p>
+        <p class="vsub">Persistent learnings in three scopes — org, project, agent — each with provenance: who or what wrote it, and when. Event-derived entries are distilled automatically from the audit log; agents add their own with <code>memory_set</code>. Deleting is a supervisor action and lands in the audit log.</p>
+        <div class="membar">
+          <span class="gwin" id="mem-scope" style="margin-bottom:0">
+            <button data-mscope="all" class="on">All</button><button data-mscope="org">Org</button><button data-mscope="project">Projects</button><button data-mscope="agent">Agents</button>
+          </span>
+          <input type="search" id="mem-search" placeholder="search key, value, agent…" autocomplete="off">
+          <span class="gwin" id="mem-source" style="margin-bottom:0">
+            <button data-msource="all" class="on">all sources</button><button data-msource="distilled">distilled</button><button data-msource="agent">agent-written</button>
+          </span>
+          <span class="hint" id="mem-count"></span>
+        </div>
         <div id="memory"></div>
       </section>
 
@@ -649,15 +667,33 @@ function stopServer() {
   authFetch("/server/stop", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(function () {});
   toast("Stopping the server — the panel will go offline.", true);
 }
+// Live search over memories — the bar is static markup, so typing never races
+// the refresh cycle (state is read back out of module vars on each render).
+document.getElementById("mem-search").addEventListener("input", function (e) {
+  memSearch = e.target.value;
+  renderMemory(lastMemories);
+});
 
 document.addEventListener("click", function (e) {
   var cp = e.target.closest ? e.target.closest("button[data-copy]") : null;
   if (cp) { copyCmd(cp); return; }
-  // Activity id-links jump to the thing: task → Work board, doc → Docs expanded.
+  // Activity id-links jump to the thing: task → Work board, doc → Docs
+  // expanded, event → Activity, agent memories → Memory pre-filtered.
   var il = e.target.closest ? e.target.closest("a.id-link") : null;
   if (il) {
-    if (il.getAttribute("data-kind") === "doc") { openDocs[il.getAttribute("data-ref")] = true; renderDocs(lastDocs); location.hash = "docs"; }
+    var ilk = il.getAttribute("data-kind");
+    if (ilk === "doc") { openDocs[il.getAttribute("data-ref")] = true; renderDocs(lastDocs); location.hash = "docs"; }
+    else if (ilk === "event") location.hash = "activity";
+    else if (ilk === "memories") showAgentMemories(il.getAttribute("data-ref"));
     else location.hash = "work";
+    return;
+  }
+  var mm = e.target.closest ? e.target.closest(".memmore[data-mem]") : null;
+  if (mm) { var mk = mm.getAttribute("data-mem"); openMems[mk] = !openMems[mk]; renderMemory(lastMemories); return; }
+  var mf = e.target.closest ? e.target.closest("button[data-mscope], button[data-msource]") : null;
+  if (mf) {
+    if (mf.hasAttribute("data-mscope")) setMemFilter("scope", mf.getAttribute("data-mscope"), mf);
+    else setMemFilter("source", mf.getAttribute("data-msource"), mf);
     return;
   }
   // Clamped activity rows expand/collapse on click.
@@ -676,6 +712,11 @@ document.addEventListener("click", function (e) {
     else if (act === "remove-org") removeOrg(b, id);
     else if (act === "show-all-done") { showAllDone = true; renderBoard(); }
     else if (act === "toggle-records") { recordsOpen = !recordsOpen; renderDocs(lastDocs); }
+    else if (act === "del-memory") {
+      post("/memory/delete", { org: org(), id: id }).then(function (r) {
+        toast(r && r.deleted ? "Memory deleted (audited)" : "Couldn't delete that memory", !(r && r.deleted));
+      });
+    }
     else if (act === "archive-doc") {
       post("/doc/archive", { id: id }).then(function () {
         toast("Record archived (audited — nothing is deleted)");
@@ -871,7 +912,8 @@ function renderAgents(list) {
       '</div>' + wt + task +
       (a.objective ? '<div class="meta"><span class="k">obj</span> ' + esc(a.objective) + '</div>' : "") +
       gh +
-      '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") + '</div>' +
+      '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") +
+      ' · <a class="id-link" data-kind="memories" data-ref="' + esc(a.name) + '" title="this agent\\'s learnings in the Memory view">memories</a></div>' +
       '<div class="hint">' + (a.presence !== "off" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
       '<div class="meta" style="color:var(--bad)" id="retire-msg-' + a.id + '"></div></div>';
   }).join("") || '<div class="empty">No agents yet. Agents are started from the terminal — inside a project folder, run ' + cmdSnippet('lanchu spawn "your objective"') + ' and supervise it from here.</div>';
@@ -1323,26 +1365,66 @@ function evRow(e) {
 }
 
 var MEMORY_SCOPES = [["org", "Org"], ["project", "Projects"], ["agent", "Agents"]];
+// Filter state lives out of the DOM so the 10s refresh can't reset a search
+// mid-typing; the bar itself is static markup and never rebuilt.
+var memScope = "all", memSource = "all", memSearch = "", openMems = {}, lastMemories = [];
+var MEM_CLAMP = 240;
 function renderMemory(list) {
-  list = list || [];
-  document.getElementById("c-memory").textContent = list.length;
+  lastMemories = list || [];
+  document.getElementById("c-memory").textContent = lastMemories.length;
+  var q = memSearch.toLowerCase();
+  var shown = lastMemories.filter(function (m) {
+    if (memScope !== "all" && m.scope !== memScope) return false;
+    // "distilled" covers both event-derived and curation-run entries.
+    if (memSource === "distilled" && m.source === "agent") return false;
+    if (memSource === "agent" && m.source !== "agent") return false;
+    if (!q) return true;
+    return (m.key + " " + m.value + " " + (m.subject_name || "") + " " + (m.writer_name || ""))
+      .toLowerCase().indexOf(q) >= 0;
+  });
+  document.getElementById("mem-count").textContent =
+    shown.length === lastMemories.length ? lastMemories.length + " entries" : shown.length + " of " + lastMemories.length;
   document.getElementById("memory").innerHTML = MEMORY_SCOPES.map(function (sc) {
-    var entries = list.filter(function (m) { return m.scope === sc[0]; });
+    var entries = shown.filter(function (m) { return m.scope === sc[0]; });
     if (!entries.length) return "";
     return '<h2 class="sub-h2">' + sc[1] + '</h2>' + entries.map(function (m) {
       var who = m.scope === "agent" ? colorChip(m.subject_name) + esc(m.subject_name) : esc(m.subject_name);
+      var distilled = m.source !== "agent";
       var prov = m.source === "agent"
-        ? "written by " + esc(m.writer_name || "an agent")
+        ? "written by " + (m.writer_name ? colorChip(m.writer_name) + esc(m.writer_name) : "an agent")
         : m.source === "event"
-          ? "distilled from event " + esc(m.source_ref || "?")
+          ? 'distilled from <a class="id-link" data-kind="event" data-ref="' + esc(m.source_ref || "") + '">event ' + esc(m.source_ref || "?") + '</a>'
           : "distilled (curation run)";
-      return '<div class="card"><div class="top"><span class="name">' + who +
-        ' <span class="type">' + esc(m.key) + '</span></span>' +
-        '<span class="meta">' + esc((m.updated_at || "").slice(0, 16).replace("T", " ")) + '</span></div>' +
-        '<div class="meta">' + esc(m.value) + '</div>' +
+      var long = m.value.length > MEM_CLAMP;
+      var open = !!openMems[m.id];
+      var val = esc(long && !open ? m.value.slice(0, MEM_CLAMP) + "…" : m.value);
+      var more = long ? ' <span class="memmore" data-mem="' + m.id + '">' + (open ? "less ▲" : "more ▼") + '</span>' : "";
+      return '<div class="card' + (distilled ? " mem-distilled" : "") + '"><div class="top"><span class="name">' + who +
+        ' <span class="type">' + esc(m.key) + '</span>' +
+        (distilled ? ' <span class="pill p-available" title="machine-derived — distilled from the audit log, not written by an agent">distilled</span>' : "") +
+        '</span><span><span class="meta">' + esc((m.updated_at || "").slice(0, 16).replace("T", " ")) + '</span> ' +
+        '<button class="danger" data-act="del-memory" data-id="' + m.id + '">Delete</button></span></div>' +
+        '<div class="meta">' + val + more + '</div>' +
         '<div class="hint">' + prov + '</div></div>';
     }).join("");
-  }).join("") || '<div class="empty">No memories yet. They accrue automatically from events (merged PRs, conflict hot zones, role changes) and from agents\\' own <code>memory_set</code> calls.</div>';
+  }).join("") || (lastMemories.length
+    ? '<div class="empty">No memories match these filters.</div>'
+    : '<div class="empty">No memories yet. They accrue automatically from events (merged PRs, conflict hot zones, role changes) and from agents\\' own <code>memory_set</code> calls.</div>');
+}
+function setMemFilter(kind, value, btn) {
+  if (kind === "scope") memScope = value; else memSource = value;
+  var bs = btn.parentElement.querySelectorAll("button");
+  for (var i = 0; i < bs.length; i++) bs[i].classList.toggle("on", bs[i] === btn);
+  renderMemory(lastMemories);
+}
+// The agent card's "memories" link lands here pre-filtered to that agent.
+function showAgentMemories(name) {
+  memScope = "agent"; memSearch = name;
+  document.getElementById("mem-search").value = name;
+  var bs = document.querySelectorAll("#mem-scope button");
+  for (var i = 0; i < bs.length; i++) bs[i].classList.toggle("on", bs[i].getAttribute("data-mscope") === "agent");
+  renderMemory(lastMemories);
+  location.hash = "memory";
 }
 
 // QA registry: suites → cases with last status, pass-rate history and gaps.
