@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS doc (
   title               TEXT NOT NULL,
   content             TEXT NOT NULL DEFAULT '',
   category            TEXT NOT NULL DEFAULT 'general',
+  read_count          INTEGER NOT NULL DEFAULT 0,
+  last_read_at        TEXT,
+  last_read_by_agent_id TEXT REFERENCES agent(id),
   updated_at          TEXT NOT NULL,
   updated_by_agent_id TEXT REFERENCES agent(id),
   created_at          TEXT NOT NULL

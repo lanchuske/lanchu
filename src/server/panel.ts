@@ -120,6 +120,8 @@ export function panelHtml(): string {
                padding-top: 11px; border-top: 1px solid var(--line); color: var(--muted);
                font-size: 13px; line-height: 1.6; }
   .card.doc.open .doc-body { display: block; }
+  .doc-readers { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line);
+                 display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .card.doc.open { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
   /* rendered markdown inside a doc body */
   .doc-body h1, .doc-body h2, .doc-body h3, .doc-body h4, .doc-body h5, .doc-body h6 {
@@ -395,7 +397,7 @@ export function panelHtml(): string {
 
       <section class="view" id="v-docs">
         <h1 class="vhead">Documentation</h1>
-        <p class="vsub">Shared definitions and knowledge kept current by the team.</p>
+        <p class="vsub">Shared definitions and knowledge kept current by the team — with <b>Memory</b>, the org's knowledge home. Every agent read is on the record: cards show usage and who consulted what (the raw <code>doc.read</code> events stay out of Activity by default).</p>
         <input id="doc-q" class="doc-search" type="search" placeholder="Filter docs by title or content…" autocomplete="off" spellcheck="false">
         <div id="docs"></div>
       </section>
@@ -842,11 +844,28 @@ function renderDocs(list) {
     var docs = byCat[pair[0]]; if (!docs || !docs.length) return;
     html += '<div class="cat-title">' + esc(pair[1]) + ' <span class="badge">' + docs.length + '</span></div>';
     html += docs.map(function (d) {
+      // Knowledge analytics: unread docs are prune candidates; docs read often
+      // but not updated in a while are refresh candidates.
+      var reads = d.read_count || 0;
+      var staleHot = reads >= 3 && d.last_read_at && d.updated_at && d.last_read_at > d.updated_at &&
+        (Date.now() - new Date(d.updated_at).getTime()) > 24 * 3600e3;
+      var flag = reads === 0
+        ? ' <span class="pill p-available" title="no agent has consulted this doc yet — prune candidate?">never read</span>'
+        : (staleHot ? ' <span class="pill stale-pill" title="read often but not updated lately — refresh candidate?">stale but hot</span>' : "");
+      var readMeta = reads
+        ? ' · <b>' + reads + '</b> read' + (reads === 1 ? "" : "s") +
+          (d.last_read_by ? ' · last by ' + esc(d.last_read_by) + ' ' + esc((d.last_read_at || "").replace("T", " ").slice(0, 16)) : "")
+        : "";
+      var readers = (d.readers || []).length
+        ? '<div class="meta doc-readers"><span class="k">consulted by</span> ' + d.readers.map(function (r) {
+            return '<span class="holder">' + colorChip(r.name || "?") + esc(r.name || r.agent_id) + ' <span class="hint">(' + r.reads + '×, last ' + esc((r.last_read_at || "").replace("T", " ").slice(5, 16)) + ')</span></span>';
+          }).join(" ") + '</div>'
+        : "";
       return '<div class="card clickable doc' + (openDocs[d.id] ? " open" : "") + '" data-doc="' + esc(d.id) + '">' +
-        '<span class="name">' + esc(d.title) + '</span>' +
+        '<span class="name">' + esc(d.title) + '</span>' + flag +
         '<div class="meta">' + d.chars + ' chars · ' + esc((d.updated_at || "").replace("T", " ").slice(0, 16)) +
-        (d.updated_by ? ' · by ' + esc(d.updated_by) : "") + '</div>' +
-        '<div class="doc-body">' + (d.content ? mdToHtml(d.content) : '<span class="empty-inline">(empty)</span>') + '</div>' +
+        (d.updated_by ? ' · by ' + esc(d.updated_by) : "") + readMeta + '</div>' +
+        '<div class="doc-body">' + (d.content ? mdToHtml(d.content) : '<span class="empty-inline">(empty)</span>') + readers + '</div>' +
         '</div>';
     }).join("");
   });
@@ -888,7 +907,7 @@ function renderMemory(list) {
         '<div class="meta">' + esc(m.value) + '</div>' +
         '<div class="hint">' + prov + '</div></div>';
     }).join("");
-  }).join("") || '<div class="empty">No memories yet. They accrue automatically from events (merged PRs, conflict hot zones, role changes) and from agents\' own <code>memory_set</code> calls.</div>';
+  }).join("") || '<div class="empty">No memories yet. They accrue automatically from events (merged PRs, conflict hot zones, role changes) and from agents\\' own <code>memory_set</code> calls.</div>';
 }
 
 function renderAudit(list) {

@@ -36,6 +36,7 @@ export type EventType =
   | "task.handoff"
   | "doc.created"
   | "doc.updated"
+  | "doc.read"
   | "role.updated"
   | "message.sent"
   | "conflict.detected"

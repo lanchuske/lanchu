@@ -462,7 +462,11 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ id }) => {
       const doc = store.getDoc(id);
-      return doc ? text(doc) : fail(new Error("doc not found"));
+      // Same-org only — and every successful read is on the record (aggregate
+      // counters + a doc.read event), so "who consulted the spec" is checkable.
+      if (!doc || doc.org_id !== ctx.orgId) return fail(new Error("doc not found"));
+      store.recordDocRead({ orgId: ctx.orgId, agentId: ctx.agentId, docId: doc.id });
+      return text(doc);
     },
   );
 

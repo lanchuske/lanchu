@@ -59,6 +59,9 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "skill", "loaded_at", "TEXT");
   addColumn(db, "doc", "category", "TEXT NOT NULL DEFAULT 'general'");
   addColumn(db, "role", "token_quota", "INTEGER");
+  addColumn(db, "doc", "read_count", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "doc", "last_read_at", "TEXT");
+  addColumn(db, "doc", "last_read_by_agent_id", "TEXT");
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }

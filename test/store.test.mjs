@@ -429,3 +429,31 @@ test("orgGraph aggregates events into nodes and edges, flow vs bounce included",
   assert.ok(qaNode, "qa acted in the window — still on the map");
   assert.equal(qaNode.state, "retired");
 });
+
+test("doc reads: counters bump, readers accounted, Activity hides doc.read by default", () => {
+  const { org, agent } = setup("acme-reads");
+  const other = store.createAgent({ orgId: org.id, roleId: store.getOrCreateRole(org.id, "frontend", { tags: ["ui", "css"] }).id, objective: "read specs" });
+  const doc = store.upsertDoc({ orgId: org.id, agentId: agent.id, title: "Spec", content: "the plan" });
+  assert.equal(store.getDoc(doc.id).read_count, 0);
+
+  store.recordDocRead({ orgId: org.id, agentId: agent.id, docId: doc.id });
+  store.recordDocRead({ orgId: org.id, agentId: agent.id, docId: doc.id });
+  store.recordDocRead({ orgId: org.id, agentId: other.id, docId: doc.id });
+
+  const d = store.getDoc(doc.id);
+  assert.equal(d.read_count, 3);
+  assert.equal(d.last_read_by_agent_id, other.id);
+  assert.ok(d.last_read_at);
+
+  const readers = store.docReaders(doc.id);
+  assert.equal(readers.length, 2);
+  const mine = readers.find((r) => r.agent_id === agent.id);
+  assert.equal(mine.reads, 2);
+  assert.equal(mine.name, agent.name);
+
+  // Default Activity feed hides the volume; ?reads=1 / includeReads shows it.
+  const quiet = store.listAuditEvents(org.id, 100);
+  assert.ok(!quiet.some((e) => e.type === "doc.read"), "doc.read must be hidden by default");
+  const full = store.listAuditEvents(org.id, 100, { includeReads: true });
+  assert.equal(full.filter((e) => e.type === "doc.read").length, 3);
+});

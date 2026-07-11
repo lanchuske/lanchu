@@ -1405,6 +1405,9 @@ export interface Doc {
   title: string;
   content: string;
   category: DocCategory;
+  read_count: number;
+  last_read_at: string | null;
+  last_read_by_agent_id: string | null;
   updated_at: string;
   updated_by_agent_id: string | null;
   created_at: string;
@@ -1427,6 +1430,46 @@ export function searchDocs(orgId: string, query: string): Doc[] {
 
 export function getDoc(docId: string): Doc | null {
   return (db().prepare("SELECT * FROM doc WHERE id = ?").get(docId) as unknown as Doc | undefined) ?? null;
+}
+
+/**
+ * Who-consulted-what accounting: an agent reading a doc bumps the doc's
+ * aggregate counters and leaves an audited doc.read event. The default
+ * Activity feed hides these (volume management — see listAuditEvents);
+ * analytics read the aggregates, provenance reads the events.
+ */
+export function recordDocRead(input: { orgId: string; agentId: string; docId: string }): void {
+  const now = nowIso();
+  db()
+    .prepare("UPDATE doc SET read_count = read_count + 1, last_read_at = ?, last_read_by_agent_id = ? WHERE id = ?")
+    .run(now, input.agentId, input.docId);
+  recordEvent({
+    org_id: input.orgId,
+    type: "doc.read",
+    actor_agent_id: input.agentId,
+    subject_kind: "doc",
+    subject_id: input.docId,
+  });
+}
+
+export interface DocReader {
+  agent_id: string;
+  name: string | null;
+  reads: number;
+  last_read_at: string;
+}
+
+/** Distinct readers of a doc with read counts — "did the builder consult the spec" made checkable. */
+export function docReaders(docId: string, limit = 12): DocReader[] {
+  const rows = db()
+    .prepare(
+      `SELECT e.actor_agent_id AS agent_id, a.name AS name, COUNT(*) AS reads, MAX(e.created_at) AS last_read_at
+       FROM event e LEFT JOIN agent a ON a.id = e.actor_agent_id
+       WHERE e.type = 'doc.read' AND e.subject_id = ? AND e.actor_agent_id IS NOT NULL
+       GROUP BY e.actor_agent_id ORDER BY last_read_at DESC LIMIT ?`,
+    )
+    .all(docId, limit) as unknown as DocReader[];
+  return rows;
 }
 
 /** Create or update a doc (upsert by id or title within the org). Emits doc.created/updated. */
@@ -1671,13 +1714,16 @@ export interface AuditEvent {
 }
 
 /** Recent audit/event log for an org, newest first (with actor names resolved). */
-export function listAuditEvents(orgId: string, limit = 60): AuditEvent[] {
+export function listAuditEvents(orgId: string, limit = 60, opts?: { includeReads?: boolean }): AuditEvent[] {
+  // doc.read is high-volume bookkeeping: it stays on the record (provenance,
+  // graph, docReaders) but out of the default Activity feed.
+  const readFilter = opts?.includeReads ? "" : " AND e.type != 'doc.read'";
   const rows = db()
     .prepare(
       `SELECT e.id, e.type, a.name AS actor_name, e.subject_kind, e.subject_id,
               e.workspace, e.tokens, e.outcome, e.data, e.created_at
        FROM event e LEFT JOIN agent a ON a.id = e.actor_agent_id
-       WHERE e.org_id = ? ORDER BY e.id DESC LIMIT ?`,
+       WHERE e.org_id = ?${readFilter} ORDER BY e.id DESC LIMIT ?`,
     )
     .all(orgId, limit) as Record<string, unknown>[];
   return rows.map((r) => ({
