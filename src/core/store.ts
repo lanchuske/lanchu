@@ -3156,6 +3156,10 @@ export type BoardTask = Task & {
   stale: boolean;
   owner_state: AgentState | null;
   owner_name: string | null;
+  /** Bug lifecycle (bug-tagged tasks only): the done verification that proves the fix. */
+  verified_via?: string | null;
+  /** Bug lifecycle (bug-tagged tasks only): the open verification checking the fix. */
+  verification_task_id?: string | null;
 };
 
 /** Agent plus derived details for the panel. */
@@ -3827,7 +3831,21 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       const reserved = isOpen(t.status) && ownerState === "idle";
       const stale = reserved && ageHours(t.updated_at) >= threshold;
       const owner_name = t.owner_agent_id ? (nameById.get(t.owner_agent_id) ?? null) : null;
-      return { ...t, owner_state: ownerState, reserved, stale, owner_name };
+      // Bugs view v2: QA evidence rides the card — the done verification that
+      // proves a fixed bug, or the open one still checking it. Bug-tagged only
+      // (verifiedBy scans batches; don't pay that for every task).
+      const isBug = t.tags.includes("bug");
+      const verified_via = isBug && t.status === "done" ? verifiedBy(t) : null;
+      const verification_task_id =
+        isBug && t.status === "done" && !verified_via ? (openVerificationTaskFor(t.id)?.id ?? null) : null;
+      return {
+        ...t,
+        owner_state: ownerState,
+        reserved,
+        stale,
+        owner_name,
+        ...(isBug ? { verified_via, verification_task_id } : {}),
+      };
     });
 
   // The archive rides along separately: terminal, no governance signals.
