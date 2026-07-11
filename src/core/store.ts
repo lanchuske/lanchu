@@ -2970,3 +2970,137 @@ export function mcpAgentStatus(orgId: string): AgentMcpStatus[] {
       };
     });
 }
+
+// ───────────────── QA test registry: the org's persistent safety net ─────────────────
+
+export type TestStatus = "pass" | "fail" | "skip";
+
+export interface ReportedCase {
+  name: string;
+  /** pass | fail | skip record a run; "planned" registers a coverage gap without one. */
+  status: TestStatus | "planned";
+  durationMs?: number;
+}
+
+/**
+ * Record a test run (from the qa agent or CI). Suites and cases are upserted by
+ * name, so the registry grows as coverage grows; a case reported as "planned"
+ * is a visible gap until a real run arrives. One audited test.reported event
+ * summarizes the run — individual case rows live in the registry, not the log.
+ */
+export function reportTestRun(input: {
+  orgId: string;
+  agentId: string | null;
+  suite: string;
+  commit?: string | null;
+  cases: ReportedCase[];
+}): { suite: string; recorded: number; planned: number; passed: number; failed: number } {
+  if (!input.cases.length) throw new Error("cases must not be empty");
+  const now = nowIso();
+  const suiteRow = (db()
+    .prepare("SELECT id FROM test_suite WHERE org_id = ? AND name = ?")
+    .get(input.orgId, input.suite) as { id: string } | undefined) ?? null;
+  const suiteId = suiteRow?.id ?? uuid();
+  if (!suiteRow) {
+    db().prepare("INSERT INTO test_suite(id, org_id, name, created_at) VALUES (?,?,?,?)").run(suiteId, input.orgId, input.suite, now);
+  }
+
+  let recorded = 0, planned = 0, passed = 0, failed = 0;
+  for (const c of input.cases) {
+    const existing = (db()
+      .prepare("SELECT id, planned FROM test_case WHERE suite_id = ? AND name = ?")
+      .get(suiteId, c.name) as { id: string; planned: number } | undefined) ?? null;
+    const caseId = existing?.id ?? uuid();
+    if (!existing) {
+      db().prepare("INSERT INTO test_case(id, suite_id, name, planned, created_at) VALUES (?,?,?,?,?)")
+        .run(caseId, suiteId, c.name, c.status === "planned" ? 1 : 0, now);
+    } else if (c.status !== "planned" && existing.planned) {
+      // A real run closes the coverage gap.
+      db().prepare("UPDATE test_case SET planned = 0 WHERE id = ?").run(caseId);
+    }
+    if (c.status === "planned") {
+      planned++;
+      continue;
+    }
+    db().prepare(
+      "INSERT INTO test_run(case_id, status, duration_ms, commit_sha, ran_by_agent_id, created_at) VALUES (?,?,?,?,?,?)",
+    ).run(caseId, c.status, c.durationMs ?? null, input.commit ?? null, input.agentId, now);
+    recorded++;
+    if (c.status === "pass") passed++;
+    if (c.status === "fail") failed++;
+  }
+
+  recordEvent({
+    org_id: input.orgId,
+    type: "test.reported",
+    actor_agent_id: input.agentId,
+    subject_kind: "test_suite",
+    subject_id: input.suite,
+    outcome: failed ? "rejected" : "applied",
+    data: { suite: input.suite, recorded, planned, passed, failed, ...(input.commit ? { commit: input.commit } : {}) },
+  });
+  return { suite: input.suite, recorded, planned, passed, failed };
+}
+
+export interface TestCaseView {
+  name: string;
+  planned: boolean;
+  last_status: TestStatus | null;
+  last_duration_ms: number | null;
+  last_commit: string | null;
+  last_ran_by: string | null;
+  last_ran_at: string | null;
+  /** pass rate over the most recent runs (up to 20). */
+  recent_runs: number;
+  recent_passes: number;
+}
+
+export interface TestSuiteView {
+  name: string;
+  cases: TestCaseView[];
+  planned_gaps: number;
+  failing: number;
+  last_ran_at: string | null;
+}
+
+/** The registry as the panel shows it: suites → cases with last status + pass-rate history. */
+export function testRegistry(orgId: string): TestSuiteView[] {
+  const suites = db()
+    .prepare("SELECT id, name FROM test_suite WHERE org_id = ? ORDER BY name")
+    .all(orgId) as { id: string; name: string }[];
+  return suites.map((s) => {
+    const cases = (db()
+      .prepare("SELECT id, name, planned FROM test_case WHERE suite_id = ? ORDER BY name")
+      .all(s.id) as { id: string; name: string; planned: number }[]).map((c) => {
+      const last = (db()
+        .prepare(
+          `SELECT r.status, r.duration_ms, r.commit_sha, r.created_at, a.name AS ran_by
+           FROM test_run r LEFT JOIN agent a ON a.id = r.ran_by_agent_id
+           WHERE r.case_id = ? ORDER BY r.id DESC LIMIT 1`,
+        )
+        .get(c.id) as { status: TestStatus; duration_ms: number | null; commit_sha: string | null; created_at: string; ran_by: string | null } | undefined) ?? null;
+      const recent = db()
+        .prepare("SELECT status FROM (SELECT status FROM test_run WHERE case_id = ? ORDER BY id DESC LIMIT 20)")
+        .all(c.id) as { status: TestStatus }[];
+      return {
+        name: c.name,
+        planned: !!c.planned,
+        last_status: last?.status ?? null,
+        last_duration_ms: last?.duration_ms ?? null,
+        last_commit: last?.commit_sha ?? null,
+        last_ran_by: last?.ran_by ?? null,
+        last_ran_at: last?.created_at ?? null,
+        recent_runs: recent.length,
+        recent_passes: recent.filter((r) => r.status === "pass").length,
+      };
+    });
+    const ranAts = cases.map((c) => c.last_ran_at).filter((x): x is string => !!x).sort();
+    return {
+      name: s.name,
+      cases,
+      planned_gaps: cases.filter((c) => c.planned).length,
+      failing: cases.filter((c) => c.last_status === "fail").length,
+      last_ran_at: ranAts[ranAts.length - 1] ?? null,
+    };
+  });
+}

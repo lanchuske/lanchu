@@ -821,10 +821,42 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release. If a claimed task turns out underspecified, missing docs, or outside your competence, don't guess — task_reject with the reason: it bounces to the definition lane and notifies whoever can fix the spec.",
           "7. Talk to teammates with message_send (audit-logged; the supervisor sees everything). Notices arrive inside your tool results — act on them and message_ack.",
           "8. If a task_claim result carries a `conflict` block, another live agent is on that surface: STOP and ask your user — stop, hand off, or park it. An `overlap` field on task_create is informational only: creating a task is fine, just route it with the overlap in mind.",
+          "9. Verifying a feature ALWAYS ends with a regression test left behind (a test-only PR is fine) and a test_report of the run — the registry, not your context, is the org's memory of what is covered. Mark coverage you identified but didn't write yet as status 'planned' so the gap stays visible.",
         ],
         rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc.",
-        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_reject, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, session_leave.",
+        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_reject, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, test_report, session_leave.",
       }),
+  );
+
+  registerTool(
+    "test_report",
+    {
+      title: "Report a test run",
+      description:
+        "Records a test run in the org's QA registry (suites and cases are upserted by name; audited). " +
+        "Use after running a suite — pass/fail/skip per case with optional durationMs and the commit sha. " +
+        "Register coverage you identified but did not write yet with status 'planned' so the gap stays visible in the panel.",
+      inputSchema: {
+        suite: z.string().describe("Suite name, e.g. 'store' or 'panel-e2e'"),
+        commit: z.string().optional().describe("Commit sha the run was executed against"),
+        cases: z
+          .array(
+            z.object({
+              name: z.string(),
+              status: z.enum(["pass", "fail", "skip", "planned"]),
+              durationMs: z.number().optional(),
+            }),
+          )
+          .min(1),
+      },
+    },
+    async ({ suite, commit, cases }) => {
+      try {
+        return text(store.reportTestRun({ orgId: ctx.orgId, agentId: ctx.agentId, suite, commit, cases }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
   );
 
   registerTool(

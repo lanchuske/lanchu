@@ -205,6 +205,33 @@ CREATE TABLE IF NOT EXISTS memory (
   UNIQUE (org_id, scope, subject_id, key)
 );
 
+CREATE TABLE IF NOT EXISTS test_suite (
+  id         TEXT PRIMARY KEY,
+  org_id     TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (org_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS test_case (
+  id         TEXT PRIMARY KEY,
+  suite_id   TEXT NOT NULL REFERENCES test_suite(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  planned    INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE (suite_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS test_run (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id         TEXT NOT NULL REFERENCES test_case(id) ON DELETE CASCADE,
+  status          TEXT NOT NULL CHECK (status IN ('pass','fail','skip')),
+  duration_ms     INTEGER,
+  commit_sha      TEXT,
+  ran_by_agent_id TEXT REFERENCES agent(id),
+  created_at      TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
@@ -215,4 +242,5 @@ CREATE INDEX IF NOT EXISTS idx_event_org_id        ON event(org_id, id);
 CREATE INDEX IF NOT EXISTS idx_event_actor         ON event(actor_agent_id, id);
 CREATE INDEX IF NOT EXISTS idx_notice_pending      ON notice(to_agent_id, acked_at);
 CREATE INDEX IF NOT EXISTS idx_memory_subject      ON memory(org_id, scope, subject_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_test_run_case       ON test_run(case_id, id);
 `;

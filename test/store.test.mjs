@@ -457,3 +457,47 @@ test("doc reads: counters bump, readers accounted, Activity hides doc.read by de
   const full = store.listAuditEvents(org.id, 100, { includeReads: true });
   assert.equal(full.filter((e) => e.type === "doc.read").length, 3);
 });
+
+test("test registry: report upserts suites/cases, tracks runs, planned gaps close on real runs", () => {
+  const { org, agent } = setup("acme-tests");
+  const r1 = store.reportTestRun({
+    orgId: org.id, agentId: agent.id, suite: "store", commit: "abc1234",
+    cases: [
+      { name: "claims are atomic", status: "pass", durationMs: 12 },
+      { name: "quota blocks over-limit", status: "fail", durationMs: 30 },
+      { name: "greenzone flow", status: "planned" },
+    ],
+  });
+  assert.deepEqual(r1, { suite: "store", recorded: 2, planned: 1, passed: 1, failed: 1 });
+
+  // Re-report: same suite/case names reuse rows; the planned gap closes when a real run lands.
+  store.reportTestRun({
+    orgId: org.id, agentId: agent.id, suite: "store", commit: "def5678",
+    cases: [
+      { name: "quota blocks over-limit", status: "pass", durationMs: 25 },
+      { name: "greenzone flow", status: "pass", durationMs: 8 },
+    ],
+  });
+
+  const reg = store.testRegistry(org.id);
+  assert.equal(reg.length, 1);
+  const suite = reg[0];
+  assert.equal(suite.name, "store");
+  assert.equal(suite.cases.length, 3);
+  assert.equal(suite.planned_gaps, 0, "planned gap must close after a real run");
+  assert.equal(suite.failing, 0, "the fail was superseded by a pass");
+
+  const quota = suite.cases.find((c) => c.name === "quota blocks over-limit");
+  assert.equal(quota.last_status, "pass");
+  assert.equal(quota.last_commit, "def5678");
+  assert.equal(quota.last_ran_by, agent.name);
+  assert.equal(quota.recent_runs, 2);
+  assert.equal(quota.recent_passes, 1);
+
+  // Audited: one test.reported event per run, failing runs marked rejected.
+  const evs = store.listAuditEvents(org.id, 50).filter((e) => e.type === "test.reported");
+  assert.equal(evs.length, 2);
+  assert.ok(evs.some((e) => e.outcome === "rejected"), "a run with failures audits as rejected");
+
+  assert.throws(() => store.reportTestRun({ orgId: org.id, agentId: agent.id, suite: "x", cases: [] }));
+});
