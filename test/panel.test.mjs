@@ -110,3 +110,20 @@ test("hash router falls back to overview on unknown hashes and aliases #orglife"
   assert.ok(html.includes('"orglife"'), "the guessable #orglife hash must map to the Org life view");
   assert.ok(html.includes('kv("running build", "v" + s.version)'), "processes card labels the version as the running build");
 });
+
+// Shipped visibility (task-mrg88fqr1): after a productive day the board must
+// show what shipped in one click, not hide it past the horizontal scroll.
+
+test("work board has Open/Shipped/All tabs, slim empty lanes and a capped Done lane", () => {
+  assert.ok(html.includes('id="btabs"'), "expected the board tab strip");
+  assert.ok(html.includes('data-btab="open"') && html.includes('data-btab="shipped"') && html.includes('data-btab="all"'), "expected the three board tabs");
+  assert.ok(html.includes('lane slim'), "empty lanes must render as slim headers");
+  assert.ok(html.includes('show-all-done'), "expected the Done-lane show-all affordance");
+  assert.ok(html.includes("doneStamp"), "done ordering must go through the shared doneStamp helper");
+});
+
+test("overview lists recently shipped tasks with PR links", () => {
+  assert.ok(html.includes("Recently shipped"), "expected the Recently shipped section");
+  assert.ok(html.includes('id="ov-shipped"'), "expected the shipped list container");
+  assert.ok(html.includes("PR #"), "shipped rows must carry a prominent PR link");
+});
