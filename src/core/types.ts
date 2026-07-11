@@ -82,6 +82,8 @@ export interface Role {
   allowed_tags: string[];
   /** Self-reported token budget for ALL agents of this role combined; null = unlimited. */
   token_quota: number | null;
+  /** Default claude model tier for agents spawned with this role (opus|sonnet|haiku or any alias); null = harness default. */
+  preferred_model: string | null;
   created_at: string;
 }
 
@@ -102,6 +104,8 @@ export interface Agent {
   git_author_name: string | null;
   git_author_email: string | null;
   gh_login: string | null;
+  /** The claude model tier this agent's terminal was launched with; null = harness default. */
+  model: string | null;
   created_at: string;
   retired_at: string | null;
 }

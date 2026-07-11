@@ -765,7 +765,8 @@ function renderAgents(list) {
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to ' + reveal + '">' +
       '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
       colorChip(a.name) + esc(a.name) + coord + '</span><span>' + nudged + '<button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></span></div>' +
-      '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") + ' · <b>' + a.open_tasks + '</b> open' + branch +
+      '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") +
+      (a.model ? ' · <span class="k">model</span> ' + esc(a.model) : "") + ' · <b>' + a.open_tasks + '</b> open' + branch +
       (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") +
       ' · <span class="k">mcp</span> ' + (a.live_transports > 0 ? a.live_transports + " live" : "not connected") +
       (a.live_transports > 1 ? ' <span class="pill stale-pill" title="two terminals sharing one identity causes misattribution">' + a.live_transports + ' transports</span>' : "") +
@@ -898,7 +899,9 @@ function renderRoles(list, agents) {
          || '<span class="hint">no tags — can\\'t claim any task yet</span>');
     return '<div class="card"><div class="top"><span class="name">' + esc(r.name) + '</span>' +
       '<span class="meta">' + (who || '<span class="empty-inline">nobody holds this role</span>') + '</span></div>' +
-      '<div>' + tags + budgetChip(r) + '</div></div>';
+      '<div>' + tags + budgetChip(r) +
+      (r.preferred_model ? '<span class="quota" title="default model tier for spawns with this role">' + esc(r.preferred_model) + '</span>' : "") +
+      '</div></div>';
   };
   document.getElementById("roles").innerHTML =
     (used.map(card).join("") || '<div class="empty">No roles yet.</div>') +

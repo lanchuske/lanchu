@@ -538,7 +538,7 @@ export function captureWorkspace(projectId: string, agentId: string, cwd?: strin
 
 // ───────────────────────── roles ─────────────────────────
 
-const ROLE_COLS = "id, org_id, name, is_wildcard, token_quota, created_at";
+const ROLE_COLS = "id, org_id, name, is_wildcard, token_quota, preferred_model, created_at";
 
 interface RoleRow {
   id: string;
@@ -546,6 +546,7 @@ interface RoleRow {
   name: string;
   is_wildcard: number;
   token_quota: number | null;
+  preferred_model: string | null;
   created_at: string;
 }
 
@@ -560,6 +561,7 @@ function loadRole(row: RoleRow): Role {
     is_wildcard: row.is_wildcard === 1,
     allowed_tags: tags.map((t) => t.tag),
     token_quota: row.token_quota ?? null,
+    preferred_model: row.preferred_model ?? null,
     created_at: row.created_at,
   };
 }
@@ -616,6 +618,7 @@ export function updateRole(
     tags?: string[];
     wildcard?: boolean;
     quota?: number | null;
+    preferredModel?: string | null;
   },
   actorAgentId?: string | null,
 ): Role | null {
@@ -643,6 +646,9 @@ export function updateRole(
   if (opts.quota !== undefined) {
     db().prepare("UPDATE role SET token_quota = ? WHERE id = ?").run(opts.quota, before.id);
   }
+  if (opts.preferredModel !== undefined) {
+    db().prepare("UPDATE role SET preferred_model = ? WHERE id = ?").run(opts.preferredModel, before.id);
+  }
 
   const after = getRole(before.id)!;
   recordEvent({
@@ -653,8 +659,8 @@ export function updateRole(
     subject_id: after.id,
     data: {
       role: after.name,
-      before: { wildcard: before.is_wildcard, tags: before.allowed_tags, quota: before.token_quota },
-      after: { wildcard: after.is_wildcard, tags: after.allowed_tags, quota: after.token_quota },
+      before: { wildcard: before.is_wildcard, tags: before.allowed_tags, quota: before.token_quota, model: before.preferred_model },
+      after: { wildcard: after.is_wildcard, tags: after.allowed_tags, quota: after.token_quota, model: after.preferred_model },
     },
   });
   return after;
@@ -731,6 +737,7 @@ function loadAgent(row: Record<string, unknown>): Agent {
     branch: (row.branch as string) ?? null,
     worktree: (row.worktree as string) ?? null,
     color_slot: (row.color_slot as number) ?? null,
+    model: (row.model as string) ?? null,
     git_author_name: (row.git_author_name as string) ?? null,
     git_author_email: (row.git_author_email as string) ?? null,
     gh_login: (row.gh_login as string) ?? null,
@@ -740,7 +747,7 @@ function loadAgent(row: Record<string, unknown>): Agent {
 }
 
 const AGENT_COLS =
-  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, git_author_name, git_author_email, gh_login, created_at, retired_at";
+  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, model, git_author_name, git_author_email, gh_login, created_at, retired_at";
 
 /**
  * Per-org color de-collision (bug from #22: 'qa-gate' and 'product' hashed to
@@ -887,6 +894,11 @@ export interface TerminalRef {
 }
 
 /** Persist a handle to the agent's live terminal so any process can re-focus it. */
+/** Record which claude model tier this agent's terminal was launched with. */
+export function setAgentModel(agentId: string, model: string | null): void {
+  db().prepare("UPDATE agent SET model = ? WHERE id = ?").run(model, agentId);
+}
+
 export function setAgentTerminal(agentId: string, ref: TerminalRef | null): void {
   db()
     .prepare("UPDATE agent SET terminal_ref = ? WHERE id = ?")

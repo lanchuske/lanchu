@@ -49,7 +49,7 @@ function writeMcpConfigFile(token: string, agentName?: string): string {
 }
 
 /** Shell command that wires Claude to Lanchu and launches it with a first prompt. */
-export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string, title?: string): string {
+export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string, title?: string, model?: string): string {
   // Carry this agent's identity as a per-process MCP config FILE. We
   // deliberately avoid `claude mcp add lanchu`, which writes a shared,
   // project-scoped server: a second agent in the same repo would then either
@@ -63,9 +63,11 @@ export function bootstrapCommand(cwd: string, token: string, prompt: string, age
   const setTitle = title ? `printf '\\033]0;%s\\007' ${sq(title)}; ` : "";
   // Export the agent name so `lanchu statusline` can show which teammate owns this terminal.
   const ident = agentName ? `export LANCHU_AGENT=${sq(agentName)}; ` : "";
+  // Model routing: launch the terminal on the tier the role/spawn chose.
+  const modelFlag = model ? `--model ${sq(model)} ` : "";
   // `--mcp-config` is variadic, so the prompt MUST be separated by `--` — otherwise
   // Claude slurps it as another config path ("MCP config file not found: <prompt>").
-  return `cd ${sq(cwd)}; ${setTitle}${ident}trap 'rm -f ${sq(mcpConfigFile)}' EXIT; claude --strict-mcp-config --mcp-config ${sq(mcpConfigFile)} -- ${sq(prompt)}`;
+  return `cd ${sq(cwd)}; ${setTitle}${ident}trap 'rm -f ${sq(mcpConfigFile)}' EXIT; claude ${modelFlag}--strict-mcp-config --mcp-config ${sq(mcpConfigFile)} -- ${sq(prompt)}`;
 }
 
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
@@ -98,9 +100,11 @@ export function spawnTerminal(input: {
   prompt: string;
   /** De-collided per-org color (store.agentColorOf). Falls back to the name hash. */
   colorHex?: string;
+  /** claude model alias for this terminal (opus|sonnet|haiku…); omitted = harness default. */
+  model?: string;
   dry?: boolean;
 }): SpawnResult {
-  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title);
+  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model);
 
   if (hasTmux()) {
     const plan: SpawnResult = {
