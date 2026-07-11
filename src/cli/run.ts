@@ -525,6 +525,9 @@ async function cmdSpawn(): Promise<void> {
     org, project, objective, cwd: process.cwd(), role: roleName, wildcard: role ? false : true,
     agentName: flag("as") || roleName,
     isolate: !hasFlag("no-isolate"),
+    // Spawn always mints a fresh teammate: keep dedupe-on-collision instead of
+    // the /session default of reusing an existing agent by name.
+    create: true,
   })) as { token: string; agentName: string; agentId: string; worktree: string | null; branch: string | null };
   // Launch inside the agent's isolated worktree (falls back to this dir with --no-isolate
   // or when the directory isn't a git repo).
