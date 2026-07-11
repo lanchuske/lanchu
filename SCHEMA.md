@@ -132,7 +132,9 @@ CREATE TABLE task (
   updated_at          TEXT NOT NULL,
   done_at             TEXT,
   rejection_count     INTEGER NOT NULL DEFAULT 0, -- times agents bounced it back to definition; 2+ = "needs definition"
-  last_rejection      TEXT                     -- JSON {reason, note, by, at} of the latest task_reject
+  last_rejection      TEXT,                    -- JSON {reason, note, by, at} of the latest task_reject
+  bounce_count        INTEGER NOT NULL DEFAULT 0, -- backward SDLC moves; 2+ = "needs attention"
+  last_bounce         TEXT                     -- JSON {from, to, reason, at} of the latest bounce
 );
 
 CREATE TABLE task_tag (
@@ -196,12 +198,20 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   is `idle`.
 - **event.type:** `agent.created` · `agent.reused` · `agent.active` · `agent.idle` ·
   `agent.retired` · `task.created` · `task.claimed` · `task.released` · `task.started` ·
-  `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` · `task.handoff` ·
+  `task.completed` · `task.blocked` · `task.reassigned` · `task.rejected` ·
+  `task.stage_changed` · `task.bounced` · `task.handoff` ·
   `doc.created` · `doc.updated` · `scope.violation`.
 - **task_reject reason:** `out_of_scope` · `underspecified` · `missing_docs` ·
   `blocked_dependency` · `other`. A rejection releases the task, bounces its stage to
   `definition`, increments `rejection_count`, stores `last_rejection`, and notifies the
   creator and the product role.
+- **SDLC (LANCHU_SDLC=off|assist|strict, default assist):** the server owns stage
+  moves through `advanceStage`. A PR on open work moves it `build → review`; an
+  agent's `done` on unverified work parks it in `qa` and auto-creates a linked
+  verification task (`parent_task_id` = original, title `QA: verify …`); the
+  verification completing flips the original to done (a note starting `FAIL`
+  bounces it back to `build` instead — audited as `task.bounced`, counter on the
+  task). strict additionally holds the agent's `done` until verification passes.
 - **event.outcome:** `applied` (it was applied) · `rejected` (it was blocked; e.g. `scope.violation`).
 
 ---

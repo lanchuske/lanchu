@@ -57,6 +57,8 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "task", "pr_url", "TEXT");
   addColumn(db, "task", "rejection_count", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "task", "last_rejection", "TEXT");
+  addColumn(db, "task", "bounce_count", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "task", "last_bounce", "TEXT");
   addColumn(db, "skill", "description", "TEXT NOT NULL DEFAULT ''");
   addColumn(db, "skill", "loaded_at", "TEXT");
   addColumn(db, "doc", "category", "TEXT NOT NULL DEFAULT 'general'");

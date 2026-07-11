@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { activeWindowMs, staleHours } from "../config.js";
+import { activeWindowMs, sdlcMode, staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
@@ -1058,11 +1058,13 @@ function loadTask(row: Record<string, unknown>): Task {
     last_rejection: row.last_rejection
       ? (JSON.parse(row.last_rejection as string) as Task["last_rejection"])
       : null,
+    bounce_count: Number(row.bounce_count ?? 0),
+    last_bounce: row.last_bounce ? (JSON.parse(row.last_bounce as string) as Task["last_bounce"]) : null,
   };
 }
 
 const TASK_COLS =
-  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection";
+  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce";
 
 export function getTask(taskId: string): Task | null {
   const row = db().prepare(`SELECT ${TASK_COLS} FROM task WHERE id = ?`).get(taskId) as
@@ -1252,20 +1254,32 @@ export function updateTaskStatus(input: {
   if (!task || !agent) throw new Error("unknown task or agent");
 
   const now = nowIso();
-  const doneAt = input.status === "done" ? now : null;
-  // Explicit stage wins; otherwise completing a task advances its lane to done.
-  const stage = input.stage ?? (input.status === "done" ? "done" : null);
+  const mode = sdlcMode();
+  // SDLC done-gate (design doc "SDLC state machine"): 'done' on work that
+  // never passed verification parks the item in the qa lane and spins up the
+  // verification task. assist records the agent's done anyway; strict holds
+  // the status until QA passes. Verification tasks themselves are the gate's
+  // own instrument and bypass it.
+  const gated =
+    mode !== "off" && input.status === "done" && !isVerificationTask(task) && task.stage !== "done";
+  const effectiveStatus: TaskStatus = gated && mode === "strict" ? "in_progress" : input.status;
+  // Explicit stage wins; otherwise completing a task advances its lane to done —
+  // except under the gate, where the server owns the move (qa, verification pending).
+  const stage: TaskStage | null = gated
+    ? "qa"
+    : (input.stage ?? (input.status === "done" ? "done" : null));
+  const doneAt = effectiveStatus === "done" ? now : null;
   db()
     .prepare(
       `UPDATE task SET status = ?, updated_at = ?, done_at = COALESCE(?, done_at),
                        stage = COALESCE(?, stage), pr_url = COALESCE(?, pr_url) WHERE id = ?`,
     )
-    .run(input.status, now, doneAt, stage, input.prUrl ?? null, input.taskId);
+    .run(effectiveStatus, now, doneAt, stage, input.prUrl ?? null, input.taskId);
 
   const type: EventType =
-    input.status === "done"
+    effectiveStatus === "done"
       ? "task.completed"
-      : input.status === "blocked"
+      : effectiveStatus === "blocked"
         ? "task.blocked"
         : "task.started";
   recordEvent({
@@ -1276,11 +1290,30 @@ export function updateTaskStatus(input: {
     subject_kind: "task",
     subject_id: task.id,
     tokens: input.tokens ?? null,
-    data: input.note ? { note: input.note } : null,
+    data: {
+      ...(input.note ? { note: input.note } : {}),
+      ...(gated ? { sdlc: mode === "strict" ? "done-held-for-verification" : "awaiting-verification" } : {}),
+    },
   });
-  touchActivity(input.agentId, `${input.status} ${task.id}`);
+  touchActivity(input.agentId, `${effectiveStatus} ${task.id}`);
 
-  if (input.status === "done") unblockDependents(task.project_id);
+  if (gated && !openVerificationTaskFor(task.id)) {
+    createVerificationTask(task, agent.org_id);
+  }
+  // A PR on open work is the build → review signal; the server owns the move.
+  if (mode !== "off" && input.prUrl && !gated && effectiveStatus !== "done") {
+    const current = getTask(input.taskId)!;
+    if (stageRank(current.stage) < stageRank("review")) {
+      advanceStage({ taskId: task.id, to: "review", byAgentId: input.agentId });
+    }
+  }
+
+  if (effectiveStatus === "done") unblockDependents(task.project_id);
+
+  // A completed verification resolves its parent: pass → done; FAIL… → bounce.
+  if (effectiveStatus === "done" && isVerificationTask(task) && task.parent_task_id) {
+    resolveVerification(getTask(input.taskId)!, input.agentId, input.note);
+  }
   return getTask(input.taskId)!;
 }
 
@@ -1299,6 +1332,271 @@ function unblockDependents(projectId: string): void {
          )`,
     )
     .run(nowIso(), projectId);
+}
+
+// ───────────────────────── SDLC state machine ─────────────────────────
+// Design doc "SDLC state machine — Lanchu enforces the pipeline, agents just
+// work": an agent only signals its own work state; the SERVER owns stage
+// moves. advanceStage is the single entry point — it validates direction,
+// stamps the stage, audits the move (task.bounced for backward ones) and
+// A2A-notices the next stage's specialist. Rollout via LANCHU_SDLC
+// (off | assist | strict, default assist — route + notice, never block).
+
+const STAGE_ORDER: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "done"];
+function stageRank(s: TaskStage | null): number {
+  const i = STAGE_ORDER.indexOf(s ?? "backlog");
+  return i < 0 ? 0 : i;
+}
+
+/** Default stage→specialist routing (role names); build routes by the task's tags. */
+const STAGE_ROUTE: Partial<Record<TaskStage, string>> = {
+  definition: "product",
+  review: "product",
+  qa: "qa",
+};
+
+/** Non-retired agents holding the role with this name. */
+function agentsOfRole(orgId: string, roleName: string): Agent[] {
+  return listAgents(orgId).filter(
+    (a) => a.state !== "retired" && getRole(a.role_id)?.name === roleName,
+  );
+}
+
+/** The gate's verification child for a task that is still open (not done). */
+export function openVerificationTaskFor(taskId: string): Task | null {
+  const row = db()
+    .prepare(
+      `SELECT ${TASK_COLS} FROM task
+       WHERE parent_task_id = ? AND title LIKE 'QA: verify%' AND status <> 'done'
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(taskId) as Record<string, unknown> | undefined;
+  return row ? loadTask(row) : null;
+}
+
+/** Verification tasks are the gate's own instrument: linked child + marker title. */
+export function isVerificationTask(t: Task): boolean {
+  return t.parent_task_id !== null && t.title.startsWith("QA: verify");
+}
+
+/** Notice every specialist of a stage (falls back to product when the role is missing). */
+function noticeStageSpecialists(
+  orgId: string,
+  stage: TaskStage,
+  taskId: string,
+  body: string,
+  excludeAgentId?: string | null,
+): void {
+  const roleName = STAGE_ROUTE[stage];
+  if (!roleName) return;
+  let targets = agentsOfRole(orgId, roleName);
+  if (!targets.length && roleName !== "product") targets = agentsOfRole(orgId, "product");
+  for (const a of targets) {
+    if (a.id === excludeAgentId) continue;
+    insertNotice({ orgId, kind: "system", fromAgentId: null, toAgentId: a.id, body, ref: taskId });
+  }
+}
+
+/**
+ * The single entry point for stage moves. Forward moves audit task.stage_changed
+ * and notice the next specialist. Backward moves are first-class bounces:
+ * counter + last_bounce stamped, task.bounced audited (the org-life graph draws
+ * these as warn-tinted edges), and the work handed back to the original builder
+ * when one is given (pool otherwise).
+ */
+export function advanceStage(input: {
+  taskId: string;
+  to: TaskStage;
+  byAgentId?: string | null;
+  reason?: string;
+  /** On a backward move, hand the task to this agent (usually the original builder). */
+  reassignToAgentId?: string | null;
+}): Task {
+  const task = getTask(input.taskId);
+  if (!task) throw new Error("unknown task");
+  const orgId = orgIdForProject(task.project_id);
+  const from = task.stage ?? "backlog";
+  if (from === input.to) return task;
+  const backward = stageRank(input.to) < stageRank(from);
+  const now = nowIso();
+
+  db().prepare("UPDATE task SET stage = ?, updated_at = ? WHERE id = ?").run(input.to, now, input.taskId);
+
+  if (backward) {
+    const bounce = { from, to: input.to, reason: input.reason ?? "", at: now };
+    db()
+      .prepare("UPDATE task SET bounce_count = bounce_count + 1, last_bounce = ? WHERE id = ?")
+      .run(JSON.stringify(bounce), input.taskId);
+    const receiver = input.reassignToAgentId ? getAgent(input.reassignToAgentId) : null;
+    if (receiver && receiver.state !== "retired") {
+      db()
+        .prepare("UPDATE task SET owner_agent_id = ?, status = 'claimed', done_at = NULL WHERE id = ?")
+        .run(receiver.id, input.taskId);
+      insertNotice({
+        orgId,
+        kind: "system",
+        fromAgentId: null,
+        toAgentId: receiver.id,
+        body: `${task.id} bounced ${from} → ${input.to}${input.reason ? `: ${input.reason}` : ""}. It's back with you.`,
+        ref: task.id,
+      });
+    } else {
+      db()
+        .prepare("UPDATE task SET owner_agent_id = NULL, status = 'available', done_at = NULL WHERE id = ?")
+        .run(input.taskId);
+      noticeStageSpecialists(
+        orgId,
+        input.to,
+        task.id,
+        `${task.id} bounced ${from} → ${input.to}${input.reason ? `: ${input.reason}` : ""} and is back in the pool.`,
+        input.byAgentId,
+      );
+    }
+    recordEvent({
+      org_id: orgId,
+      project_id: task.project_id,
+      type: "task.bounced",
+      actor_agent_id: input.byAgentId ?? null,
+      subject_kind: "task",
+      subject_id: task.id,
+      // `to` carries the receiving AGENT id — the org-life graph draws the
+      // bounce edge actor → data.to.
+      data: {
+        to: receiver && receiver.state !== "retired" ? receiver.id : null,
+        to_name: receiver && receiver.state !== "retired" ? receiver.name : null,
+        from_stage: from,
+        to_stage: input.to,
+        reason: input.reason ?? null,
+      },
+    });
+  } else {
+    recordEvent({
+      org_id: orgId,
+      project_id: task.project_id,
+      type: "task.stage_changed",
+      actor_agent_id: input.byAgentId ?? null,
+      subject_kind: "task",
+      subject_id: task.id,
+      data: { from_stage: from, to_stage: input.to, ...(input.reason ? { reason: input.reason } : {}) },
+    });
+    noticeStageSpecialists(
+      orgId,
+      input.to,
+      task.id,
+      input.to === "review"
+        ? `${task.id} moved to review${task.pr_url ? ` (${task.pr_url})` : ""} — review: "${task.title.slice(0, 80)}"`
+        : `${task.id} moved to ${input.to}: "${task.title.slice(0, 80)}"`,
+      input.byAgentId,
+    );
+  }
+  return getTask(input.taskId)!;
+}
+
+/** Auto-create the QA verification task for an original (the review→qa transition). */
+function createVerificationTask(orig: Task, orgId: string): Task {
+  const id = nextTaskId();
+  const now = nowIso();
+  // Untagged on purpose: claimable by the qa role (or anyone, in orgs without one).
+  db()
+    .prepare(
+      `INSERT INTO task(id, project_id, parent_task_id, title, status, stage, created_at, updated_at)
+       VALUES (?,?,?,?, 'available', 'qa', ?, ?)`,
+    )
+    .run(
+      id,
+      orig.project_id,
+      orig.id,
+      `QA: verify ${orig.id} against its acceptance criteria — ${orig.title.slice(0, 120)}`,
+      now,
+      now,
+    );
+  recordEvent({
+    org_id: orgId,
+    project_id: orig.project_id,
+    type: "task.created",
+    actor_agent_id: null,
+    subject_kind: "task",
+    subject_id: id,
+    data: { source: "sdlc-gate", ref: orig.id },
+  });
+  noticeStageSpecialists(
+    orgId,
+    "qa",
+    id,
+    `Verification ready: ${id} checks ${orig.id} ("${orig.title.slice(0, 80)}"). Complete it with a note; start the note with FAIL to bounce the work back to build.`,
+  );
+  return getTask(id)!;
+}
+
+/**
+ * A completed verification task resolves its parent. Note contract: a note
+ * starting with "FAIL" bounces the original back to build (to its original
+ * builder, with the note attached); anything else is a pass — the server flips
+ * the original to done. In strict mode, orgs WITH a qa role only accept the
+ * resolution from a qa-role agent.
+ */
+function resolveVerification(verification: Task, qaAgentId: string, note?: string): void {
+  const parent = verification.parent_task_id ? getTask(verification.parent_task_id) : null;
+  if (!parent || parent.stage === "done") return;
+  const qaAgent = getAgent(qaAgentId);
+  if (!qaAgent) return;
+  const orgId = qaAgent.org_id;
+
+  if (sdlcMode() === "strict") {
+    const qaRoleExists = agentsOfRole(orgId, "qa").length > 0;
+    const isQa = getRole(qaAgent.role_id)?.name === "qa";
+    if (qaRoleExists && !isQa) {
+      insertNotice({
+        orgId,
+        kind: "system",
+        fromAgentId: null,
+        toAgentId: qaAgentId,
+        body: `${verification.id} must be completed by the qa role in strict mode — ${parent.id} stays unverified.`,
+        ref: verification.id,
+      });
+      return;
+    }
+  }
+
+  if (/^\s*fail/i.test(note ?? "")) {
+    advanceStage({
+      taskId: parent.id,
+      to: "build",
+      byAgentId: qaAgentId,
+      reason: note ?? "verification failed",
+      reassignToAgentId: parent.owner_agent_id,
+    });
+    return;
+  }
+
+  // Pass: the verification completing is what closes the loop — the server
+  // flips the original to done (only-QA-flips, the gate's core rule).
+  const now = nowIso();
+  db()
+    .prepare(
+      "UPDATE task SET status = 'done', stage = 'done', done_at = COALESCE(done_at, ?), updated_at = ? WHERE id = ?",
+    )
+    .run(now, now, parent.id);
+  recordEvent({
+    org_id: orgId,
+    project_id: parent.project_id,
+    type: "task.completed",
+    actor_agent_id: qaAgentId,
+    subject_kind: "task",
+    subject_id: parent.id,
+    data: { via: "qa-verification", verification: verification.id, ...(note ? { note } : {}) },
+  });
+  unblockDependents(parent.project_id);
+  if (parent.owner_agent_id && parent.owner_agent_id !== qaAgentId) {
+    insertNotice({
+      orgId,
+      kind: "system",
+      fromAgentId: null,
+      toAgentId: parent.owner_agent_id,
+      body: `${parent.id} passed QA verification (${verification.id}) and is done.`,
+      ref: parent.id,
+    });
+  }
 }
 
 export function releaseTask(input: {

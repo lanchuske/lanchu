@@ -34,6 +34,8 @@ export type EventType =
   | "task.blocked"
   | "task.reassigned"
   | "task.rejected"
+  | "task.stage_changed"
+  | "task.bounced"
   | "task.handoff"
   | "doc.created"
   | "doc.updated"
@@ -106,6 +108,14 @@ export interface TaskRejection {
   at: string;
 }
 
+/** A backward SDLC move (qa→build, review→build…), first-class per the design doc. */
+export interface TaskBounce {
+  from: TaskStage;
+  to: TaskStage;
+  reason: string;
+  at: string;
+}
+
 export interface Task {
   id: string;
   project_id: string;
@@ -125,6 +135,9 @@ export interface Task {
   /** How many times agents bounced this task back to definition. 2+ = needs definition. */
   rejection_count: number;
   last_rejection: TaskRejection | null;
+  /** Backward SDLC moves so far; 2+ flags the item "needs attention". */
+  bounce_count: number;
+  last_bounce: TaskBounce | null;
 }
 
 export interface LanchuEvent {
