@@ -113,11 +113,16 @@ export function requestGreenzone(input: {
     data: { action, timeout_ms: timeoutMs, required: live.map((a) => a.name) },
   });
   for (const a of live) {
+    // ref 'greenzone' lets message_ack double as the confirmation: sessions
+    // opened before greenzone_ack existed can't see that tool (tool lists are
+    // fixed at session init), but every session can ack a notice.
     store.systemNotice(
       input.orgId,
       a.id,
-      `Greenzone requested (${action}): reach a safe point — commit WIP, finish writes — then confirm with greenzone_ack. ` +
+      `Greenzone requested (${action}): reach a safe point — commit WIP, finish writes — then confirm with greenzone_ack ` +
+        `(if that tool isn't available in your session, message_ack this notice: it counts as your confirmation). ` +
         `Executes when every live agent confirms, or in ${Math.round(timeoutMs / 1000)}s.`,
+      "greenzone",
     );
   }
 

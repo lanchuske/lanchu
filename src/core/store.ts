@@ -3007,8 +3007,27 @@ export function sendNotice(input: {
 }
 
 /** A system notice from Lanchu itself (no sender). */
-export function systemNotice(orgId: string, toAgentId: string, body: string): void {
-  insertNotice({ orgId, kind: "system", fromAgentId: null, toAgentId, body });
+export function systemNotice(orgId: string, toAgentId: string, body: string, ref?: string | null): void {
+  insertNotice({ orgId, kind: "system", fromAgentId: null, toAgentId, body, ref });
+}
+
+/**
+ * Which of these notice ids are this agent's greenzone-request notices?
+ * message_ack uses it to accept an ack of the request notice as a greenzone
+ * confirmation — old MCP sessions minted before greenzone_ack existed can't
+ * see that tool (tool lists are fixed at session init), but every session has
+ * message_ack.
+ */
+export function greenzoneNoticeIds(agentId: string, ids: string[]): string[] {
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db()
+    .prepare(
+      `SELECT id FROM notice
+       WHERE to_agent_id = ? AND kind = 'system' AND ref = 'greenzone' AND id IN (${placeholders})`,
+    )
+    .all(agentId, ...ids) as { id: string }[];
+  return rows.map((r) => r.id);
 }
 
 /**

@@ -97,6 +97,46 @@ test("no live agents → nothing to coordinate, executes immediately; double req
   teardown(busyOrg.a, busyOrg.b);
 });
 
+// ── old-session bridge: acking the request notice IS the confirmation ──
+// Sessions minted before greenzone_ack existed can't see that tool (tool
+// lists are fixed at session init) — but every session has message_ack.
+
+test("acking the greenzone request notice confirms: old sessions are never stuck waiting out the timeout", () => {
+  const { org, a, b } = setup("gz-bridge-org");
+  let executed = 0;
+  gz.requestGreenzone({ orgId: org.id, execute: () => executed++ });
+
+  // The notice tells old sessions the fallback and is marked for the bridge.
+  const heard = store.takeUndeliveredNotices(a.id);
+  assert.equal(heard.length, 1);
+  assert.equal(heard[0].ref, "greenzone");
+  assert.match(heard[0].body, /message_ack this notice: it counts as your confirmation/);
+
+  // A regular teammate message must NOT be mistaken for a confirmation.
+  store.sendNotice({ orgId: org.id, fromAgentId: b.id, to: "a", body: "unrelated" });
+  const unrelated = store.listNotices(a.id).find((n) => n.body === "unrelated");
+  assert.deepEqual(store.greenzoneNoticeIds(a.id, [unrelated.id]), [], "plain messages don't confirm");
+
+  // The bridge (mirrors the message_ack tool): resolve greenzone ids, then confirm.
+  const gzIds = store.greenzoneNoticeIds(a.id, [heard[0].id, unrelated.id]);
+  assert.deepEqual(gzIds, [heard[0].id]);
+  store.ackNotices(a.id, [heard[0].id, unrelated.id]);
+  const one = gz.ackGreenzone(org.id, a.id);
+  assert.equal(one.confirmed, 1);
+  assert.equal(executed, 0);
+
+  // Cross-agent safety: b can't launder a's notice id into a confirmation for itself.
+  assert.deepEqual(store.greenzoneNoticeIds(b.id, [heard[0].id]), [], "notice ids are per-recipient");
+
+  const bNotice = store.takeUndeliveredNotices(b.id).find((n) => n.ref === "greenzone");
+  store.ackNotices(b.id, [bNotice.id]);
+  const two = gz.ackGreenzone(org.id, b.id);
+  assert.equal(two.state, "done");
+  assert.equal(executed, 1, "both confirmed via the bridge → executes early, no timeout wait");
+
+  teardown(a, b);
+});
+
 test("HTTP surface: /greenzone/request opens the window and /api/greenzone reports it", async () => {
   const { createServer } = await import("../dist/server/server.js");
   const server = createServer();
