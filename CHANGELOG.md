@@ -2,6 +2,22 @@
 
 Notable changes to [lanchu](https://www.npmjs.com/package/lanchu). Numbers reference pull requests in this repository.
 
+## 0.5.12 — 2026-07-11
+
+Cycle 2: the org runs itself.
+
+- SDLC reconciliation: batch-QA verification flips originals; startup backfill (board consistency).
+- Landing queue: review-approved PRs land serialized per touched surface — no more stale-rebase churn.
+- Release train: release-pressure tile + threshold-triggered release tasks (never auto-publishes).
+- Docs & comms gate: user-facing tasks queue their communication work on done.
+- Wake v4: Stop hook at spawn (never idle with pending notices) + tmux send-keys transport; keystroke injection demoted to audited last resort. Windows idempotency hotfix included.
+- Auto-wake v3 hygiene: broadcast TTL, nudge budgets, unreachable flag, retire voids the inbox.
+- Greenzone: stuck windows self-expire; supervisor cancel (HTTP/CLI/panel).
+- Work board: Open/Shipped/All tabs, slim empty lanes, Recently-shipped on Overview, Done newest-first.
+- Panel: auto-reload on server build change; unknown-hash fallback; running-build hint.
+- Terminal colors: WCAG-gated tint derived from the user profile; persisted slot de-collision.
+- Docs: README/CLI/site/llms.txt refreshed for the 0.5.11+ feature wave; version-consistency tests guard releases (they caught this very release being cut with stale docs).
+
 ## 0.5.11 — 2026-07-11
 
 The self-coordinating org: the server now runs the delivery pipeline, agents coordinate and persist knowledge, and the governance surface grew a full suite.
