@@ -611,7 +611,14 @@ async function cmdStats(): Promise<void> {
 async function cmdRetire(agentId: string): Promise<void> {
   if (!agentId) return console.log("usage: lanchu retire <agentId> [--force]");
   await orgOf();
-  const r = (await post("/agent/retire", { agentId, force: hasFlag("force") })) as {
+  // Rule-10 hardening (task-mrgpswtk14): --force is the HUMAN supervisor's
+  // override. Agents run non-interactive shells — a force without a TTY is an
+  // agent trying to bypass the coordinator gate, and it refuses.
+  if (hasFlag("force") && !process.stdin.isTTY) {
+    console.log("retire --force requires an interactive terminal (rule 10: agents never force retirement — request it and let the coordinator resolve).");
+    return;
+  }
+  const r = (await post("/agent/retire", { agentId, force: hasFlag("force"), source: hasFlag("force") ? "cli-force" : "cli" })) as {
     retired: boolean;
     requested?: boolean;
     coordinator?: string;

@@ -2778,7 +2778,10 @@ export interface RetireResult {
  * force) resolves — audited retire.requested/approved/denied. With no active
  * lease (solo orgs), direct retirement still works.
  */
-export function retireAgent(agentId: string, opts: { override?: boolean } = {}): RetireResult {
+export function retireAgent(
+  agentId: string,
+  opts: { override?: boolean; byAgentId?: string | null; source?: string } = {},
+): RetireResult {
   const open = openTasksForAgent(agentId);
   if (open.length > 0) return { retired: false, blockedBy: open };
   const agent = getAgent(agentId);
@@ -2819,16 +2822,22 @@ export function retireAgent(agentId: string, opts: { override?: boolean } = {}):
   // qa duty: a retiring QA agent's probe fixtures go to the archive with it.
   const probes = archiveQaProbesOf(agentId, "creator retired");
   if (agent) {
+    // Attribution (task-mrgpswtk14): the 18:38:41Z bypass was undiagnosable
+    // because this event always said actor=subject and never recorded the
+    // override — every forced retire looked like a self-retire. Now the
+    // initiator and the path are on the record.
     recordEvent({
       org_id: agent.org_id,
       type: "agent.retired",
-      actor_agent_id: agentId,
+      actor_agent_id: opts.byAgentId ?? agentId,
       subject_kind: "agent",
       subject_id: agentId,
-      data:
-        voided || probes.length
-          ? { ...(voided ? { voided_notices: voided } : {}), ...(probes.length ? { archived_probes: probes } : {}) }
-          : undefined,
+      data: {
+        ...(voided ? { voided_notices: voided } : {}),
+        ...(probes.length ? { archived_probes: probes } : {}),
+        ...(opts.override ? { override: true } : {}),
+        via: opts.source ?? (opts.override ? "override" : "self"),
+      },
     });
     // A retiring coordinator releases the lease — the org must never be
     // "coordinated" by a ghost.
@@ -2933,7 +2942,11 @@ export function resolveRetirement(input: {
     });
     return { retired: false, blockedBy: [] };
   }
-  return retireAgent(target.id, { override: true });
+  return retireAgent(target.id, {
+    override: true,
+    byAgentId: input.byAgentId,
+    source: input.override ? "supervisor-resolve" : "coordinator-resolve",
+  });
 }
 
 // ───────────────────────── coordinator lease ─────────────────────────

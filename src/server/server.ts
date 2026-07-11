@@ -748,9 +748,12 @@ export function createServer(): http.Server {
       // broadcast once dissolved the whole team — never again). force = the
       // human supervisor's explicit confirmation (panel button, CLI --force).
       if (url.pathname === "/agent/retire" && req.method === "POST") {
-        const body = (await readJson(req)) as { agentId: string; force?: boolean };
+        const body = (await readJson(req)) as { agentId: string; force?: boolean; source?: string };
         const agent = store.getAgent(body.agentId);
-        const result = store.retireAgent(body.agentId, { override: body.force === true });
+        const result = store.retireAgent(body.agentId, {
+          override: body.force === true,
+          source: body.force === true ? (body.source ?? "http-force") : "self",
+        });
         // Prune the retired agent's isolated worktree; its branch stays for PR/merge.
         const worktree = result.retired ? removeAgentWorktree(agent?.worktree) : undefined;
         return sendJson(res, 200, { ...result, worktree });

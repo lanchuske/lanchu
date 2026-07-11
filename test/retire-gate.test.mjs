@@ -105,3 +105,36 @@ test("an expired lease does not gate retirement", () => {
   const r = store.retireAgent(worker.id);
   assert.equal(r.retired, true);
 });
+
+// ── attribution (task-mrgpswtk14): the 18:38:41Z bypass was undiagnosable ──
+// agent.retired always said actor=subject with no override on record, so a
+// forced retire was indistinguishable from a self-retire. Now every path
+// carries its initiator and its via.
+
+test("a forced retire is audited as an override with its source — never mistaken for a self-retire", () => {
+  const { org, coordinator, worker } = setup("retire-h");
+  store.coordinatorAcquire({ orgId: org.id, agentId: coordinator.id });
+  const r = store.retireAgent(worker.id, { override: true, source: "panel" });
+  assert.equal(r.retired, true);
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "agent.retired" && e.subject_id === worker.id);
+  assert.equal(ev.data.override, true, "the override is on the record");
+  assert.equal(ev.data.via, "panel", "the path that forced it is on the record");
+});
+
+test("a plain self-retire (no lease) is audited as via self, no override", () => {
+  const { org, worker } = setup("retire-i");
+  store.retireAgent(worker.id);
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "agent.retired" && e.subject_id === worker.id);
+  assert.equal(ev.data.via, "self");
+  assert.equal(ev.data.override, undefined);
+});
+
+test("a coordinator-approved retirement names the coordinator as the actor", () => {
+  const { org, coordinator, worker } = setup("retire-j");
+  store.coordinatorAcquire({ orgId: org.id, agentId: coordinator.id });
+  store.retireAgent(worker.id); // files the request
+  store.resolveRetirement({ agentId: worker.id, byAgentId: coordinator.id, approve: true });
+  const ev = store.listAuditEvents(org.id).find((e) => e.type === "agent.retired" && e.subject_id === worker.id);
+  assert.equal(ev.actor_name, "lead", "the resolver, not the subject, is the actor");
+  assert.equal(ev.data.via, "coordinator-resolve");
+});

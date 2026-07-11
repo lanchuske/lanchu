@@ -665,7 +665,7 @@ function updateContextCmds() {
 function retire(id) {
   // The panel is the human supervisor's surface: a click IS the confirmation,
   // so it forces through the coordinator retirement gate.
-  post("/agent/retire", { agentId: id, force: true }).then(function (r) {
+  post("/agent/retire", { agentId: id, force: true, source: "panel" }).then(function (r) {
     var el = document.getElementById("retire-msg-" + id);
     if (el && r && r.retired === false) el.textContent = "blocked — " + (r.blockedBy || []).length + " open task(s) to hand off first";
   });
