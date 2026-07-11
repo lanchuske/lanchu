@@ -16,6 +16,10 @@
   <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-0b7285">
 </p>
 
+<p align="center">
+  <img src="https://lanchu.ar/panel-demo.gif" width="880" alt="The Lanchu panel walking through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task.">
+</p>
+
 ---
 
 ## What problem does it solve?

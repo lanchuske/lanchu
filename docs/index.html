@@ -215,7 +215,7 @@
         display: flex; gap: 18px; flex-wrap: wrap; }
   footer a { color: var(--muted); }
 
-  /* Product shot — a faithful mockup of the local panel */
+  /* Product shot — the real local panel, animated */
   .shot-wrap { margin: 0; padding: 36px 0 0; }
   .shot { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--bg);
           box-shadow: 0 1px 2px rgba(16,24,40,.06), 0 18px 40px -20px rgba(16,24,40,.30); }
@@ -229,40 +229,8 @@
   .shot .addr { flex: 1; text-align: center; font: 12px/1 var(--mono); color: var(--muted);
           background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
           padding: 5px 10px; max-width: 240px; margin: 0 auto; }
-  .shot .win { display: grid; grid-template-columns: 168px 1fr; }
-  .shot .pside { background: var(--code-bg); border-right: 1px solid var(--line); padding: 15px 13px; }
-  .shot .pbrand { font-weight: 700; font-size: 14px; letter-spacing: -.01em; margin: 0 0 13px; }
-  .shot .pbrand small { display: block; font-weight: 500; color: var(--muted); font-size: 10px;
-          letter-spacing: .05em; text-transform: uppercase; margin-top: 3px; }
-  .shot .porg { font-size: 12px; color: var(--muted); margin: 0 0 9px; }
-  .shot .porg b { color: var(--fg); font-weight: 600; }
-  .shot .plive { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
-          color: var(--muted); margin: 0 0 15px; }
-  .shot .plive .pip { width: 7px; height: 7px; border-radius: 50%; background: #16a34a;
-          box-shadow: 0 0 0 3px rgba(22,163,74,.18); flex: none; }
-  .shot ul.pnav { list-style: none; margin: 0; padding: 0; }
-  .shot ul.pnav li { display: flex; justify-content: space-between; align-items: center;
-          padding: 6px 9px; border-radius: 7px; color: var(--muted); font-size: 13px; margin-bottom: 1px; }
-  .shot ul.pnav li.on { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
-  .shot ul.pnav .b { font-size: 11px; background: var(--line); color: var(--muted);
-          border-radius: 20px; padding: 0 7px; font-weight: 600; }
-  .shot ul.pnav li.on .b { background: var(--accent); color: var(--accent-fg); }
-  .shot .pmain { padding: 17px 17px 19px; background: var(--bg); }
-  .shot .pmain h4 { margin: 0 0 3px; font-size: 16px; letter-spacing: -.01em; }
-  .shot .pmain .psub { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
-  .shot .pcards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .shot .pcard { border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; background: var(--card); }
-  .shot .pcard .pn { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13.5px; }
-  .shot .pcard .pm { margin-top: 5px; font-size: 11.5px; color: var(--muted); }
-  .shot .pcard .pm b { color: var(--fg); font-weight: 600; }
-  .shot .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
-  .shot .dot.on { background: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,.16); }
-  .shot .dot.off { background: var(--faint); }
-  .shot .proles { margin-top: 15px; }
-  .shot .proles .rh { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-          color: var(--muted); margin: 0 0 8px; }
-  .shot .chip { display: inline-block; border: 1px solid var(--line); border-radius: 20px;
-          padding: 3px 10px; font-size: 12px; color: var(--muted); margin: 0 5px 5px 0; }
+  .shot .win { display: block; background: #0d1117; }
+  .shot .win img { display: block; width: 100%; height: auto; }
   .shotcap { text-align: center; color: var(--muted); font-size: 13px; margin: 13px 0 0; }
 
   /* Star CTA */
@@ -282,9 +250,6 @@
   @media (max-width: 560px) {
     h1 { font-size: 36px; }
     .grid, .res { grid-template-columns: 1fr; }
-    .shot .win { grid-template-columns: 1fr; }
-    .shot .pside { display: none; }
-    .shot .pcards { grid-template-columns: 1fr; }
     .stats { gap: 10px; }
     .stat b { font-size: 21px; }
   }
@@ -320,32 +285,9 @@
         <span class="addr">127.0.0.1:4319</span>
       </div>
       <div class="win">
-        <nav class="pside" aria-hidden="true">
-          <div class="pbrand">Lanchu <small>control &amp; trust</small></div>
-          <div class="porg">org · <b>lanchu</b></div>
-          <div class="plive"><span class="pip"></span> live</div>
-          <ul class="pnav">
-            <li>Overview</li>
-            <li class="on">Team <span class="b">4</span></li>
-            <li>Work <span class="b">8</span></li>
-            <li>Docs <span class="b">2</span></li>
-            <li>Activity</li>
-          </ul>
-        </nav>
-        <div class="pmain" aria-hidden="true">
-          <h4>Team</h4>
-          <p class="psub">Agents in this org, each kept to its own lane.</p>
-          <div class="pcards">
-            <div class="pcard"><div class="pn"><span class="dot on"></span> api</div><div class="pm">role backend · <b>2</b> open · ⌥ main</div></div>
-            <div class="pcard"><div class="pn"><span class="dot on"></span> web</div><div class="pm">role frontend · <b>1</b> open · ⌥ feat/panel</div></div>
-            <div class="pcard"><div class="pn"><span class="dot on"></span> distro</div><div class="pm">role distribution · <b>1</b> open</div></div>
-            <div class="pcard"><div class="pn"><span class="dot off"></span> docs</div><div class="pm">role docs · <b>0</b> open</div></div>
-          </div>
-          <div class="proles">
-            <p class="rh">Roles</p>
-            <span class="chip">backend</span><span class="chip">frontend</span><span class="chip">docs</span><span class="chip">distribution</span>
-          </div>
-        </div>
+        <img src="panel-demo.gif" width="1200" height="720"
+             alt="The Lanchu panel walking through its Overview, Team, Work and Activity views — a live, local dashboard of every agent, role and task."
+             loading="lazy" decoding="async" />
       </div>
     </div>
     <figcaption class="shotcap">The panel — a live, local view of every agent, role and task. Runs at <code>127.0.0.1:4319</code>; nothing leaves your machine.</figcaption>
