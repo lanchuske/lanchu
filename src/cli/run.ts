@@ -480,7 +480,7 @@ async function cmdStop(): Promise<void> {
 }
 
 const SPAWN_PROMPT =
-  "You are a new Lanchu teammate. Greet the user in one line, then ask which task you should do. When they answer, read org_context, then claim and work the matching task.";
+  "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work.";
 
 async function cmdSpawn(): Promise<void> {
   const found = findConfig();
