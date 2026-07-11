@@ -116,6 +116,11 @@ const TEMPLATE = `<!doctype html>
                text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
                margin: 22px 0 10px; }
   .cat-title:first-child { margin-top: 4px; }
+  /* Docs taxonomy v2: section headers above the category groups */
+  .doc-sec { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; margin: 22px 0 4px; }
+  .doc-sec:first-child { margin-top: 4px; }
+  .doc-sec .hint { font-weight: 400; }
+  .doc-sec .records-toggle { font: inherit; background: none; border: none; color: inherit; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 8px; }
   .card.doc .doc-body { display: none; word-break: break-word; margin-top: 11px;
                padding-top: 11px; border-top: 1px solid var(--line); color: var(--muted);
                font-size: 13px; line-height: 1.6; }
@@ -651,6 +656,14 @@ document.addEventListener("click", function (e) {
     else if (act === "stop-server") stopServer();
     else if (act === "remove-org") removeOrg(b, id);
     else if (act === "show-all-done") { showAllDone = true; renderBoard(); }
+    else if (act === "toggle-records") { recordsOpen = !recordsOpen; renderDocs(lastDocs); }
+    else if (act === "archive-doc") {
+      post("/doc/archive", { id: id }).then(function () {
+        toast("Record archived (audited — nothing is deleted)");
+        lastDocs = lastDocs.filter(function (d) { return d.id !== id; });
+        renderDocs(lastDocs);
+      });
+    }
     return;
   }
   // Click anywhere on an agent card (but not on its controls) → reveal its terminal.
@@ -1061,7 +1074,47 @@ function mdToHtml(src) {
   closeList();
   return out.join("");
 }
-var docQuery = "", lastDocs = [], openDocs = {};
+var docQuery = "", lastDocs = [], openDocs = {}, recordsOpen = false;
+// Records older than this are archive candidates (hygiene loop, taxonomy v2).
+var RECORD_ARCHIVE_DAYS = 7;
+function docCard(d) {
+  var isRecord = d.lifecycle === "record";
+  var reads = d.read_count || 0;
+  var flag = "";
+  if (isRecord) {
+    var oldRecord = d.updated_at && (Date.now() - new Date(d.updated_at).getTime()) > RECORD_ARCHIVE_DAYS * 24 * 3600e3;
+    flag = oldRecord ? ' <span class="pill stale-pill" title="old point-in-time record — archive it to keep Records tidy">archive candidate</span>' : "";
+  } else {
+    // Knowledge analytics (living docs only): unread docs are prune candidates;
+    // docs read often but not updated in a while are refresh candidates.
+    var staleHot = reads >= 3 && d.last_read_at && d.updated_at && d.last_read_at > d.updated_at &&
+      (Date.now() - new Date(d.updated_at).getTime()) > 24 * 3600e3;
+    flag = reads === 0
+      ? ' <span class="pill p-available" title="no agent has consulted this doc yet — prune candidate?">never read</span>'
+      : (staleHot ? ' <span class="pill stale-pill" title="read often but not updated lately — refresh candidate?">stale but hot</span>' : "");
+  }
+  var readMeta = reads
+    ? ' · <b>' + reads + '</b> read' + (reads === 1 ? "" : "s") +
+      (d.last_read_by ? ' · last by ' + esc(d.last_read_by) + ' ' + esc((d.last_read_at || "").replace("T", " ").slice(0, 16)) : "")
+    : "";
+  var readers = (d.readers || []).length
+    ? '<div class="meta doc-readers"><span class="k">consulted by</span> ' + d.readers.map(function (r) {
+        return '<span class="holder">' + colorChip(r.name || "?") + esc(r.name || r.agent_id) + ' <span class="hint">(' + r.reads + '×, last ' + esc((r.last_read_at || "").replace("T", " ").slice(5, 16)) + ')</span></span>';
+      }).join(" ") + '</div>'
+    : "";
+  var archiveBtn = isRecord
+    ? '<div class="actions"><button class="danger" data-act="archive-doc" data-id="' + esc(d.id) + '" title="Soft-hide this record: audited, never deleted">Archive</button></div>'
+    : "";
+  return '<div class="card clickable doc' + (openDocs[d.id] ? " open" : "") + '" data-doc="' + esc(d.id) + '">' +
+    '<span class="name">' + esc(d.title) + '</span>' + flag +
+    '<div class="meta">' + d.chars + ' chars · ' + esc((d.updated_at || "").replace("T", " ").slice(0, 16)) +
+    (d.updated_by ? ' · by ' + esc(d.updated_by) : "") + readMeta + '</div>' +
+    '<div class="doc-body">' + (d.content ? mdToHtml(d.content) : '<span class="empty-inline">(empty)</span>') + readers + archiveBtn + '</div>' +
+    '</div>';
+}
+// Taxonomy v2 (task-mrgkiy7h6): living documentation (the org's constitution —
+// curated, grouped by category, always first) vs records (point-in-time
+// evidence — dated, newest first, folded away so nothing important drowns).
 function renderDocs(list) {
   lastDocs = list;
   document.getElementById("c-docs").textContent = list.length;
@@ -1072,38 +1125,43 @@ function renderDocs(list) {
     return (d.title || "").toLowerCase().indexOf(q) >= 0 || (d.content || "").toLowerCase().indexOf(q) >= 0;
   }) : list;
   if (!shown.length) { box.innerHTML = '<div class="empty">No docs match “' + esc(docQuery) + '”.</div>'; return; }
-  var byCat = {};
-  shown.forEach(function (d) { var c = d.category || "general"; (byCat[c] = byCat[c] || []).push(d); });
+  var living = shown.filter(function (d) { return d.lifecycle !== "record"; });
+  var records = shown.filter(function (d) { return d.lifecycle === "record"; });
   var html = "";
-  DOC_CATS.forEach(function (pair) {
-    var docs = byCat[pair[0]]; if (!docs || !docs.length) return;
-    html += '<div class="cat-title">' + esc(pair[1]) + ' <span class="badge">' + docs.length + '</span></div>';
-    html += docs.map(function (d) {
-      // Knowledge analytics: unread docs are prune candidates; docs read often
-      // but not updated in a while are refresh candidates.
-      var reads = d.read_count || 0;
-      var staleHot = reads >= 3 && d.last_read_at && d.updated_at && d.last_read_at > d.updated_at &&
-        (Date.now() - new Date(d.updated_at).getTime()) > 24 * 3600e3;
-      var flag = reads === 0
-        ? ' <span class="pill p-available" title="no agent has consulted this doc yet — prune candidate?">never read</span>'
-        : (staleHot ? ' <span class="pill stale-pill" title="read often but not updated lately — refresh candidate?">stale but hot</span>' : "");
-      var readMeta = reads
-        ? ' · <b>' + reads + '</b> read' + (reads === 1 ? "" : "s") +
-          (d.last_read_by ? ' · last by ' + esc(d.last_read_by) + ' ' + esc((d.last_read_at || "").replace("T", " ").slice(0, 16)) : "")
-        : "";
-      var readers = (d.readers || []).length
-        ? '<div class="meta doc-readers"><span class="k">consulted by</span> ' + d.readers.map(function (r) {
-            return '<span class="holder">' + colorChip(r.name || "?") + esc(r.name || r.agent_id) + ' <span class="hint">(' + r.reads + '×, last ' + esc((r.last_read_at || "").replace("T", " ").slice(5, 16)) + ')</span></span>';
-          }).join(" ") + '</div>'
-        : "";
-      return '<div class="card clickable doc' + (openDocs[d.id] ? " open" : "") + '" data-doc="' + esc(d.id) + '">' +
-        '<span class="name">' + esc(d.title) + '</span>' + flag +
-        '<div class="meta">' + d.chars + ' chars · ' + esc((d.updated_at || "").replace("T", " ").slice(0, 16)) +
-        (d.updated_by ? ' · by ' + esc(d.updated_by) : "") + readMeta + '</div>' +
-        '<div class="doc-body">' + (d.content ? mdToHtml(d.content) : '<span class="empty-inline">(empty)</span>') + readers + '</div>' +
-        '</div>';
-    }).join("");
-  });
+
+  html += '<div class="doc-sec">Documentation <span class="badge">' + living.length + '</span> <span class="hint">living docs — canonical, updated in place</span></div>';
+  if (living.length) {
+    var byCat = {};
+    living.forEach(function (d) { var c = d.category || "general"; (byCat[c] = byCat[c] || []).push(d); });
+    DOC_CATS.forEach(function (pair) {
+      var docs = byCat[pair[0]]; if (!docs || !docs.length) return;
+      html += '<div class="cat-title">' + esc(pair[1]) + ' <span class="badge">' + docs.length + '</span></div>';
+      html += docs.map(docCard).join("");
+    });
+  } else {
+    html += '<div class="empty">No living documentation' + (q ? ' matches' : ' yet') + '.</div>';
+  }
+
+  // A live search spans both sections and unfolds the records so hits show.
+  var open = recordsOpen || !!q;
+  html += '<div class="doc-sec doc-records"><button class="records-toggle" data-act="toggle-records">' + (open ? "▾" : "▸") + ' Records <span class="badge">' + records.length + '</span></button> <span class="hint">point-in-time evidence — QA reports, incidents, logs</span></div>';
+  if (open) {
+    if (records.length) {
+      var byDate = {}, dates = [];
+      records.forEach(function (d) {
+        var day = (d.updated_at || "").slice(0, 10) || "undated";
+        if (!byDate[day]) { byDate[day] = []; dates.push(day); }
+        byDate[day].push(d);
+      });
+      dates.sort().reverse();
+      dates.forEach(function (day) {
+        html += '<div class="cat-title">' + esc(day) + ' <span class="badge">' + byDate[day].length + '</span></div>';
+        html += byDate[day].map(docCard).join("");
+      });
+    } else {
+      html += '<div class="empty">No records' + (q ? ' match' : ' yet') + '.</div>';
+    }
+  }
   box.innerHTML = html;
 }
 (function () {

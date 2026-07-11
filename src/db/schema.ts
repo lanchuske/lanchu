@@ -2,7 +2,8 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 14;
+// 14 = task archive columns; 15 = doc lifecycle + one-time reclassification.
+export const SCHEMA_VERSION = 15;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -118,6 +119,9 @@ CREATE TABLE IF NOT EXISTS doc (
   title               TEXT NOT NULL,
   content             TEXT NOT NULL DEFAULT '',
   category            TEXT NOT NULL DEFAULT 'general',
+  lifecycle           TEXT NOT NULL DEFAULT 'living'
+                        CHECK (lifecycle IN ('living','record')),
+  archived_at         TEXT,
   read_count          INTEGER NOT NULL DEFAULT 0,
   last_read_at        TEXT,
   last_read_by_agent_id TEXT REFERENCES agent(id),
