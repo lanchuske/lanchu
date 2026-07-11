@@ -60,7 +60,7 @@ test("a parked agent with starved notices is refired via claude --resume, audite
   await graceElapsed();
 
   const fired = [];
-  const r = runNudgeSweep({
+  const r = await runNudgeSweep({
     alive: () => false,
     transportLive: () => false,
     liveSessions: () => new Set(), // verified absent
@@ -77,7 +77,7 @@ test("a parked agent with starved notices is refired via claude --resume, audite
   assert.equal(ev.data.transport, "runner", "acceptance: audited transport 'runner' on agent.nudged");
 
   // Cooldown holds for refires too.
-  const again = runNudgeSweep({
+  const again = await runNudgeSweep({
     alive: () => false, transportLive: () => false,
     liveSessions: () => new Set(), refire: () => { throw new Error("must not refire again"); },
   });
@@ -93,13 +93,13 @@ test("safety gates: a live MCP transport, a listed claude session, or an UNKNOWN
 
   const boom = () => { throw new Error("refire must not run"); };
   // Gate: live transport.
-  let r = runNudgeSweep({ alive: () => false, transportLive: () => true, liveSessions: () => new Set(), refire: boom });
+  let r = await runNudgeSweep({ alive: () => false, transportLive: () => true, liveSessions: () => new Set(), refire: boom });
   assert.deepEqual(r.refired, []);
   // Gate: session still listed by `claude agents --json` (fork risk).
-  r = runNudgeSweep({ alive: () => false, transportLive: () => false, liveSessions: () => new Set(["sid-c"]), refire: boom });
+  r = await runNudgeSweep({ alive: () => false, transportLive: () => false, liveSessions: () => new Set(["sid-c"]), refire: boom });
   assert.deepEqual(r.refired, []);
   // Gate: liveness unknown → fail CLOSED.
-  r = runNudgeSweep({ alive: () => false, transportLive: () => false, liveSessions: () => null, refire: boom });
+  r = await runNudgeSweep({ alive: () => false, transportLive: () => false, liveSessions: () => null, refire: boom });
   assert.deepEqual(r.refired, []);
 });
 
@@ -113,7 +113,7 @@ test("a crashed session (no SessionEnd) refires only when its terminal is verifi
   // Terminal still alive → the asyncRewake hook owns it (v5.1): the sweep
   // must not refire THIS agent (it spans every org, so filter by session id).
   const fired = [];
-  let r = runNudgeSweep({
+  let r = await runNudgeSweep({
     alive: () => true,
     transportLive: () => false,
     liveSessions: () => new Set(),
@@ -130,7 +130,7 @@ test("a crashed session (no SessionEnd) refires only when its terminal is verifi
   store.setAgentTerminal(org2.parked.id, { method: "tmux", id: "%43" });
   store.sendNotice({ orgId: org2.org.id, fromAgentId: org2.sender.id, to: "parked", body: "z" });
   await graceElapsed();
-  r = runNudgeSweep({
+  r = await runNudgeSweep({
     alive: () => false,
     transportLive: () => false,
     liveSessions: () => new Set(),
