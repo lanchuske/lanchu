@@ -752,7 +752,7 @@ export function createServer(): http.Server {
         const agent = store.getAgent(body.agentId);
         const result = store.retireAgent(body.agentId, {
           override: body.force === true,
-          source: body.force === true ? (body.source ?? "http-force") : "self",
+          source: body.force === true ? (body.source ?? "http-force") : (body.source ?? "self"),
         });
         // Prune the retired agent's isolated worktree; its branch stays for PR/merge.
         const worktree = result.retired ? removeAgentWorktree(agent?.worktree) : undefined;

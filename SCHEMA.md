@@ -231,8 +231,14 @@ CREATE INDEX idx_event_actor         ON event(actor_agent_id, id);
   coordinator/product resolves it with `retire_resolve` (MCP) — or the supervisor with
   `POST /agent/retire/resolve`, the panel buttons, or `lanchu retire <id> --force`.
   Deny keeps the agent and tells it to stand by. No active lease = direct retirement
-  (solo orgs). Evidence: 2026-07-11, four agents self-retired in 9s off an ambiguous
-  "all clear" broadcast.
+  (solo orgs). `lanchu retire --force` requires an interactive terminal — a non-TTY
+  force (an agent) is denied client-side and still files the request server-side with
+  `source: cli-force-denied`, so the attempt is audited. Every `agent.retired` event
+  records the initiator, `override` and `via`. AUTHN BOUNDARY: without
+  LANCHU_ACCESS_KEY, any local process can POST a forced retire with a self-declared
+  source — the access key is what makes supervisor overrides trustworthy on shared
+  machines. Evidence: 2026-07-11, four agents self-retired in 9s off an ambiguous
+  "all clear" broadcast; 18:38:41Z, a probe bypassed via non-TTY `--force`.
 - **doc.lifecycle (taxonomy v2):** `living` (the org's constitution — Vision, Roadmap,
   Designs; curated, updated in place, shown first) · `record` (immutable point-in-time
   evidence — QA batch reports, incidents, feedback logs; dated, folded away in the

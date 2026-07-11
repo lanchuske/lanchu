@@ -2796,7 +2796,9 @@ export function retireAgent(
           actor_agent_id: agentId,
           subject_kind: "agent",
           subject_id: agentId,
-          data: { agent: agent.name, coordinator: lease.agent_name },
+          // A denied --force arrives here as source cli-force-denied: the
+          // ATTEMPT to bypass rule 10 is on the record, not just refused.
+          data: { agent: agent.name, coordinator: lease.agent_name, ...(opts.source ? { source: opts.source } : {}) },
         });
         insertNotice({
           orgId: agent.org_id,
