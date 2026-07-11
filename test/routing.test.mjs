@@ -12,6 +12,7 @@ process.env.LANCHU_STATE_DIR = dir;
 const { suggestModel, sameModelTier } = await import("../dist/core/routing.js");
 const store = await import("../dist/core/store.js");
 const { bootstrapCommand } = await import("../dist/server/cockpit.js");
+const { createServer } = await import("../dist/server/server.js");
 
 test("static tier map: definition/review → opus, mechanical → haiku, default sonnet", () => {
   assert.equal(suggestModel(["server"], "definition").model, "opus");
@@ -53,3 +54,55 @@ test("bootstrapCommand launches claude with --model when one is chosen", () => {
   const without = bootstrapCommand("/tmp/x", "tok", "hello", "qa-bot", "org·qa-bot");
   assert.equal(without.includes("--model"), false, "no flag when no tier chosen");
 });
+
+// QA follow-up (batch 4, task-mrg535ea2): end-to-end /session coverage for the
+// precedence rule (explicit > agent's own > role default) that only existed as
+// direct store calls above — a real spawn goes through handleSession, not
+// store.setAgentModel directly.
+{
+  const server = createServer();
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  test.after(() => server.close());
+
+  const join = async (body) => {
+    const res = await fetch(`${base}/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ org: "route-session-org", project: "core", ...body }),
+    });
+    assert.equal(res.status, 200);
+    return res.json();
+  };
+
+  test("a fresh role with no preferred_model does not auto-default any tier", async () => {
+    const { agentId } = await join({ agentName: "plain-role-agent", role: "unconfigured-role" });
+    assert.equal(store.getAgent(agentId).model, null, "no tier without an explicit --model or a configured role.preferred_model");
+  });
+
+  test("/session inherits the role's preferred_model on a fresh spawn", async () => {
+    const org = store.getOrCreateOrg("route-session-org");
+    store.defineRole(org.id, "cheap-role", {});
+    store.updateRole(org.id, "cheap-role", { preferredModel: "haiku" });
+    const { agentId } = await join({ agentName: "cheap-agent", role: "cheap-role" });
+    assert.equal(store.getAgent(agentId).model, "haiku");
+  });
+
+  test("/session's explicit model overrides the role default", async () => {
+    const { agentId } = await join({ agentName: "override-agent", role: "cheap-role", model: "opus" });
+    assert.equal(store.getAgent(agentId).model, "opus");
+  });
+
+  test("respawn keeps the agent's own model even if the role default later changes", async () => {
+    const org = store.getOrCreateOrg("route-session-org");
+    store.defineRole(org.id, "drifting-role", {});
+    store.updateRole(org.id, "drifting-role", { preferredModel: "sonnet" });
+    const first = await join({ agentName: "durable-agent", role: "drifting-role" });
+    assert.equal(store.getAgent(first.agentId).model, "sonnet");
+
+    store.updateRole(org.id, "drifting-role", { preferredModel: "opus" });
+    const second = await join({ agentName: "durable-agent" }); // plain rejoin, no role/model passed
+    assert.equal(second.agentId, first.agentId, "same durable agent");
+    assert.equal(store.getAgent(second.agentId).model, "sonnet", "keeps its own model, not the role's new default");
+  });
+}
