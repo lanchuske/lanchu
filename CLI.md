@@ -99,8 +99,11 @@ Resolved from the **current directory**, git-style:
   ```json
   { "org": "acme", "project": "web" }
   ```
-- If it doesn't exist → it runs `lanchu init` (interactive): creates/picks an org and project and writes
-  the config. That way, next time is zero friction.
+- If it doesn't exist → it runs `lanchu init` (interactive): asks for the org (named explicitly —
+  there is no invented default) and derives the project name from the real checkout (repo root
+  folder, then the origin remote's name, then the folder). Name↔folder drift warns and asks
+  before writing, so a record can't silently bind to a folder it doesn't describe. That way,
+  next time is zero friction.
 - `--org` / `--project` always take precedence over the config.
 
 ### Role (when creating a new agent)
@@ -141,7 +144,7 @@ tasks live in `lanchu://me`, not in the prompt.
 
 | Command | What it does |
 |---------|----------|
-| `lanchu init` | Initializes org/project for this directory (writes `.lanchu/config.json`). |
+| `lanchu init --org <name> [--project <name>] [--force]` | Binds this directory to an org/project (writes `.lanchu/config.json`). `--org` is required (no silent default); the project name defaults from the checkout (repo root / remote / folder) and drift warns; rebinding an already-bound directory needs `--force`. |
 | `lanchu agents` (alias `ls`) | Lists agents: status, role, task count, last activity. |
 | `lanchu tasks` | Lists tasks: status, owner, tags, workspace. Flags the **stale** ones (idle owner with no changes ≥ threshold). |
 | `lanchu task release <id>` | **Supervisor override**: releases a task back to the pool even if it has an owner. Audited. Escape hatch for *stale* tasks without retiring the agent. |
