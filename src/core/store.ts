@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { activeWindowMs, sdlcMode, staleHours } from "../config.js";
+import { activeWindowMs, nudgeAfterMs, nudgeCooldownMs, sdlcMode, staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
@@ -2578,6 +2578,75 @@ export function ackNotices(agentId: string, ids: string[]): number {
     )
     .run(now, now, agentId, ...ids);
   return Number(info.changes);
+}
+
+// ─────────────── auto-wake: nudge idle agents with queued notices ───────────────
+// Piggyback delivery needs a tool call; an ended turn makes none. When notices
+// sit undelivered past a grace window and the agent has a Lanchu-spawned
+// terminal, the server nudges that terminal with one fixed line. Guard rails:
+// queued-notices-only, per-agent cooldown, audited, never any other text.
+
+export interface NudgeCandidate {
+  agent_id: string;
+  agent_name: string;
+  terminal_ref: TerminalRef;
+  queued_notices: number;
+  oldest_queued_at: string;
+}
+
+export function agentsNeedingNudge(orgId: string): NudgeCandidate[] {
+  const graceCutoff = new Date(Date.now() - nudgeAfterMs()).toISOString();
+  const cooldownCutoff = new Date(Date.now() - nudgeCooldownMs()).toISOString();
+  const rows = db()
+    .prepare(
+      `SELECT a.id AS agent_id, a.name AS agent_name, a.terminal_ref AS terminal_ref,
+              COUNT(n.id) AS queued_notices, MIN(n.created_at) AS oldest_queued_at
+       FROM agent a JOIN notice n ON n.to_agent_id = a.id
+       WHERE a.org_id = ? AND a.state != 'retired' AND a.terminal_ref IS NOT NULL
+         AND n.delivered_at IS NULL AND n.acked_at IS NULL AND n.created_at <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM event e
+           WHERE e.type = 'agent.nudged' AND e.subject_id = a.id AND e.created_at >= ?)
+       GROUP BY a.id`,
+    )
+    .all(orgId, graceCutoff, cooldownCutoff) as Record<string, unknown>[];
+  const out: NudgeCandidate[] = [];
+  for (const r of rows) {
+    try {
+      out.push({
+        agent_id: r.agent_id as string,
+        agent_name: r.agent_name as string,
+        terminal_ref: JSON.parse(r.terminal_ref as string) as TerminalRef,
+        queued_notices: Number(r.queued_notices),
+        oldest_queued_at: r.oldest_queued_at as string,
+      });
+    } catch {
+      /* unparseable terminal_ref — not a nudgeable terminal */
+    }
+  }
+  return out;
+}
+
+/** Audit one nudge (also what the cooldown checks). */
+export function recordNudge(orgId: string, agentId: string, queued: number): void {
+  recordEvent({
+    org_id: orgId,
+    type: "agent.nudged",
+    subject_kind: "agent",
+    subject_id: agentId,
+    data: { queued_notices: queued },
+  });
+}
+
+/** Last nudge times per agent (for the panel's "nudged" pill). */
+export function lastNudges(orgId: string): Map<string, string> {
+  const rows = db()
+    .prepare(
+      `SELECT e.subject_id AS agent_id, MAX(e.created_at) AS at
+       FROM event e WHERE e.org_id = ? AND e.type = 'agent.nudged' GROUP BY e.subject_id`,
+    )
+    .all(orgId) as { agent_id: string; at: string }[];
+  return new Map(rows.map((r) => [r.agent_id, r.at]));
 }
 
 // ─── work-overlap detection (isolation Task 3): warn before agents collide ───

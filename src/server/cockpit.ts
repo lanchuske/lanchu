@@ -265,6 +265,54 @@ end try`]);
   return true;
 }
 
+/**
+ * Wake an idle agent by putting ONE fixed line into its own terminal.
+ * Per product's notes: clipboard-paste, not per-key keystrokes (garble-proof),
+ * and window-id targeting (never the frontmost window). The previous clipboard
+ * contents are saved and restored — this runs on the supervisor's machine.
+ * Best-effort: returns false when the terminal can't be nudged.
+ */
+export function nudgeTerminal(ref: TerminalRef, line: string): boolean {
+  if (ref.method === "tmux") {
+    if (!terminalAlive(ref)) return false;
+    // Paste via a named buffer (safe for any chars), then submit.
+    const buf = spawnSync("tmux", ["set-buffer", "-b", "lanchu-nudge", "--", line]);
+    if (buf.status !== 0) return false;
+    const paste = spawnSync("tmux", ["paste-buffer", "-b", "lanchu-nudge", "-t", ref.id, "-d"]);
+    if (paste.status !== 0) return false;
+    return spawnSync("tmux", ["send-keys", "-t", ref.id, "Enter"]).status === 0;
+  }
+
+  // Terminal.app: raise the window BY ID, paste from the clipboard, restore it.
+  const osa = [
+    "set prevClip to \"\"",
+    "try",
+    "  set prevClip to the clipboard as text",
+    "end try",
+    `set the clipboard to ${asAppleStr(line)}`,
+    'tell application "Terminal"',
+    "  try",
+    `    set w to (first window whose id is ${ref.id})`,
+    "    set index of w to 1",
+    "    activate",
+    "  on error",
+    "    return false",
+    "  end try",
+    "end tell",
+    "delay 0.2",
+    'tell application "System Events" to tell process "Terminal"',
+    '  keystroke "v" using command down',
+    "  delay 0.15",
+    "  key code 36",
+    "end tell",
+    "delay 0.2",
+    "set the clipboard to prevClip",
+    "return true",
+  ].join("\n");
+  const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8", timeout: 8000 });
+  return (out.stdout ?? "").trim() === "true";
+}
+
 export interface TileResult {
   method: "tmux" | "terminal.app" | "unsupported";
   count: number;

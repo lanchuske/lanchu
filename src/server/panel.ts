@@ -748,9 +748,13 @@ function renderAgents(list) {
         '</div>'
       : "";
     var reveal = a.state === "active" ? "focus terminal" : "open terminal";
+    // Auto-wake trace: show "nudged" while the last nudge is recent (10 min).
+    var nudged = a.nudged_at && (Date.now() - new Date(a.nudged_at).getTime() < 600000)
+      ? '<span class="pill p-in_progress" title="auto-woken at ' + esc(a.nudged_at.slice(11, 19)) + ' — queued notices were waiting">nudged</span> '
+      : "";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to ' + reveal + '">' +
       '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
-      colorChip(a.name) + esc(a.name) + '</span><button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></div>' +
+      colorChip(a.name) + esc(a.name) + '</span><span>' + nudged + '<button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></span></div>' +
       '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") + ' · <b>' + a.open_tasks + '</b> open' + branch +
       (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") +
       ' · <span class="k">mcp</span> ' + (a.live_transports > 0 ? a.live_transports + " live" : "not connected") +

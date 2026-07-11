@@ -52,7 +52,8 @@ export type EventType =
   | "quota.exceeded"
   | "memory.written"
   | "test.reported"
-  | "tool.response";
+  | "tool.response"
+  | "agent.nudged";
 
 export interface Org {
   id: string;
