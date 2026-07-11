@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { mcpUrl, stateDir } from "../config.js";
-import { agentColor, pastelRgb16 } from "../core/colors.js";
+import { agentColor, contrastRatio16, tintedBg16, type Rgb16 } from "../core/colors.js";
 
 /**
  * Multi-agent "cockpit": open a terminal running a new Claude agent already
@@ -159,15 +159,7 @@ export function spawnTerminal(input: {
     const winId = (out.stdout ?? "").trim();
     if (/^\d+$/.test(winId)) plan.ref = { method: "terminal.app", id: winId };
     if (/^\d+$/.test(winId) && input.agentName) {
-      // Same identity in Terminal.app: a light pastel of the agent's color as
-      // the window background (blended toward white so dark text on the
-      // default profile stays readable). Best-effort.
-      const [r, g, b] = pastelRgb16(input.colorHex ?? agentColor(input.agentName));
-      spawnSync("osascript", ["-e", [
-        'tell application "Terminal" to try',
-        `  set background color of selected tab of (first window whose id is ${winId}) to {${r}, ${g}, ${b}}`,
-        "end try",
-      ].join("\n")]);
+      tintTerminalWindow(winId, input.colorHex ?? agentColor(input.agentName).hex);
     }
     return plan;
   }
@@ -178,6 +170,54 @@ export function spawnTerminal(input: {
     command,
     note: "No tmux and not macOS — run this command in a new terminal yourself.",
   };
+}
+
+/**
+ * Identity tint for a Terminal.app window, derived from the USER'S profile:
+ * read the tab's own background and text colors, blend the agent hue into
+ * that background (dark profile → very dark shade of the hue, light profile
+ * → light pastel), and apply it only if the result still clears a WCAG-ish
+ * contrast bar against the profile's text color. Anything unreadable or
+ * unreadable-to-us leaves the profile untouched — the title, panel chip and
+ * tile still carry the identity. (The old absolute blend-toward-white pastel
+ * assumed dark text and made light-on-dark profiles illegible.)
+ */
+export const TINT_MIN_CONTRAST = 4.5;
+
+export function tintTerminalWindow(
+  winId: string,
+  hex: string,
+  effects: { run?: (osa: string) => string } = {},
+): boolean {
+  const run =
+    effects.run ??
+    ((osa: string) => (spawnSync("osascript", ["-e", osa], { encoding: "utf8" }).stdout ?? "").trim());
+  try {
+    const probe = run(
+      [
+        'tell application "Terminal"',
+        `  set t to selected tab of (first window whose id is ${winId})`,
+        "  return (background color of t) & (normal text color of t)",
+        "end tell",
+      ].join("\n"),
+    );
+    const nums = probe.split(",").map((s) => Number.parseInt(s.trim(), 10));
+    if (nums.length !== 6 || nums.some((n) => !Number.isFinite(n))) return false;
+    const bg = nums.slice(0, 3) as Rgb16;
+    const fg = nums.slice(3, 6) as Rgb16;
+    const tint = tintedBg16(bg, hex);
+    if (contrastRatio16(tint, fg) < TINT_MIN_CONTRAST) return false;
+    run(
+      [
+        'tell application "Terminal" to try',
+        `  set background color of selected tab of (first window whose id is ${winId}) to {${tint.join(", ")}}`,
+        "end try",
+      ].join("\n"),
+    );
+    return true;
+  } catch {
+    return false; // best-effort: never break spawn over a cosmetic tint
+  }
 }
 
 /**

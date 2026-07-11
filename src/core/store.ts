@@ -773,8 +773,15 @@ export function ensureColorSlots(orgId: string): void {
 
 function pickColorSlot(orgId: string, name: string): number {
   const counts = new Array(10).fill(0) as number[];
+  // Occupancy = LIVE roster only. Retired agents keep their slot for old
+  // attributions, but counting them dilutes the balance: after a day of agent
+  // churn every hue looks equally "busy" with the dead, so two live agents
+  // can land on the same color while eight hues sit visibly free (2026-07-11:
+  // qa-gate-2 and builder-core-2 both on green, ansi 36).
   const used = db()
-    .prepare("SELECT color_slot AS s, COUNT(*) AS c FROM agent WHERE org_id = ? AND color_slot IS NOT NULL GROUP BY color_slot")
+    .prepare(
+      "SELECT color_slot AS s, COUNT(*) AS c FROM agent WHERE org_id = ? AND color_slot IS NOT NULL AND state != 'retired' GROUP BY color_slot",
+    )
     .all(orgId) as { s: number; c: number }[];
   for (const u of used) {
     const slot = ((u.s % 10) + 10) % 10;
