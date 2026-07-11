@@ -1757,9 +1757,16 @@ function agentsOfRole(orgId: string, roleName: string): Agent[] {
   );
 }
 
-/** Probe/drill fixtures announce themselves in their name or objective — never route real work to one. */
+/**
+ * Probe/drill fixtures are NAME-marked by convention (probe-park-drill…);
+ * objectives only count with EXPLICIT disposability markers. QA's bounce of
+ * PR #95 proved why: the real gate's objective says "retire your probe
+ * fixtures per batch" — a bare probe/drill match over objectives would make
+ * the active gate unroutable and invert the acceptance.
+ */
 export function isProbeAgent(a: Agent): boolean {
-  return /\bprobe\b|\bdrill\b|\bfixture\b|\bdisposable\b/i.test(`${a.name} ${a.objective ?? ""}`);
+  if (/\bprobe\b|\bdrill\b|\bfixture\b|\bdisposable\b/i.test(a.name)) return true;
+  return /\bdisposable\b|never claim tasks/i.test(a.objective ?? "");
 }
 
 /**

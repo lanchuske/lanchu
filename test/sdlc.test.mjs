@@ -209,3 +209,35 @@ test("with only a parked probe in qa, the notice falls back to product — never
   assert.ok(store.takeUndeliveredNotices(pm.id).some((n) => /Verification ready/.test(n.body)), "product catches the fallback");
   assert.equal(store.takeUndeliveredNotices(probe.id).filter((n) => /Verification ready/.test(n.body)).length, 0, "the probe stays silent");
 });
+
+// ── QA bounce round (qa-pr95): the disposability match is NAME-first ──
+// The real gate's objective legitimately says "retire your probe fixtures per
+// batch" — a bare probe/drill match over objectives made the active gate
+// unroutable and inverted the acceptance.
+
+test("an active qa agent whose OBJECTIVE mentions probe duties is still routable; a probe-NAMED agent is not", () => {
+  const org = store.getOrCreateOrg("router-objective-org");
+  const project = store.getOrCreateProject(org.id, "core");
+  const qaRole = store.getOrCreateRole(org.id, "qa", { wildcard: true });
+  const genRole = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+  const builder = store.createAgent({ orgId: org.id, roleId: genRole.id, name: "builder" });
+  const gate = store.createAgent({
+    orgId: org.id, roleId: qaRole.id, name: "qa-gate-real",
+    objective: "standing QA gate — verify batches and retire your probe fixtures per batch",
+  });
+  const probe = store.createAgent({ orgId: org.id, roleId: qaRole.id, name: "probe-park-drill" });
+
+  assert.equal(store.isProbeAgent(gate), false, "probe duties in the objective never disqualify the gate");
+  assert.equal(store.isProbeAgent(probe), true, "name-marked fixtures stay excluded");
+  assert.equal(store.isProbeAgent({ name: "qa-x", objective: "disposable relay — never claim tasks" }), true, "explicit disposability in the objective still counts");
+
+  const task = store.createTask({ projectId: project.id, orgId: org.id, agentId: builder.id, title: "feature 3", tags: ["server"], stage: "build" });
+  store.claimTask({ agentId: builder.id, taskId: task.id });
+  store.updateTaskStatus({ agentId: builder.id, taskId: task.id, status: "done" });
+
+  assert.ok(
+    store.takeUndeliveredNotices(gate.id).some((n) => /Verification ready/.test(n.body)),
+    "the real gate — QA's exact objective — receives the verification",
+  );
+  assert.equal(store.takeUndeliveredNotices(probe.id).filter((n) => /Verification ready/.test(n.body)).length, 0);
+});
