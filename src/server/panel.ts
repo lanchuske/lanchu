@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { baseUrl } from "../config.js";
 
 /**
@@ -8,8 +9,7 @@ import { baseUrl } from "../config.js";
  * (retire / release / reassign) and revealing an agent's terminal happen without
  * browser dialogs.
  */
-export function panelHtml(): string {
-  return `<!doctype html>
+const TEMPLATE = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -469,6 +469,7 @@ export function panelHtml(): string {
 var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
   return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 var org = function () { return document.getElementById("org").value.trim(); };
+var BUILD_ID = "__LANCHU_BUILD__"; // stamped by the server at render time
 
 // ── access key (only needed when the server sets LANCHU_ACCESS_KEY) ──
 // A shared secret can arrive as ?key=… (stored, then stripped from the URL) and
@@ -1440,13 +1441,34 @@ function refreshGreenzone() {
 }
 setInterval(refreshGreenzone, 3000);
 
+// A hello with a different build id means this tab's client code predates the
+// running server — reload instead of rendering fresh payloads with stale logic.
+var reloading = false;
+function staleReload() {
+  if (reloading) return;
+  reloading = true;
+  var b = document.createElement("div");
+  b.textContent = "panel updated, reloading";
+  b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99;text-align:center;padding:6px 10px;font:12px/1.4 system-ui,sans-serif;background:var(--accent);color:#fff;";
+  document.body.appendChild(b);
+  setTimeout(function () { location.reload(); }, 700);
+}
+
 var sse = null;
 function connect() {
   if (sse) sse.close();
   var live = document.getElementById("live"), t = document.getElementById("live-t");
   sse = new EventSource("/events?org=" + encodeURIComponent(org()) + keyParam());
   sse.onopen = function () { live.className = "live on"; t.textContent = "live"; };
-  sse.onmessage = function () { refresh(); };
+  sse.onmessage = function (e) {
+    var m = null;
+    try { m = JSON.parse(e.data); } catch (err) {}
+    if (m && m.type === "hello") {
+      if (m.build && m.build !== BUILD_ID) staleReload();
+      return;
+    }
+    refresh();
+  };
   sse.onerror = function () { live.className = "live"; t.textContent = "reconnecting"; };
   refresh();
 }
@@ -1465,4 +1487,12 @@ connect();
 </script>
 </body>
 </html>`;
+
+// Changes exactly when the panel's HTML/JS changes, so a tab can tell its client
+// code no longer matches the running server (the id is hashed before stamping,
+// otherwise it would depend on itself).
+export const PANEL_BUILD_ID = createHash("sha256").update(TEMPLATE).digest("hex").slice(0, 12);
+
+export function panelHtml(): string {
+  return TEMPLATE.replace("__LANCHU_BUILD__", PANEL_BUILD_ID);
 }

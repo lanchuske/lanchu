@@ -18,7 +18,7 @@ import { clearContexts, getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
 import { probeServers, readProjectMcpServers } from "../core/mcps.js";
 import { buildMcpServer } from "./mcp.js";
-import { panelHtml } from "./panel.js";
+import { PANEL_BUILD_ID, panelHtml } from "./panel.js";
 import { startWebhookDelivery } from "./webhooks.js";
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -403,6 +403,9 @@ function handleEvents(orgId: string, res: http.ServerResponse): void {
     connection: "keep-alive",
   });
   res.write(": connected\n\n");
+  // Sent on every (re)connect: a tab whose stamped build id differs from this
+  // one is running stale client code (loaded before a restart) and reloads.
+  res.write(`data: ${JSON.stringify({ type: "hello", build: PANEL_BUILD_ID })}\n\n`);
   const unsub = bus.onEvent((ev) => {
     if (ev.org_id !== orgId) return;
     res.write(`data: ${JSON.stringify({ type: ev.type, at: ev.created_at })}\n\n`);

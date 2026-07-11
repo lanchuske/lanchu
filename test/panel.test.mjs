@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // panelHtml() is a pure render — these tests pin the panel-philosophy surface
 // shipped in #19 (observe & guide, provision from the terminal) so a future
 // panel refactor can't silently drop the guidance or grow a creation UI.
-const { panelHtml } = await import("../dist/server/panel.js");
+const { panelHtml, PANEL_BUILD_ID } = await import("../dist/server/panel.js");
 const html = panelHtml();
 
 test("panel guides provisioning to the terminal with copyable commands", () => {
@@ -85,4 +85,17 @@ test("overview is the supervisor's home: working-now strip, inline activity, con
   assert.ok(html.includes("evRow"), "expected activity rows reused inline on the overview");
   assert.ok(html.includes("Conflicts &amp; warnings"), "expected the conflicts area");
   assert.ok(html.includes("conflict.detected"), "expected the conflict feed to read conflict.detected events");
+});
+
+// Stale-client auto-reload (task-mrg6gltl3): a tab loaded before a server
+// restart must not render new API payloads through outdated client logic.
+
+test("panel stamps the build id and reloads when an SSE hello disagrees", () => {
+  assert.match(PANEL_BUILD_ID, /^[0-9a-f]{12}$/, "build id is a short hex hash of the template");
+  assert.ok(!html.includes("__LANCHU_BUILD__"), "the placeholder must be replaced at render time");
+  assert.ok(html.includes(`var BUILD_ID = "${PANEL_BUILD_ID}"`), "client boots with the stamped build id");
+  // The mismatch path: hello handling, the one-line banner, and the hard reload.
+  assert.ok(html.includes('m.type === "hello"'), "client must recognize the SSE hello frame");
+  assert.ok(html.includes("panel updated, reloading"), "expected the reload banner text");
+  assert.ok(html.includes("staleReload"), "expected the guarded reload helper");
 });
