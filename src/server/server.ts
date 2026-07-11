@@ -14,6 +14,7 @@ import { ScopeError } from "../core/types.js";
 import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
+import { probeServers, readProjectMcpServers } from "../core/mcps.js";
 import { buildMcpServer } from "./mcp.js";
 import { panelHtml } from "./panel.js";
 import { startWebhookDelivery } from "./webhooks.js";
@@ -412,6 +413,19 @@ export function createServer(): http.Server {
         const org = store.getOrgByName(orgName);
         if (!org) return sendJson(res, 200, { window_hours: wh, nodes: [], edges: [] });
         return sendJson(res, 200, store.orgGraph(org.id, wh));
+      }
+
+      if (url.pathname === "/api/mcps" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, { agents: [], projects: [] });
+        const projects = [];
+        for (const p of store.listProjects(org.id)) {
+          const servers = p.local_path ? await probeServers(readProjectMcpServers(p.local_path)) : [];
+          projects.push({ id: p.id, name: p.name, local_path: p.local_path, servers });
+        }
+        return sendJson(res, 200, { agents: store.mcpAgentStatus(org.id), projects });
       }
 
       if (url.pathname === "/api/reuse" && req.method === "GET") {

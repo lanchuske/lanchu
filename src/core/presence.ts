@@ -28,3 +28,8 @@ export function removeLiveSession(agentId: string): void {
 export function isAgentLive(agentId: string): boolean {
   return (liveSessions.get(agentId) ?? 0) > 0;
 }
+
+/** How many MCP transports the agent holds open right now. */
+export function liveSessionCount(agentId: string): number {
+  return liveSessions.get(agentId) ?? 0;
+}

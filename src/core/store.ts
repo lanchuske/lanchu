@@ -4,7 +4,7 @@ import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
 import { nowIso, sessionToken, slugify, uuid } from "./ids.js";
-import { isAgentLive } from "./presence.js";
+import { isAgentLive, liveSessionCount } from "./presence.js";
 import { loadSkillDefinition } from "./skills_loader.js";
 import {
   QuotaError,
@@ -1647,6 +1647,8 @@ export type BoardAgent = Agent & {
   workspace: string | null;
   active_task_id: string | null;
   active_task_title: string | null;
+  /** open MCP transports right now — >1 hints at a duplicate identity */
+  live_transports: number;
 };
 
 export interface BoardSnapshot {
@@ -2035,6 +2037,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       workspace: wsTask?.workspace ?? null,
       active_task_id: activeTask?.id ?? null,
       active_task_title: activeTask?.title ?? null,
+      live_transports: liveSessionCount(a.id),
     };
   });
 
@@ -2237,4 +2240,40 @@ export function orgGraph(orgId: string, windowHours: number): OrgGraph {
     nodes: [...nodes.values()].map((n) => ({ ...n, weight: round(n.weight) })),
     edges: [...edges.values()].map((e) => ({ ...e, weight: round(e.weight) })),
   };
+}
+
+// ───────────────── MCP visibility: who is actually connected ─────────────────
+
+export interface AgentMcpStatus {
+  id: string;
+  name: string;
+  state: AgentState;
+  /** Open MCP transports held right now (in-memory; 0 right after a restart
+   * until sessions reconnect — exactly the gap the panel should show). */
+  live_transports: number;
+  /** Session rows never closed — includes pre-restart sessions that will be
+   * reused on reconnect (token identity, without ever rendering the token). */
+  open_sessions: number;
+  clients: string[];
+  last_activity_at: string | null;
+}
+
+/** Per-agent Lanchu-MCP connection state for the panel's MCPs section. */
+export function mcpAgentStatus(orgId: string): AgentMcpStatus[] {
+  return listAgents(orgId)
+    .filter((a) => a.state !== "retired")
+    .map((a) => {
+      const rows = db()
+        .prepare("SELECT client FROM session WHERE agent_id = ? AND ended_at IS NULL")
+        .all(a.id) as { client: string | null }[];
+      return {
+        id: a.id,
+        name: a.name,
+        state: (isPresent(a) ? "active" : "idle") as AgentState,
+        live_transports: liveSessionCount(a.id),
+        open_sessions: rows.length,
+        clients: [...new Set(rows.map((r) => r.client).filter((c): c is string => !!c))],
+        last_activity_at: a.last_activity_at,
+      };
+    });
 }

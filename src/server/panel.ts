@@ -151,6 +151,8 @@ export function panelHtml(): string {
   .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
   .dot.active { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
   .dot.idle { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-bg); }
+  .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-bg); }
+  .dot.unknown { background: var(--faint); }
 
   .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; letter-spacing: .01em; }
   .p-available { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
@@ -417,6 +419,10 @@ export function panelHtml(): string {
         <div id="server-proc"><div class="empty">loading…</div></div>
         <h2 class="sub-h2">Agent terminals</h2>
         <div id="terminals"><div class="empty">loading…</div></div>
+        <h2 class="sub-h2">Lanchu MCP — live transports</h2>
+        <div id="mcp-agents"><div class="empty">loading…</div></div>
+        <h2 class="sub-h2">Project MCP servers</h2>
+        <div id="mcp-projects"><div class="empty">loading…</div></div>
       </section>
     </main>
   </div>
@@ -679,7 +685,10 @@ function renderAgents(list) {
       '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
       colorChip(a.name) + esc(a.name) + '</span><button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></div>' +
       '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") + ' · <b>' + a.open_tasks + '</b> open' + branch +
-      (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") + '</div>' + wt + task +
+      (a.workspace ? ' · <span class="k">ws</span> ' + esc(a.workspace) : "") +
+      ' · <span class="k">mcp</span> ' + (a.live_transports > 0 ? a.live_transports + " live" : "not connected") +
+      (a.live_transports > 1 ? ' <span class="pill stale-pill" title="two terminals sharing one identity causes misattribution">' + a.live_transports + ' transports</span>' : "") +
+      '</div>' + wt + task +
       (a.objective ? '<div class="meta"><span class="k">obj</span> ' + esc(a.objective) + '</div>' : "") +
       '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") + '</div>' +
       '<div class="hint">' + (a.state === "active" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
@@ -940,9 +949,49 @@ function renderProcesses(p) {
       '<div class="logbox" id="log-' + t.agentId + '" style="display:none"><pre></pre></div></div>';
   }).join("") || '<div class="empty">No agent terminals tracked yet — spawn an agent to see it here.</div>';
 }
+// MCP visibility: Lanchu's own transports per agent, and the MCP servers each
+// project checkout declares (read-only, credentials never leave the server).
+function renderMcps(m) {
+  var agents = m.agents || [];
+  document.getElementById("mcp-agents").innerHTML = agents.map(function (a) {
+    var live = a.live_transports > 0;
+    var dupe = a.live_transports > 1
+      ? ' <span class="pill stale-pill" title="two terminals sharing one identity causes misattribution">' + a.live_transports + ' transports</span>' : "";
+    var gap = !live && a.open_sessions > 0
+      ? ' <span class="hint">(session on record, transport down — reconnects on its next tool call)</span>' : "";
+    return '<div class="card"><div class="top"><span class="name"><span class="dot ' + (live ? "active" : "idle") + '"></span>' +
+      colorChip(a.name) + esc(a.name) + dupe + '</span>' +
+      '<span class="meta">' + a.live_transports + ' live · ' + a.open_sessions + ' session' + (a.open_sessions === 1 ? "" : "s") + '</span></div>' +
+      '<div class="meta"><span class="k">client</span> ' + esc((a.clients || []).join(", ") || "—") +
+      ' · <span class="k">last mcp activity</span> ' + esc((a.last_activity_at || "").replace("T", " ").slice(0, 16) || "never") + gap + '</div></div>';
+  }).join("") || '<div class="empty">No agents yet.</div>';
+
+  var projects = m.projects || [];
+  document.getElementById("mcp-projects").innerHTML = projects.map(function (p) {
+    var servers = (p.servers || []).map(function (s) {
+      var dot = s.status === "reachable" ? "active" : s.status === "unreachable" ? "bad" : "unknown";
+      return '<div class="meta"><span class="dot ' + dot + '" title="' + esc(s.status) + '"></span> <b>' + esc(s.name) + '</b>' +
+        ' · <span class="k">' + esc(s.transport) + '</span> <span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(s.target) + '</span>' +
+        ' · <span class="hint">' + esc(s.source) + '</span></div>';
+    }).join("");
+    return '<div class="card"><div class="top"><span class="name">' + esc(p.name) + '</span>' +
+      (p.local_path ? '<span class="path" style="font-family:var(--mono);font-size:11.5px">' + esc(shortPath(p.local_path)) + '</span>' : "") + '</div>' +
+      (servers || '<div class="empty">' + (p.local_path
+        ? 'No MCP servers configured in this checkout — add one from the terminal: ' + cmdSnippet("claude mcp add <name> <url-or-command>")
+        : "No folder captured for this project yet — its MCPs appear once an agent joins from the checkout.") + '</div>') +
+      '</div>';
+  }).join("") || '<div class="empty">No projects yet.</div>';
+}
+// Probing project MCP servers costs real HTTP round-trips, so poll it an order
+// of magnitude slower than pid/uptime.
+var mcpFetchedAt = 0;
 function refreshProcesses() {
   if (curView !== "processes") return;
   get("/api/processes").then(renderProcesses).catch(function () {});
+  if (Date.now() - mcpFetchedAt > 15000) {
+    mcpFetchedAt = Date.now();
+    get("/api/mcps").then(renderMcps).catch(function () {});
+  }
 }
 // Keep the sidebar's Processes count live even while another view is open — the
 // full render is throttled to when Processes is visible, but the badge is cheap.
