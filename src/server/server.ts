@@ -13,7 +13,7 @@ import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
-import { claudeLiveSessionIds, closeTerminal, focusTerminal, nudgeTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
+import { claudeLiveSessionIds, closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { clearContexts, getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
 import { buildProvenance, packageRoot } from "../core/provenance.js";
@@ -867,8 +867,21 @@ export function createServer(): http.Server {
           res.writeHead(401, { "content-type": "text/plain" });
           return res.end("unauthorized");
         }
+        // Wake v5.1 asyncRewake: ?wait=<ms> long-polls until a notice lands
+        // (bounded; 2s DB poll — notices are writes from other requests). The
+        // instant path (no wait) stays byte-identical for the sync stop gate.
+        const waitMs = Math.min(Math.max(Number(url.searchParams.get("wait") ?? 0) || 0, 0), 240_000);
+        let n = store.undeliveredNoticeCount(ctx.agentId);
+        if (waitMs > 0 && n === 0) {
+          const deadline = Date.now() + waitMs;
+          while (n === 0 && Date.now() < deadline && !res.writableEnded && !req.destroyed) {
+            await new Promise((r) => setTimeout(r, 2000));
+            n = store.undeliveredNoticeCount(ctx.agentId);
+          }
+        }
+        if (res.writableEnded || req.destroyed) return;
         res.writeHead(200, { "content-type": "text/plain" });
-        return res.end(String(store.undeliveredNoticeCount(ctx.agentId)));
+        return res.end(String(n));
       }
       // Wake v5 lifecycle hooks (agent-token auth, same class as /api/agent/pending).
       // SessionStart (startup|resume): the session id arrives with zero heuristics.
@@ -1170,15 +1183,13 @@ export const NUDGE_LINE =
 export function runNudgeSweep(
   effects: {
     alive?: typeof terminalAlive;
-    nudge?: typeof nudgeTerminal;
     /** Wake v5 gates/actions, injectable for tests. */
     liveSessions?: typeof claudeLiveSessionIds;
     transportLive?: typeof isAgentLive;
     refire?: (c: store.RefireCandidate, token: string) => boolean;
   } = {},
-): { nudged: string[]; refired: string[]; expired_broadcasts: number } {
+): { refired: string[]; expired_broadcasts: number } {
   const alive = effects.alive ?? terminalAlive;
-  const nudge = effects.nudge ?? nudgeTerminal;
   const liveSessions = effects.liveSessions ?? claudeLiveSessionIds;
   const transportLive = effects.transportLive ?? isAgentLive;
   const refire =
@@ -1196,39 +1207,22 @@ export function runNudgeSweep(
   // Notice hygiene first: stale broadcasts self-expire so they never count as
   // pending inbox anywhere (sleeping agents, fixtures) — see store for why.
   const expired = store.expireBroadcastNotices();
-  const nudged: string[] = [];
+  // Wake v5.1 (task-mrgpl72k9): the typing rung is GONE. Live idle TUIs wake
+  // themselves via the asyncRewake Stop hook (long-poll on /api/agent/pending
+  // ?wait — push, zero keystrokes); the sweep only handles sessions that
+  // EXITED: park & refire (`claude --resume <sid> "<prompt>"`). Safety gates,
+  // all mandatory (fork risk — two processes on one session interleave into
+  // one transcript): parked or verifiably-dead terminal, no live MCP
+  // transport, and the session id absent from `claude agents --json`
+  // (unknown answer = fail closed, never refire blind).
   const refired: string[] = [];
   for (const org of store.listOrgs()) {
-    const handled = new Set<string>();
-    for (const c of store.agentsNeedingNudge(org.id)) {
-      try {
-        if (!alive(c.terminal_ref)) continue;
-        // The alive probe can take seconds — cancel if delivery or a tool
-        // call happened since this candidate was computed.
-        if (!store.nudgeStillNeeded(c.agent_id)) continue;
-        const transport = nudge(c.terminal_ref, NUDGE_LINE);
-        if (!transport) continue;
-        // Wake v4: the transport is audited — a degraded keystroke wake means
-        // "install tmux / check the Stop hook" and must be visible, not silent.
-        store.recordNudge(org.id, c.agent_id, c.queued_notices, transport);
-        nudged.push(c.agent_name);
-        handled.add(c.agent_id);
-      } catch {
-        /* a broken terminal must not stop the sweep */
-      }
-    }
-    // Wake v5 rung 3 — park & refire: parked agents with starved notices get
-    // their Claude session reopened (`claude --resume <sid> "<prompt>"`).
-    // Safety gates, both mandatory (fork risk — two processes on one session
-    // interleave into one transcript): no live MCP transport for this agent,
-    // and the session id VERIFIABLY absent from `claude agents --json`
-    // (unknown answer = fail closed, never refire blind).
     let claudeSessions: Set<string> | null | undefined;
     for (const c of store.agentsNeedingRefire(org.id)) {
       try {
-        if (handled.has(c.agent_id)) continue;
         // Gate 0: cleanly parked (SessionEnd fired), or a crashed session — the
         // terminal is verifiably gone (builder-core-2's death had no SessionEnd).
+        // A LIVE terminal is the asyncRewake hook's territory: never touched here.
         if (!c.parked_at && c.terminal_ref && alive(c.terminal_ref)) continue;
         if (transportLive(c.agent_id)) continue;
         if (claudeSessions === undefined) claudeSessions = liveSessions();
@@ -1243,7 +1237,7 @@ export function runNudgeSweep(
       }
     }
   }
-  return { nudged, refired, expired_broadcasts: expired };
+  return { refired, expired_broadcasts: expired };
 }
 
 export function startServer(): Promise<http.Server> {

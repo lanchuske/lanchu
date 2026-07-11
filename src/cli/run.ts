@@ -180,10 +180,11 @@ async function cmdDoctor(): Promise<void> {
   console.log(`auth        ${accessKey() ? "access key set (LANCHU_ACCESS_KEY)" : "none"}`);
   console.log(`on PATH     ${lanchuOnPath() ? "yes" : "no — run: lanchu install-commands  (or npm i -g lanchu)"}`);
   console.log(`server      ${(await serverUp()) ? "running" : "stopped"}`);
-  // Wake v4: tmux is the preferred agent-terminal substrate — scriptable
-  // wakes (send-keys), no focus stealing, works with the screen locked.
+  // Wake v5.1: wakes are push-based (asyncRewake hook + park & refire) — no
+  // typing transports exist. tmux remains the preferred substrate for tiling,
+  // focus-free spawning and lock-screen resilience.
   const tmuxOk = spawnSync("tmux", ["-V"], { stdio: "ignore" }).status === 0;
-  console.log(`tmux        ${tmuxOk ? "found (preferred terminal substrate)" : "not found — install it (brew install tmux): agent wakes degrade to Terminal.app keystrokes without it"}`);
+  console.log(`tmux        ${tmuxOk ? "found (preferred terminal substrate)" : "not found — install it (brew install tmux) for tiled, focus-free agent terminals"}`);
   // Runtime inventory: which agent CLIs this machine could spawn (fresh probe).
   const runtimes = detectRuntimes({ refresh: true });
   console.log(`runtimes    ${runtimes.length ? "" : "none of the known agent CLIs found on PATH"}`);
