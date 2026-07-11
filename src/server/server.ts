@@ -465,6 +465,15 @@ export function createServer(): http.Server {
         return sendJson(res, 200, store.boardSnapshot(org.id));
       }
 
+      if (url.pathname === "/api/landing" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, { landing: [] });
+        return sendJson(res, 200, {
+          landing: store.listProjects(org.id).flatMap((p) => store.landingQueue(p.id)),
+        });
+      }
       if (url.pathname === "/api/graph" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
@@ -1006,6 +1015,15 @@ export function startServer(): Promise<http.Server> {
   setInterval(() => {
     try {
       runNudgeSweep();
+    } catch {
+      /* keep the server alive */
+    }
+  }, 30_000).unref();
+  // Landing queue: detect queued PRs that hit origin/main and notice whose
+  // turn it is (fetches are throttled inside the sweep).
+  setInterval(() => {
+    try {
+      store.runLandingSweep();
     } catch {
       /* keep the server alive */
     }

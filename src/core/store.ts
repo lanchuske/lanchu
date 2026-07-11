@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 import { activeWindowMs, broadcastTtlMs, nudgeAfterMs, nudgeBudget, nudgeCooldownMs, sdlcMode, staleHours } from "../config.js";
 import { openDb } from "../db/db.js";
@@ -1386,6 +1387,11 @@ export function updateTaskStatus(input: {
     if (stageRank(current.stage) < stageRank("review")) {
       advanceStage({ taskId: task.id, to: "review", byAgentId: input.agentId });
     }
+  }
+  // A PR attaching for the first time enters the landing queue — tell the
+  // owner their position so nobody lands out of turn.
+  if (mode !== "off" && input.prUrl && !task.pr_url) {
+    noticeLandingPosition(getTask(input.taskId)!, agent.org_id);
   }
 
   if (effectiveStatus === "done") unblockDependents(task.project_id);
@@ -2808,6 +2814,7 @@ export interface BoardSnapshot {
   agents: BoardAgent[];
   tasks: BoardTask[];
   projects: ProjectRow[];
+  landing: LandingSlot[];
 }
 
 export interface AuditEvent {
@@ -3425,7 +3432,194 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
     };
   });
 
-  return { agents, tasks, projects: listProjects(orgId) };
+  return {
+    agents,
+    tasks,
+    projects: listProjects(orgId),
+    landing: projects.flatMap((p) => landingQueue(p.id)),
+  };
+}
+
+// ───────────────────────── landing queue (merge train) ─────────────────────────
+// Design doc "Landing queue" (task-mrg4j3ms3): concurrent agent PRs go stale
+// when merge order is uncoordinated — each stale round costs a rebase turn and
+// a product nudge. Lanchu already knows every open PR (tasks in review/qa
+// carry pr_url), so the server serializes landings: FIFO by PR number, the
+// head is "clear to land", and merges are detected from the project's own
+// git history (squash-merge subjects end in "(#N)" — no GitHub API, no gh
+// auth). On a detected merge the machine advances the task and notices the
+// NEXT owner to rebase BEFORE their turn goes stale.
+
+export interface LandingSlot {
+  position: number;
+  project_id: string;
+  task_id: string;
+  title: string;
+  pr_url: string;
+  pr_number: number | null;
+  owner_agent_id: string | null;
+  owner_name: string | null;
+  stage: TaskStage | null;
+}
+
+/** Open (unmerged) PR-carrying tasks of a project, in landing order. */
+export function landingQueue(projectId: string): LandingSlot[] {
+  // A recorded pr.merged is the persistent "left the train" marker — without
+  // it, a merged-but-not-yet-verified task (qa lane) would re-trigger the
+  // sweep forever.
+  const mergedIds = new Set(
+    (
+      db()
+        .prepare("SELECT DISTINCT subject_id FROM event WHERE type = 'pr.merged' AND project_id = ?")
+        .all(projectId) as { subject_id: string }[]
+    ).map((r) => r.subject_id),
+  );
+  const open = listTasks(projectId).filter(
+    (t) =>
+      t.pr_url !== null &&
+      (t.stage === "review" || t.stage === "qa") &&
+      !mergedIds.has(t.id) &&
+      !isVerificationTask(t) &&
+      !isBatchVerificationTask(t),
+  );
+  // FIFO by PR number — PRs are numbered in open order, which is the train
+  // order reviewers expect; tasks with unparseable PR urls go last, by age.
+  open.sort((a, b) => {
+    const pa = prNumberOf(a);
+    const pb = prNumberOf(b);
+    if (pa !== null && pb !== null) return pa - pb;
+    if (pa !== null) return -1;
+    if (pb !== null) return 1;
+    return a.created_at < b.created_at ? -1 : 1;
+  });
+  return open.map((t, i) => ({
+    position: i + 1,
+    project_id: projectId,
+    task_id: t.id,
+    title: t.title,
+    pr_url: t.pr_url!,
+    pr_number: prNumberOf(t),
+    owner_agent_id: t.owner_agent_id,
+    owner_name: t.owner_agent_id ? (getAgent(t.owner_agent_id)?.name ?? null) : null,
+    stage: t.stage,
+  }));
+}
+
+/** Recent origin/main squash-merge subjects for a project (throttled fetch). */
+const lastFetchAt = new Map<string, number>();
+function originMainSubjects(project: ProjectRow): string[] | null {
+  const cwd = project.local_path;
+  if (!cwd) return null;
+  const run = (args: string[], timeout: number): string | null => {
+    try {
+      const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout });
+      return r.status === 0 ? r.stdout : null;
+    } catch {
+      return null;
+    }
+  };
+  const last = lastFetchAt.get(project.id) ?? 0;
+  if (Date.now() - last >= 60_000) {
+    lastFetchAt.set(project.id, Date.now());
+    run(["fetch", "origin", "main", "--quiet"], 8000); // offline is fine — read what we have
+  }
+  const out = run(["log", "origin/main", "-n", "300", "--format=%s"], 4000);
+  return out === null ? null : out.split("\n");
+}
+
+/** Squash-merge convention: the landed subject ends with "(#N)". */
+function isMergedSubject(subjects: string[], prNumber: number): boolean {
+  const marker = new RegExp(`\\(#${prNumber}\\)\\s*$`);
+  return subjects.some((s) => marker.test(s));
+}
+
+/**
+ * The landing sweep (server tick): detect queued PRs that landed on
+ * origin/main, advance their tasks (review → qa: a merge IS the review-passed
+ * signal), audit pr.merged, and notice the new head ("clear to land — rebase
+ * now") plus the next-in-line. Notices fire only on an observed merge, so a
+ * server restart never re-spams the queue.
+ */
+export function runLandingSweep(opts?: {
+  /** Test seam: main-branch subjects per project (default: git). */
+  logSubjects?: (project: ProjectRow) => string[] | null;
+}): { merged: string[] } {
+  const subjectsFor = opts?.logSubjects ?? originMainSubjects;
+  const merged: string[] = [];
+  const orgs = db().prepare("SELECT id FROM org").all() as { id: string }[];
+  for (const org of orgs) {
+    for (const project of listProjects(org.id)) {
+      const queue = landingQueue(project.id);
+      if (!queue.length) continue;
+      const subjects = subjectsFor(project);
+      if (!subjects) continue;
+      const landed = queue.filter((s) => s.pr_number !== null && isMergedSubject(subjects, s.pr_number));
+      if (!landed.length) continue;
+      for (const slot of landed) {
+        merged.push(slot.task_id);
+        recordEvent({
+          org_id: org.id,
+          project_id: project.id,
+          type: "pr.merged",
+          actor_agent_id: null,
+          subject_kind: "task",
+          subject_id: slot.task_id,
+          data: { pr_url: slot.pr_url, ...(slot.pr_number !== null ? { pr_number: slot.pr_number } : {}) },
+        });
+        const task = getTask(slot.task_id);
+        if (task && task.stage === "review") {
+          advanceStage({ taskId: task.id, to: "qa", reason: `PR #${slot.pr_number} merged — review passed` });
+        }
+      }
+      noticeLandingTurn(org.id, project.id);
+    }
+  }
+  return { merged };
+}
+
+/** Tell the head of the queue it's clear to land, and warm up the next-in-line. */
+function noticeLandingTurn(orgId: string, projectId: string): void {
+  const queue = landingQueue(projectId);
+  const [head, next] = [queue[0], queue[1]];
+  if (head?.owner_agent_id) {
+    insertNotice({
+      orgId,
+      kind: "system",
+      fromAgentId: null,
+      toAgentId: head.owner_agent_id,
+      body: `Landing queue: your PR ${head.pr_number !== null ? `#${head.pr_number}` : head.pr_url} is CLEAR TO LAND — rebase on origin/main, get tests green, and land it next.`,
+      ref: head.task_id,
+    });
+  }
+  if (next?.owner_agent_id && next.owner_agent_id !== head?.owner_agent_id) {
+    insertNotice({
+      orgId,
+      kind: "system",
+      fromAgentId: null,
+      toAgentId: next.owner_agent_id,
+      body: `Landing queue: you're next — when ${head && head.pr_number !== null ? `#${head.pr_number}` : "the PR ahead"} lands, rebase ${next.pr_number !== null ? `#${next.pr_number}` : "your PR"} before landing.`,
+      ref: next.task_id,
+    });
+  }
+}
+
+/** On PR attach: tell the owner where their PR sits in the landing train. */
+function noticeLandingPosition(task: Task, orgId: string): void {
+  if (!task.owner_agent_id) return;
+  const slot = landingQueue(task.project_id).find((s) => s.task_id === task.id);
+  if (!slot) return;
+  const ahead = slot.position - 1;
+  insertNotice({
+    orgId,
+    kind: "system",
+    fromAgentId: null,
+    toAgentId: task.owner_agent_id,
+    body:
+      ahead === 0
+        ? `Landing queue: your PR ${slot.pr_number !== null ? `#${slot.pr_number}` : slot.pr_url} is at the HEAD — clear to land once green.`
+        : `Landing queue: your PR ${slot.pr_number !== null ? `#${slot.pr_number}` : slot.pr_url} is position ${slot.position} (${ahead} ahead). Hold your merge; you'll be noticed to rebase when it's your turn.`,
+    ref: task.id,
+  });
 }
 
 // ───────────────── org-life graph: the audit log as a living picture ─────────────────
