@@ -11,6 +11,7 @@ import * as store from "../core/store.js";
 import { ScopeError } from "../core/types.js";
 import { closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
 import { getContext, putContext } from "./context.js";
+import { addLiveSession, removeLiveSession } from "../core/presence.js";
 import { buildMcpServer } from "./mcp.js";
 import { panelHtml } from "./panel.js";
 import { startWebhookDelivery } from "./webhooks.js";
@@ -18,6 +19,19 @@ import { startWebhookDelivery } from "./webhooks.js";
 const transports = new Map<string, StreamableHTTPServerTransport>();
 /** Maps an MCP session id to its agent, so we can refresh presence on each request. */
 const sessionAgent = new Map<string, string>();
+
+/**
+ * Forget a closed MCP session and drop its live-presence hold. Guarded by the
+ * sessionAgent entry so it stays correct when both `onsessionclosed` and
+ * `transport.onclose` fire for the same session: the first call clears the
+ * mapping and releases the hold, the second is a no-op.
+ */
+function forgetSession(id: string): void {
+  const agentId = sessionAgent.get(id);
+  transports.delete(id);
+  sessionAgent.delete(id);
+  if (agentId !== undefined) removeLiveSession(agentId);
+}
 
 function bearer(header: string | undefined): string | null {
   if (!header) return null;
@@ -231,19 +245,14 @@ async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): P
     onsessioninitialized: (id) => {
       transports.set(id, transport);
       sessionAgent.set(id, ctx.agentId);
+      addLiveSession(ctx.agentId);
     },
-    onsessionclosed: (id) => {
-      transports.delete(id);
-      sessionAgent.delete(id);
-    },
+    onsessionclosed: (id) => forgetSession(id),
   });
   const { server, dispose } = buildMcpServer(ctx);
   transport.onclose = () => {
     dispose();
-    if (transport.sessionId) {
-      transports.delete(transport.sessionId);
-      sessionAgent.delete(transport.sessionId);
-    }
+    if (transport.sessionId) forgetSession(transport.sessionId);
   };
 
   await server.connect(transport);

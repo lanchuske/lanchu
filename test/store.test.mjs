@@ -13,6 +13,7 @@ process.env.LANCHU_STALE_HOURS = "24";
 const store = await import("../dist/core/store.js");
 const { ScopeError } = await import("../dist/core/types.js");
 const { getContext } = await import("../dist/server/context.js");
+const presence = await import("../dist/core/presence.js");
 
 function setup(orgName) {
   const org = store.getOrCreateOrg(orgName);
@@ -263,4 +264,32 @@ test("getContext rehydrates a persisted session from the DB after a restart", ()
   assert.equal(ctx.projectId, project.id);
   // An unknown token resolves to nothing.
   assert.equal(getContext("lsk_not_a_real_token"), undefined);
+});
+
+test("board marks a live-transport agent active even without recent activity", () => {
+  // Regression: a Claude agent holds its MCP transport open but calls tools
+  // only sporadically, so recency alone false-idles it between calls.
+  const { org, agent } = setup("acme-live");
+  // Fresh agent, no MCP traffic yet → recency says idle.
+  assert.equal(store.boardSnapshot(org.id).agents.find((a) => a.id === agent.id).state, "idle");
+  // An open MCP transport makes it active…
+  presence.addLiveSession(agent.id);
+  assert.equal(store.boardSnapshot(org.id).agents.find((a) => a.id === agent.id).state, "active");
+  // …until the transport closes.
+  presence.removeLiveSession(agent.id);
+  assert.equal(store.boardSnapshot(org.id).agents.find((a) => a.id === agent.id).state, "idle");
+});
+
+test("live-session presence is ref-counted across concurrent sessions", () => {
+  const { agent } = setup("acme-live2");
+  presence.addLiveSession(agent.id);
+  presence.addLiveSession(agent.id);
+  assert.equal(presence.isAgentLive(agent.id), true);
+  presence.removeLiveSession(agent.id);
+  assert.equal(presence.isAgentLive(agent.id), true, "still live while one session remains");
+  presence.removeLiveSession(agent.id);
+  assert.equal(presence.isAgentLive(agent.id), false);
+  // Over-releasing must not underflow or flip it back to live.
+  presence.removeLiveSession(agent.id);
+  assert.equal(presence.isAgentLive(agent.id), false);
 });
