@@ -696,6 +696,32 @@ async function cmdRestart(): Promise<void> {
   }
 }
 
+/**
+ * Inspect or abort the org's maintenance window. `lanchu greenzone` prints the
+ * current status; `lanchu greenzone cancel` is the supervisor override — the
+ * armed op never runs and the recovery path for a stuck window (audited).
+ */
+async function cmdGreenzone(): Promise<void> {
+  if (!(await serverUp())) return console.log("server not running — start it with: lanchu serve");
+  const org = await orgOf();
+  const sub = positional()[1];
+  if (sub === "cancel") {
+    const r = (await post("/greenzone/cancel", { org })) as { error?: string; action?: string };
+    if (r.error) return console.log(r.error);
+    console.log(`greenzone cancelled (${r.action ?? "?"}) — the pending op will not run; agents were noticed.`);
+    return;
+  }
+  const gz = (await (await api(`/api/greenzone?org=${encodeURIComponent(org)}`)).json()) as {
+    state: string; action?: string; requested_at?: string; deadline?: string;
+    confirmed?: number; required: { name: string; confirmed_at: string | null }[];
+  };
+  if (gz.state === "idle") return console.log("no greenzone — the org is running normally");
+  const age = gz.requested_at ? Math.round((Date.now() - new Date(gz.requested_at).getTime()) / 1000) : 0;
+  console.log(`greenzone ${gz.state}: ${gz.action ?? ""} · requested ${age}s ago · ${gz.confirmed ?? 0}/${gz.required.length} confirmed`);
+  for (const r of gz.required) console.log(`  ${r.confirmed_at ? "✓" : "…"} ${r.name}`);
+  if (gz.state === "requested") console.log("abort with: lanchu greenzone cancel");
+}
+
 const SPAWN_PROMPT =
   "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work. While you work, watch for friction in Lanchu itself and file it with task_create using the taxonomy tags (bug | extension | idea | process) plus area tags and evidence — the help tool has the details.";
 
@@ -1136,6 +1162,7 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu serve", "run the local server (foreground)"],
       ["lanchu stop", "stop the background server"],
       ["lanchu restart [--greenzone] [--timeout <s>]", "restart the server; --greenzone coordinates it (agents confirm a safe point first)"],
+      ["lanchu greenzone [cancel]", "show the org's maintenance window; cancel aborts a requested one (supervisor override)"],
       ["lanchu completion [bash|zsh|fish] | install", "shell Tab-completion (commands, flags, live agent/task/org names); install wires your shell rc"],
       ["lanchu panel", "open the panel in your browser"],
       ["lanchu statusline", "status line for Claude Code (setup shown when run)"],
@@ -1257,6 +1284,8 @@ async function main(): Promise<void> {
       return cmdStop();
     case "restart":
       return cmdRestart();
+    case "greenzone":
+      return cmdGreenzone();
     case "completion":
       return cmdCompletion();
     case "spawn":
