@@ -402,7 +402,7 @@ const TEMPLATE = `<!doctype html>
   <div class="app">
     <nav class="sidebar">
       <div class="brand"><svg class="brandmark" viewBox="0 0 64 64" role="img" aria-label="Lanchu"><rect width="64" height="64" rx="14" fill="#0b7285"/><g fill="#fff"><rect x="16" y="19" width="24" height="6" rx="3"/><rect x="16" y="29" width="32" height="6" rx="3"/><rect x="16" y="39" width="18" height="6" rx="3"/></g></svg><span>Lanchu <small>control &amp; trust</small></span></div>
-      <div class="orgfield"><span>org</span><input id="org" value="lanchu" list="orglist" autocomplete="off" placeholder="pick an existing org…" title="Picks an existing org — orgs are created from the terminal (run lanchu in your repo)" /><datalist id="orglist"></datalist></div>
+      <div class="orgfield"><span>org</span><input id="org" list="orglist" autocomplete="off" placeholder="pick an existing org…" title="Picks an existing org — orgs are created from the terminal (run lanchu in your repo)" /><datalist id="orglist"></datalist></div>
       <span id="live" class="live"><span class="pip"></span><span id="live-t">connecting</span></span>
       <div id="orgwarn" class="orgwarn" style="display:none"></div>
       <div id="coordline" class="coordline" style="display:none"></div>
@@ -577,6 +577,10 @@ const TEMPLATE = `<!doctype html>
 var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
   return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
 var org = function () { return document.getElementById("org").value.trim(); };
+// The org choice survives reloads (incl. the build-mismatch staleReload, which
+// used to eat the value you had JUST typed and snap back to the old default —
+// the hardcoded value="lanchu" is gone; nothing about an org may be baked in).
+try { document.getElementById("org").value = localStorage.getItem("lanchu_org") || ""; } catch (e) {}
 var BUILD_ID = "__LANCHU_BUILD__"; // stamped by the server at render time
 
 // ── access key (only needed when the server sets LANCHU_ACCESS_KEY) ──
@@ -856,12 +860,17 @@ window.addEventListener("hashchange", routeFromHash);
 
 // ── renders ──
 function renderOrgOptions(orgs) {
-  var cur = org();
+  var el = document.getElementById("org");
   document.getElementById("orglist").innerHTML = (orgs || []).map(function (o) {
     return '<option value="' + esc(o.name) + '">' + o.agents + ' agents · ' + o.projects + ' projects · ' + o.tasks + ' tasks</option>';
   }).join("");
-  // keep the current selection; the datalist just offers the known names
-  void cur;
+  // The current selection is never rewritten — least of all mid-edit. The one
+  // exception: a blank, unfocused field on a fresh profile adopts the first
+  // known org so the panel starts on something real.
+  if (!el.value.trim() && document.activeElement !== el && orgs && orgs.length) {
+    el.value = orgs[0].name;
+    connect();
+  }
 }
 
 function renderProjects(list) {
@@ -2000,7 +2009,12 @@ document.getElementById("gwin").addEventListener("click", function (e) {
 
 var busy = false, lastSig = "";
 function refresh() {
-  if (!org()) return;
+  if (!org()) {
+    // Fresh profile, nothing chosen yet: fetch just the org list so
+    // renderOrgOptions can adopt the first real one and reconnect.
+    get("/api/orgs").then(renderOrgOptions).catch(function () {});
+    return;
+  }
   updateProcBadge();
   fetchGraph(); // no-op unless the Org life view is open
   if (busy) return; busy = true;
@@ -2103,6 +2117,9 @@ function staleReload() {
 var sse = null;
 function connect() {
   if (sse) sse.close();
+  // Persist BEFORE the SSE handshake: if the server answers with a new build
+  // id the page reloads, and the org you just typed must come back with it.
+  try { localStorage.setItem("lanchu_org", org()); } catch (e) {}
   var live = document.getElementById("live"), t = document.getElementById("live-t");
   sse = new EventSource("/events?org=" + encodeURIComponent(org()) + keyParam());
   sse.onopen = function () { live.className = "live on"; t.textContent = "live"; };
