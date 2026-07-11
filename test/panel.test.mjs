@@ -69,3 +69,20 @@ test("roles view shows holders and collapses unused roles; activity clamps and l
   const renders = html.match(/renderAuditRows/g) ?? [];
   assert.ok(renders.length >= 2, "activity rows must render through the single shared renderAuditRows");
 });
+
+// Batch-2 QA follow-up (task-mrg116op14): #21 and #26 shipped without their own
+// coverage — pin their surface the same way the #19 tests above do.
+
+test("work board clamps titles, signals lane overflow and reassigns with one control (#21)", () => {
+  assert.ok(html.includes("clamp"), "expected the title clamp class on task cards");
+  assert.ok(html.includes("more →"), "expected the lane-overflow signal");
+  // Reassign is select-only: picking an agent acts immediately, no second button.
+  assert.ok(!/<button[^>]*>\s*Reassign\s*<\/button>/.test(html), "the standalone Reassign button must stay gone");
+});
+
+test("overview is the supervisor's home: working-now strip, inline activity, conflict feed (#26)", () => {
+  assert.ok(html.includes("Working now"), "expected the working-now strip");
+  assert.ok(html.includes("evRow"), "expected activity rows reused inline on the overview");
+  assert.ok(html.includes("Conflicts &amp; warnings"), "expected the conflicts area");
+  assert.ok(html.includes("conflict.detected"), "expected the conflict feed to read conflict.detected events");
+});
