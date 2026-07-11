@@ -4349,6 +4349,8 @@ export interface LandingSlot {
   owner_agent_id: string | null;
   owner_name: string | null;
   stage: TaskStage | null;
+  /** Open QA verification for this task — landing now is an audited bypass (task-mrg7ejet22). */
+  qa_pending: string | null;
 }
 
 /** Open (unmerged) PR-carrying tasks of a project, in landing order. */
@@ -4391,6 +4393,7 @@ export function landingQueue(projectId: string): LandingSlot[] {
     owner_agent_id: t.owner_agent_id,
     owner_name: t.owner_agent_id ? (getAgent(t.owner_agent_id)?.name ?? null) : null,
     stage: t.stage,
+    qa_pending: openVerificationTaskFor(t.id)?.id ?? null,
   }));
 }
 
@@ -4452,6 +4455,10 @@ export function runLandingSweep(opts?: {
       if (!landed.length) continue;
       for (const slot of landed) {
         merged.push(slot.task_id);
+        // Merge-while-QA bypass (task-mrg7ejet22): the verification's verdict
+        // now targets merged-main state — on the record, and QA is told so a
+        // FAIL is scoped as a follow-up PR, not an amend.
+        const bypassed = openVerificationTaskFor(slot.task_id);
         recordEvent({
           org_id: org.id,
           project_id: project.id,
@@ -4459,8 +4466,21 @@ export function runLandingSweep(opts?: {
           actor_agent_id: null,
           subject_kind: "task",
           subject_id: slot.task_id,
-          data: { pr_url: slot.pr_url, ...(slot.pr_number !== null ? { pr_number: slot.pr_number } : {}) },
+          data: {
+            pr_url: slot.pr_url,
+            ...(slot.pr_number !== null ? { pr_number: slot.pr_number } : {}),
+            ...(bypassed ? { qa_bypass: true, verification_task_id: bypassed.id } : {}),
+          },
         });
+        if (bypassed) {
+          noticeStageSpecialists(
+            org.id,
+            "qa",
+            bypassed.id,
+            `PR ${slot.pr_number !== null ? `#${slot.pr_number}` : slot.pr_url} merged while ${bypassed.id} was in flight — ` +
+              `verify against merged main; a FAIL now means a follow-up PR (audited as a QA bypass on the pr.merged event).`,
+          );
+        }
         const task = getTask(slot.task_id);
         if (task && task.stage === "review") {
           advanceStage({ taskId: task.id, to: "qa", reason: `PR #${slot.pr_number} merged — review passed` });
@@ -4477,12 +4497,19 @@ function noticeLandingTurn(orgId: string, projectId: string): void {
   const queue = landingQueue(projectId);
   const [head, next] = [queue[0], queue[1]];
   if (head?.owner_agent_id) {
+    // Merge-while-QA gate (task-mrg7ejet22), advisory by design: a FAIL on an
+    // already-merged PR needs a follow-up PR instead of an amend — tell the
+    // merger BEFORE, and audit the bypass after, but never hard-block.
+    const prName = head.pr_number !== null ? `#${head.pr_number}` : head.pr_url;
     insertNotice({
       orgId,
       kind: "system",
       fromAgentId: null,
       toAgentId: head.owner_agent_id,
-      body: `Landing queue: your PR ${head.pr_number !== null ? `#${head.pr_number}` : head.pr_url} is CLEAR TO LAND — rebase on origin/main, get tests green, and land it next.`,
+      body: head.qa_pending
+        ? `Landing queue: your PR ${prName} is at the HEAD, but HOLD — QA verification ${head.qa_pending} is in flight on this task. ` +
+          `Land after it passes (a FAIL then amends the open PR instead of needing a follow-up). Landing anyway is allowed and audited as a QA bypass.`
+        : `Landing queue: your PR ${prName} is CLEAR TO LAND — rebase on origin/main, get tests green, and land it next.`,
       ref: head.task_id,
     });
   }
@@ -4800,7 +4827,9 @@ function noticeLandingPosition(task: Task, orgId: string): void {
     toAgentId: task.owner_agent_id,
     body:
       ahead === 0
-        ? `Landing queue: your PR ${slot.pr_number !== null ? `#${slot.pr_number}` : slot.pr_url} is at the HEAD — clear to land once green.`
+        ? slot.qa_pending
+          ? `Landing queue: your PR ${slot.pr_number !== null ? `#${slot.pr_number}` : slot.pr_url} is at the HEAD, but HOLD — QA verification ${slot.qa_pending} is in flight; land after it passes (landing anyway is audited as a QA bypass).`
+          : `Landing queue: your PR ${slot.pr_number !== null ? `#${slot.pr_number}` : slot.pr_url} is at the HEAD — clear to land once green.`
         : `Landing queue: your PR ${slot.pr_number !== null ? `#${slot.pr_number}` : slot.pr_url} is position ${slot.position} (${ahead} ahead). Hold your merge; you'll be noticed to rebase when it's your turn.`,
     ref: task.id,
   });

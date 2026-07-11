@@ -143,3 +143,53 @@ test("the board snapshot carries the landing queue", () => {
   assert.equal(snap.landing[0].pr_number, 97);
   assert.equal(snap.landing[0].position, 1);
 });
+
+// ── merge-while-QA gate (task-mrg7ejet22): advisory hold + audited bypass ──
+// Evidence: PR #51 merged mid-verification; the FAIL landed on main and
+// needed a follow-up PR instead of an amend on the open PR.
+
+test("a head slot with QA in flight says HOLD (advisory), and the merge audits the bypass + tells QA", () => {
+  const ctx = setup("landing-bypass-org");
+  const task = store.createTask({
+    projectId: ctx.project.id, orgId: ctx.org.id, agentId: ctx.product.id,
+    title: "Racy feature", tags: ["server"], stage: "build",
+  });
+  store.claimTask({ agentId: ctx.alice.id, taskId: task.id });
+  // done + PR → parked in qa with an open verification; the PR is unmerged.
+  store.updateTaskStatus({
+    agentId: ctx.alice.id, taskId: task.id, status: "done",
+    prUrl: "https://github.com/x/y/pull/98",
+  });
+  const verification = store.openVerificationTaskFor(task.id);
+  assert.ok(verification, "verification is in flight");
+
+  // The queue exposes the pending verification, and the head notice says HOLD.
+  const slot = store.landingQueue(ctx.project.id)[0];
+  assert.equal(slot.qa_pending, verification.id);
+  const heard = store.takeUndeliveredNotices(ctx.alice.id).filter((n) => /Landing queue/.test(n.body));
+  assert.ok(heard.length >= 1);
+  assert.match(heard[heard.length - 1].body, /HOLD — QA verification/);
+  assert.match(heard[heard.length - 1].body, /audited as a QA bypass/, "advisory, never a hard block");
+
+  // Landing anyway: the pr.merged event carries the bypass, QA gets a heads-up.
+  const { merged } = store.runLandingSweep({ logSubjects: () => ["feat: racy (#98)"] });
+  assert.deepEqual(merged, [task.id]);
+  const ev = store.listAuditEvents(ctx.org.id).find((e) => e.type === "pr.merged" && e.subject_id === task.id);
+  assert.equal(ev.data.qa_bypass, true);
+  assert.equal(ev.data.verification_task_id, verification.id);
+  const qaHeard = store.takeUndeliveredNotices(ctx.qa.id);
+  assert.ok(qaHeard.some((n) => /merged while .* was in flight — verify against merged main/.test(n.body)));
+});
+
+test("a clean head (no verification in flight) still reads CLEAR TO LAND and merges without bypass data", () => {
+  const ctx = setup("landing-clean-org");
+  openPr(ctx, ctx.alice, "Clean feature", 99);
+  const slot = store.landingQueue(ctx.project.id)[0];
+  assert.equal(slot.qa_pending, null);
+  const heard = store.takeUndeliveredNotices(ctx.alice.id).filter((n) => /Landing queue/.test(n.body));
+  assert.match(heard[heard.length - 1].body, /at the HEAD — clear to land once green/);
+
+  store.runLandingSweep({ logSubjects: () => ["feat: clean (#99)"] });
+  const ev = store.listAuditEvents(ctx.org.id).find((e) => e.type === "pr.merged" && e.subject_id !== null);
+  assert.equal(ev.data.qa_bypass, undefined, "no bypass noise on clean merges");
+});
