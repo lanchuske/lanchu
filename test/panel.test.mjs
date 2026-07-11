@@ -58,3 +58,14 @@ test("docs cards carry knowledge analytics (reads, readers, freshness flags)", (
   assert.ok(html.includes("stale but hot"), "expected the refresh-candidate flag");
   assert.ok(html.includes("consulted by"), "expected the who-consulted-what list");
 });
+
+// Batch-3 QA follow-up (task-mrg3o05x1): #28 shipped panel-only with no
+// coverage — pin the roles/activity polish surface.
+
+test("roles view shows holders and collapses unused roles; activity clamps and links (#28)", () => {
+  assert.ok(html.includes("Unused roles"), "expected the muted unused-roles chip row");
+  assert.ok(html.includes("holders"), "expected role cards to carry their holders");
+  assert.ok(html.includes("more ▼") && html.includes("less ▲"), "expected the note clamp expand/collapse affordance");
+  const renders = html.match(/renderAuditRows/g) ?? [];
+  assert.ok(renders.length >= 2, "activity rows must render through the single shared renderAuditRows");
+});
