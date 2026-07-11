@@ -36,6 +36,9 @@ export type EventType =
   | "task.handoff"
   | "doc.created"
   | "doc.updated"
+  | "message.sent"
+  | "conflict.detected"
+  | "agent.duplicate_session"
   | "scope.violation";
 
 export interface Org {

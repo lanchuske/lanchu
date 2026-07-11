@@ -1390,6 +1390,293 @@ export function listAuditEvents(orgId: string, limit = 60): AuditEvent[] {
   }));
 }
 
+// ───────────────── notices: A2A messages + conflict warnings ─────────────────
+// One substrate, three producers (message | conflict | system). Delivery is
+// piggybacked on MCP tool results (an active agent hears within one tool call);
+// everything is audit-logged and same-org only. See the design docs
+// "Agent-to-agent messaging (A2A)" and "Design: agent isolation" §Task 3.
+
+export type NoticeKind = "message" | "conflict" | "system";
+
+export interface Notice {
+  id: string;
+  org_id: string;
+  kind: NoticeKind;
+  from_agent_id: string | null;
+  from_name: string | null;
+  to_agent_id: string;
+  body: string;
+  ref: string | null;
+  created_at: string;
+  delivered_at: string | null;
+  acked_at: string | null;
+}
+
+const NOTICE_COLS =
+  "n.id, n.org_id, n.kind, n.from_agent_id, a.name AS from_name, n.to_agent_id, n.body, n.ref, n.created_at, n.delivered_at, n.acked_at";
+
+function loadNotice(r: Record<string, unknown>): Notice {
+  return {
+    id: r.id as string,
+    org_id: r.org_id as string,
+    kind: r.kind as NoticeKind,
+    from_agent_id: (r.from_agent_id as string) ?? null,
+    from_name: (r.from_name as string) ?? null,
+    to_agent_id: r.to_agent_id as string,
+    body: r.body as string,
+    ref: (r.ref as string) ?? null,
+    created_at: r.created_at as string,
+    delivered_at: (r.delivered_at as string) ?? null,
+    acked_at: (r.acked_at as string) ?? null,
+  };
+}
+
+function insertNotice(input: {
+  orgId: string;
+  kind: NoticeKind;
+  fromAgentId: string | null;
+  toAgentId: string;
+  body: string;
+  ref?: string | null;
+}): void {
+  db()
+    .prepare(
+      "INSERT INTO notice(id, org_id, kind, from_agent_id, to_agent_id, body, ref, created_at) VALUES (?,?,?,?,?,?,?,?)",
+    )
+    .run(
+      uuid(),
+      input.orgId,
+      input.kind,
+      input.fromAgentId,
+      input.toAgentId,
+      input.body,
+      input.ref ?? null,
+      nowIso(),
+    );
+}
+
+// Broadcasts are handy ("restarting the server…") but a runaway loop would be
+// noise for every agent — cap them per sender per minute.
+const BROADCAST_WINDOW_MS = 60_000;
+const BROADCAST_MAX_PER_WINDOW = 3;
+const broadcastLog = new Map<string, number[]>();
+
+/** Send a message to one agent (by name) or to every non-retired teammate ('*'). Same-org only; audit-logged. */
+export function sendNotice(input: {
+  orgId: string;
+  fromAgentId: string | null;
+  to: string;
+  body: string;
+  kind?: NoticeKind;
+  ref?: string | null;
+}): { sent: number; to: string[] } {
+  const kind = input.kind ?? "message";
+  let recipients: Agent[];
+
+  if (input.to === "*" || input.to.toLowerCase() === "all") {
+    if (input.fromAgentId) {
+      const now = Date.now();
+      const recent = (broadcastLog.get(input.fromAgentId) ?? []).filter(
+        (t) => now - t < BROADCAST_WINDOW_MS,
+      );
+      if (recent.length >= BROADCAST_MAX_PER_WINDOW) {
+        throw new Error(
+          `broadcast rate limit: at most ${BROADCAST_MAX_PER_WINDOW} broadcasts per minute`,
+        );
+      }
+      recent.push(now);
+      broadcastLog.set(input.fromAgentId, recent);
+    }
+    recipients = listAgents(input.orgId).filter(
+      (a) => a.state !== "retired" && a.id !== input.fromAgentId,
+    );
+  } else {
+    const target = findAgentByName(input.orgId, input.to);
+    if (!target || target.org_id !== input.orgId) {
+      // Cross-org / unknown recipients are rejected AND recorded — governance surface.
+      recordEvent({
+        org_id: input.orgId,
+        type: "message.sent",
+        actor_agent_id: input.fromAgentId,
+        subject_kind: "agent",
+        subject_id: input.to,
+        outcome: "rejected",
+        data: { reason: "unknown or cross-org recipient" },
+      });
+      throw new Error(`no agent named '${input.to}' in this org`);
+    }
+    if (target.state === "retired") throw new Error(`agent '${input.to}' is retired`);
+    recipients = [target];
+  }
+
+  for (const r of recipients) {
+    insertNotice({
+      orgId: input.orgId,
+      kind,
+      fromAgentId: input.fromAgentId,
+      toAgentId: r.id,
+      body: input.body,
+      ref: input.ref,
+    });
+  }
+  recordEvent({
+    org_id: input.orgId,
+    type: "message.sent",
+    actor_agent_id: input.fromAgentId,
+    subject_kind: "agent",
+    subject_id: recipients.map((r) => r.name).join(", "),
+    data: {
+      note: input.body.slice(0, 280),
+      kind,
+      broadcast: recipients.length > 1,
+      ...(input.ref ? { ref: input.ref } : {}),
+    },
+  });
+  if (input.fromAgentId) {
+    touchActivity(input.fromAgentId, `messaged ${recipients.map((r) => r.name).join(", ")}`);
+  }
+  return { sent: recipients.length, to: recipients.map((r) => r.name) };
+}
+
+/** A system notice from Lanchu itself (no sender). */
+export function systemNotice(orgId: string, toAgentId: string, body: string): void {
+  insertNotice({ orgId, kind: "system", fromAgentId: null, toAgentId, body });
+}
+
+/**
+ * Undelivered notices for the piggyback channel: returns each notice once,
+ * stamping delivered_at. The full unacked inbox stays visible via listNotices.
+ */
+export function takeUndeliveredNotices(agentId: string): Notice[] {
+  const rows = db()
+    .prepare(
+      `SELECT ${NOTICE_COLS} FROM notice n LEFT JOIN agent a ON a.id = n.from_agent_id
+       WHERE n.to_agent_id = ? AND n.delivered_at IS NULL ORDER BY n.created_at`,
+    )
+    .all(agentId) as Record<string, unknown>[];
+  if (rows.length) {
+    db()
+      .prepare(
+        "UPDATE notice SET delivered_at = ? WHERE to_agent_id = ? AND delivered_at IS NULL",
+      )
+      .run(nowIso(), agentId);
+  }
+  return rows.map(loadNotice);
+}
+
+export function listNotices(agentId: string, opts: { includeAcked?: boolean } = {}): Notice[] {
+  const rows = db()
+    .prepare(
+      `SELECT ${NOTICE_COLS} FROM notice n LEFT JOIN agent a ON a.id = n.from_agent_id
+       WHERE n.to_agent_id = ? ${opts.includeAcked ? "" : "AND n.acked_at IS NULL"}
+       ORDER BY n.created_at DESC LIMIT 100`,
+    )
+    .all(agentId) as Record<string, unknown>[];
+  return rows.map(loadNotice);
+}
+
+export function unackedNoticeCount(agentId: string): number {
+  const r = db()
+    .prepare("SELECT COUNT(*) AS c FROM notice WHERE to_agent_id = ? AND acked_at IS NULL")
+    .get(agentId) as { c: number };
+  return r.c;
+}
+
+/** Acknowledge notices you received. Only your own; returns how many changed. */
+export function ackNotices(agentId: string, ids: string[]): number {
+  if (!ids.length) return 0;
+  const placeholders = ids.map(() => "?").join(",");
+  const info = db()
+    .prepare(
+      `UPDATE notice SET acked_at = ? WHERE to_agent_id = ? AND acked_at IS NULL AND id IN (${placeholders})`,
+    )
+    .run(nowIso(), agentId, ...ids);
+  return Number(info.changes);
+}
+
+// ─── work-overlap detection (isolation Task 3): warn before agents collide ───
+
+export interface WorkConflict {
+  with_agent: string;
+  their_task_id: string;
+  their_task_title: string;
+  overlap_tags: string[];
+}
+
+/** Tasks other PRESENT agents hold open whose tags overlap the given ones. */
+export function checkWorkOverlap(input: {
+  orgId: string;
+  agentId: string;
+  tags: string[];
+  excludeTaskId?: string;
+}): WorkConflict[] {
+  if (!input.tags.length) return [];
+  const others = listAgents(input.orgId).filter(
+    (a) => a.state !== "retired" && a.id !== input.agentId && isPresent(a),
+  );
+  const conflicts: WorkConflict[] = [];
+  for (const other of others) {
+    for (const t of openTasksForAgent(other.id)) {
+      if (t.id === input.excludeTaskId) continue;
+      if (t.status !== "claimed" && t.status !== "in_progress") continue;
+      const overlap = t.tags.filter((tag) => input.tags.includes(tag));
+      if (overlap.length) {
+        conflicts.push({
+          with_agent: other.name,
+          their_task_id: t.id,
+          their_task_title: t.title,
+          overlap_tags: overlap,
+        });
+      }
+    }
+  }
+  return conflicts;
+}
+
+/**
+ * Detect overlaps for a task an agent just created/claimed; when found, notify
+ * the other agents (conflict notices) and audit-log one conflict.detected.
+ * Warn-only by design — resolution (stop / handoff / backlog) is the user's call.
+ */
+export function warnWorkConflicts(input: {
+  orgId: string;
+  agentId: string;
+  taskId: string;
+  tags: string[];
+}): WorkConflict[] {
+  const conflicts = checkWorkOverlap({
+    orgId: input.orgId,
+    agentId: input.agentId,
+    tags: input.tags,
+    excludeTaskId: input.taskId,
+  });
+  if (!conflicts.length) return [];
+  const me = getAgent(input.agentId);
+  for (const c of conflicts) {
+    const other = findAgentByName(input.orgId, c.with_agent);
+    if (!other) continue;
+    insertNotice({
+      orgId: input.orgId,
+      kind: "conflict",
+      fromAgentId: input.agentId,
+      toAgentId: other.id,
+      body:
+        `${me?.name ?? "another agent"} started ${input.taskId} which overlaps your ` +
+        `${c.their_task_id} (tags: ${c.overlap_tags.join(", ")}). Coordinate before you both touch the same area.`,
+      ref: input.taskId,
+    });
+  }
+  recordEvent({
+    org_id: input.orgId,
+    type: "conflict.detected",
+    actor_agent_id: input.agentId,
+    subject_kind: "task",
+    subject_id: input.taskId,
+    data: { conflicts: conflicts as unknown as Record<string, unknown>[] },
+  });
+  return conflicts;
+}
+
 function ageHours(iso: string | null): number {
   if (!iso) return 0;
   return (Date.now() - new Date(iso).getTime()) / 3_600_000;

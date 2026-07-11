@@ -17,11 +17,29 @@ const INSTRUCTIONS = [
   "tasks you have) so they know Lanchu is running. Break your objective into tasks with",
   "task_create, claim only the ones that fall within your role (task_claim), and report",
   "progress with task_update. Do not work on other agents' tasks or outside your scope:",
-  "Lanchu rejects and records it. If unsure how to proceed, call the help tool.",
+  "Lanchu rejects and records it. Tool results may carry a `notices` block — messages from",
+  "teammates, conflict warnings or system notes: read them, act or reply (message_send),",
+  "and acknowledge with message_ack. If a result carries a `conflict` block, STOP and ask",
+  "your user before proceeding. If unsure how to proceed, call the help tool.",
 ].join(" ");
 
 function text(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
+}
+
+/** User-facing conflict warning: the options map to existing primitives. */
+function conflictPayload(conflicts: import("../core/store.js").WorkConflict[]) {
+  return {
+    warning: "Another active agent is working the same area right now.",
+    conflicts,
+    options: {
+      stop: "Don't proceed — release with task_release.",
+      handoff: "Pass it to the agent already on that surface — task_handoff.",
+      backlog: "Park it — leave the task unclaimed in the backlog stage for later.",
+    },
+    instruction:
+      "STOP and ask your user which option to take before doing any work on this task.",
+  };
 }
 
 function fail(err: unknown) {
@@ -60,6 +78,49 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       });
     }
   });
+
+  // Piggyback channel: every tool result carries any undelivered notices
+  // (teammate messages, conflict warnings, system notes), so an active agent
+  // hears from the org within one tool call — an MCP server can't push
+  // mid-turn. See the design doc "Agent-to-agent messaging (A2A)".
+  type ToolResult = { isError?: boolean; content: Array<{ type: "text"; text: string }> };
+  function registerTool(
+    name: string,
+    def: { title: string; description: string; inputSchema: Record<string, unknown> },
+    handler: (args: never) => Promise<ToolResult> | ToolResult,
+  ): void {
+    server.registerTool(name as never, def as never, (async (args: never) => {
+      const res = await handler(args);
+      if (!res.isError) {
+        try {
+          const pending = store.takeUndeliveredNotices(ctx.agentId);
+          if (pending.length) {
+            res.content.push({
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  notices: pending.map((n) => ({
+                    id: n.id,
+                    kind: n.kind,
+                    from: n.from_name ?? "lanchu",
+                    body: n.body,
+                    ref: n.ref,
+                    at: n.created_at,
+                  })),
+                  hint: "Notices from teammates or Lanchu. Act on them (reply with message_send if needed) and acknowledge with message_ack({ids}).",
+                },
+                null,
+                2,
+              ),
+            });
+          }
+        } catch {
+          /* notices must never break a tool result */
+        }
+      }
+      return res;
+    }) as never);
+  }
 
   // ── Resources ───────────────────────────────────────────────
   server.registerResource(
@@ -136,7 +197,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
   );
 
   // ── Tools ───────────────────────────────────────────────────
-  server.registerTool(
+  registerTool(
     "session_whoami",
     {
       title: "Who am I",
@@ -150,7 +211,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_list",
     {
       title: "List tasks",
@@ -165,7 +226,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_create",
     {
       title: "Create task",
@@ -180,24 +241,31 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ title, tags, deps, stage }) => {
       try {
-        return text(
-          store.createTask({
-            projectId: ctx.projectId,
-            orgId: ctx.orgId,
-            agentId: ctx.agentId,
-            title,
-            tags,
-            deps,
-            stage,
-          }),
-        );
+        const task = store.createTask({
+          projectId: ctx.projectId,
+          orgId: ctx.orgId,
+          agentId: ctx.agentId,
+          title,
+          tags,
+          deps,
+          stage,
+        });
+        // Task 3 (isolation): warn when a PRESENT teammate is already working
+        // the same area — the other agent gets a conflict notice too.
+        const conflicts = store.warnWorkConflicts({
+          orgId: ctx.orgId,
+          agentId: ctx.agentId,
+          taskId: task.id,
+          tags,
+        });
+        return text(conflicts.length ? { ...task, conflict: conflictPayload(conflicts) } : task);
       } catch (err) {
         return fail(err);
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_check_scope",
     {
       title: "Can I take this task?",
@@ -213,7 +281,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_claim",
     {
       title: "Claim task",
@@ -222,19 +290,42 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
     async ({ taskId, workspace }) => {
       try {
+        // Task 3 (isolation): a live teammate already working this area is a
+        // conflict. Warn-and-ask by default; hard-block with LANCHU_CONFLICT_BLOCK=1.
+        const target = store.getTask(taskId);
+        const pre = target
+          ? store.checkWorkOverlap({ orgId: ctx.orgId, agentId: ctx.agentId, tags: target.tags, excludeTaskId: taskId })
+          : [];
+        if (pre.length && process.env.LANCHU_CONFLICT_BLOCK === "1") {
+          return fail(
+            new Error(
+              `conflict: ${pre.map((c) => `${c.with_agent} is working ${c.their_task_id} (tags: ${c.overlap_tags.join(", ")})`).join("; ")} — claim blocked (LANCHU_CONFLICT_BLOCK=1)`,
+            ),
+          );
+        }
         // Default the task's workspace to the agent's isolated worktree so the
         // board shows where each task is being worked on.
         const ws = workspace ?? store.getAgent(ctx.agentId)?.worktree ?? undefined;
         const task = store.claimTask({ agentId: ctx.agentId, taskId, workspace: ws });
+        const conflicts = store.warnWorkConflicts({
+          orgId: ctx.orgId,
+          agentId: ctx.agentId,
+          taskId: task.id,
+          tags: task.tags,
+        });
         // Deliver the right "hat": skills matching this task's type (tags).
-        return text({ ...task, applicable_skills: store.skillsForTags(ctx.orgId, task.tags) });
+        return text({
+          ...task,
+          applicable_skills: store.skillsForTags(ctx.orgId, task.tags),
+          ...(conflicts.length ? { conflict: conflictPayload(conflicts) } : {}),
+        });
       } catch (err) {
         return fail(err);
       }
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_update",
     {
       title: "Update task",
@@ -264,7 +355,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_release",
     {
       title: "Release task",
@@ -280,7 +371,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_get",
     {
       title: "Get task",
@@ -295,7 +386,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "task_handoff",
     {
       title: "Hand off task",
@@ -318,7 +409,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "doc_list",
     {
       title: "List docs",
@@ -331,7 +422,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "doc_read",
     {
       title: "Read doc",
@@ -344,7 +435,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "doc_update",
     {
       title: "Create or update doc",
@@ -367,7 +458,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "org_rules",
     {
       title: "Org rules",
@@ -377,7 +468,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     async () => text({ rules: store.getOrgRules(ctx.orgId) }),
   );
 
-  server.registerTool(
+  registerTool(
     "org_context",
     {
       title: "My minimal context",
@@ -400,7 +491,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "skills_list",
     {
       title: "List skills",
@@ -410,7 +501,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     async () => text(store.listSkills(ctx.orgId)),
   );
 
-  server.registerTool(
+  registerTool(
     "skills_for",
     {
       title: "Skill for a task",
@@ -424,7 +515,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "open_panel",
     {
       title: "Open the dashboard",
@@ -448,7 +539,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "spawn_agent",
     {
       title: "Spawn a new agent",
@@ -490,7 +581,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     },
   );
 
-  server.registerTool(
+  registerTool(
     "tile_terminals",
     {
       title: "Tile the terminals",
@@ -500,7 +591,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     async () => text(tileTerminals()),
   );
 
-  server.registerTool(
+  registerTool(
     "help",
     {
       title: "How Lanchu works",
@@ -510,7 +601,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     async () =>
       text({
         overview:
-          "You are a member of a team coordinated by Lanchu. You coordinate through shared state, not by talking to other agents directly. Everything you do is visible and audited; actions outside your role are rejected.",
+          "You are a member of a team coordinated by Lanchu. You coordinate through shared state and audited messages. Everything you do is visible; actions outside your role are rejected.",
         loop: [
           "1. Read org_context (or the lanchu://me resource) for your objective, role, allowed tags, org rules and open tasks.",
           "2. Break your objective into tasks with task_create (only tags within your allowed_tags).",
@@ -518,13 +609,59 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           "4. Report progress with task_update (in_progress, then done). 'done' unblocks dependent tasks.",
           "5. Keep shared knowledge current with doc_read / doc_update.",
           "6. To pass a task to a specific teammate use task_handoff (with a note); to drop it back to the pool use task_release.",
+          "7. Talk to teammates with message_send (audit-logged; the supervisor sees everything). Notices arrive inside your tool results — act on them and message_ack.",
+          "8. If a task_create/task_claim result carries a `conflict` block, another live agent is on that surface: STOP and ask your user — stop, hand off, or park it.",
         ],
         rules: "Never work a task that is someone_else's or out_of_role. Claim before you work. When you finish, record what changed in a doc.",
-        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_handoff, doc_list, doc_read, doc_update, session_leave.",
+        tools: "session_whoami, org_context, org_rules, task_list, task_get, task_create, task_check_scope, task_claim, task_update, task_release, task_handoff, doc_list, doc_read, doc_update, message_send, message_list, message_ack, session_leave.",
       }),
   );
 
-  server.registerTool(
+  registerTool(
+    "message_send",
+    {
+      title: "Message a teammate",
+      description:
+        "Sends a message to another agent in this org (by name), or to every teammate with to:'*'. " +
+        "Delivered on their next tool call (queued if they're idle). Audit-logged and visible to the supervisor — there are no private messages. " +
+        "Optionally set ref to the task/doc/PR id the message is about.",
+      inputSchema: {
+        to: z.string().describe("Recipient agent name, or '*' to broadcast to the whole org"),
+        text: z.string(),
+        ref: z.string().optional().describe("Optional task/doc/PR id this message is about"),
+      },
+    },
+    async ({ to, text: body, ref }) => {
+      try {
+        return text(store.sendNotice({ orgId: ctx.orgId, fromAgentId: ctx.agentId, to, body, ref }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "message_list",
+    {
+      title: "My inbox",
+      description:
+        "Lists notices sent to you (teammate messages, conflict warnings, system notes). Unacknowledged by default; includeAcked for history.",
+      inputSchema: { includeAcked: z.boolean().default(false) },
+    },
+    async ({ includeAcked }) => text(store.listNotices(ctx.agentId, { includeAcked })),
+  );
+
+  registerTool(
+    "message_ack",
+    {
+      title: "Acknowledge notices",
+      description: "Marks notices from your inbox as read/handled so they stop counting as pending.",
+      inputSchema: { ids: z.array(z.string()) },
+    },
+    async ({ ids }) => text({ acked: store.ackNotices(ctx.agentId, ids) }),
+  );
+
+  registerTool(
     "session_leave",
     {
       title: "End session",
