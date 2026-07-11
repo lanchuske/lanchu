@@ -211,6 +211,29 @@ test("taxonomy tags alone never conflict: two bug fixes on disjoint areas claim 
   presence.removeLiveSession(alice.id);
 });
 
+test("session freshness (task-mrgou4pl1): a restart queues one expiring heads-up per live agent, never a wake", () => {
+  const { org, alice, bob } = setup("freshness-org");
+  const role = store.getOrCreateRole(org.id, "generalist", { wildcard: true });
+  const gone = store.createAgent({ orgId: org.id, roleId: role.id, name: "gone" });
+  store.retireAgent(gone.id);
+
+  const queued = store.noticeServerRestart("9.9.9");
+  assert.ok(queued >= 2, "every non-retired agent hears about the restart");
+
+  const heard = store.takeUndeliveredNotices(alice.id);
+  const restart = heard.find((n) => n.ref === "server-restart");
+  assert.ok(restart, "the heads-up rides the piggyback channel");
+  assert.match(restart.body, /reconnect to refresh/);
+  assert.match(restart.body, /message_ack of the request counts as confirmation/);
+  assert.equal(restart.is_broadcast, true, "broadcast-class: expires on its own, never triggers a wake");
+  assert.equal(store.listNotices(gone.id).length, 0, "the retired hear nothing");
+
+  // Undelivered restart notices must never wake anyone: bob hasn't heard his
+  // yet, and the nudge candidacy still ignores broadcast-class notices.
+  assert.equal(store.agentsNeedingNudge(org.id).length, 0);
+  void bob;
+});
+
 test("system notices carry no sender and ride the same channel", () => {
   const { org, bob } = setup("sys-org");
   store.systemNotice(org.id, bob.id, "Another live session is connected as this same agent.");
