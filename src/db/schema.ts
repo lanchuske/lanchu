@@ -2,7 +2,7 @@
  * v0 schema, single source (embedded so the build is just `tsc`).
  * Full documentation is in SCHEMA.md.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS role (
   org_id      TEXT NOT NULL REFERENCES org(id) ON DELETE CASCADE,
   name        TEXT NOT NULL,
   is_wildcard INTEGER NOT NULL DEFAULT 0,
+  token_quota INTEGER,
   created_at  TEXT NOT NULL,
   UNIQUE (org_id, name)
 );

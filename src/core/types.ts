@@ -40,7 +40,8 @@ export type EventType =
   | "message.sent"
   | "conflict.detected"
   | "agent.duplicate_session"
-  | "scope.violation";
+  | "scope.violation"
+  | "quota.exceeded";
 
 export interface Org {
   id: string;
@@ -63,6 +64,8 @@ export interface Role {
   name: string;
   is_wildcard: boolean;
   allowed_tags: string[];
+  /** Self-reported token budget for ALL agents of this role combined; null = unlimited. */
+  token_quota: number | null;
   created_at: string;
 }
 
@@ -120,5 +123,13 @@ export class ScopeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ScopeError";
+  }
+}
+
+/** Governance error: the role's self-reported token quota is exhausted (blocks new claims). */
+export class QuotaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuotaError";
   }
 }

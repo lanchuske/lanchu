@@ -79,6 +79,10 @@ export function panelHtml(): string {
                 background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; min-width: 20px; text-align: center; }
   .nav li.active .badge { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
   .nav .warnstat { color: var(--bad); border-color: var(--bad-bg); }
+  .quota { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--faint);
+           border: 1px solid var(--line); border-radius: 8px; padding: 1px 7px; margin-left: 6px; }
+  .quota.near { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .quota.over { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
 
   .sidefoot { margin-top: auto; padding: 12px 10px 2px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
   .sidefoot b { color: var(--fg); font-variant-numeric: tabular-nums; }
@@ -628,13 +632,28 @@ function renderTasks(list, agents) {
   document.getElementById("bugs").innerHTML = bugs.map(function (t) { return taskCard(t, opts); }).join("") || '<div class="empty">No bugs — nothing tagged "bug".</div>';
 }
 
+function fmtTokens(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(n % 1e3 ? 1 : 0) + "k";
+  return String(n);
+}
+
+function budgetChip(r) {
+  if (!r.token_quota) return "";
+  var used = r.used_tokens || 0;
+  var pct = Math.min(100, Math.round((used / r.token_quota) * 100));
+  var cls = used >= r.token_quota ? "quota over" : pct >= 80 ? "quota near" : "quota";
+  return '<span class="' + cls + '" title="self-reported tokens vs quota">' +
+    fmtTokens(used) + " / " + fmtTokens(r.token_quota) + " tokens (" + pct + "%)</span>";
+}
+
 function renderRoles(list) {
   document.getElementById("roles").innerHTML = list.map(function (r) {
     var tags = r.is_wildcard
       ? '<span class="tag">★ all tags</span>'
       : ((r.allowed_tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("")
          || '<span class="hint">no tags — can\\'t claim any task yet</span>');
-    return '<div class="card"><span class="name">' + esc(r.name) + '</span> ' + tags + '</div>';
+    return '<div class="card"><span class="name">' + esc(r.name) + '</span> ' + tags + budgetChip(r) + '</div>';
   }).join("") || '<div class="empty">No roles yet.</div>';
 }
 
