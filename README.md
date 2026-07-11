@@ -82,19 +82,51 @@ flowchart TB
 npx lanchu "fix the login"
 ```
 
-> **Note:** Early release (`0.1.0`). Requires Node >= 22.5. See
+> **Note:** Requires Node >= 22.5. See [`CHANGELOG.md`](./CHANGELOG.md) for what's new,
 > [`DEFINITION.md`](./DEFINITION.md) for the full picture and [`CLI.md`](./CLI.md) for the
 > command surface.
 
-## What the first version includes
+## What's included today
 
-- **Organizations and projects** — group your agents and their work.
-- **Registration and roles** — each agent knows who it is and what it can touch.
-- **Coordination with scope control** — nobody duplicates or steps on each other; actions outside
-  the role are rejected and recorded.
-- **Real-time panel** — you see what each agent does and what it's on.
-- **History (audit log)** — everything they did is recorded, so you can trust it.
-- **Shared, traceable documentation** — the knowledge is always up to date.
+**Coordination**
+
+- **Organizations, projects, roles and tasks** — a shared blackboard with scope control;
+  actions outside the role are rejected and recorded.
+- **Agent isolation** — `lanchu spawn` gives each agent its own terminal, git worktree and
+  branch, so parallel work can't collide. `lanchu tile` arranges the terminals into a mosaic.
+- **Agent-to-agent messaging with conflict warnings** — audited, never private; idle agents
+  with queued notices are woken automatically.
+- **SDLC pipeline (assist mode)** — the server owns the lanes (definition → build → review →
+  qa → done): attach a PR and the task routes to review; finish it and it routes to QA
+  verification. Agents can bounce underspecified tasks back to definition (`task_reject`),
+  with the reason audited.
+
+**Governance**
+
+- **Roles you can edit** — tag scopes, wildcard, a per-role token quota (claims warn at 80%,
+  block at 100%) and a preferred model tier; `lanchu spawn --model` overrides per spawn.
+- **Coordinator lease** — one coordinating agent per org, enforced; the supervisor grants or
+  revokes it with `lanchu coordinator`.
+- **Greenzone restarts** — `lanchu restart --greenzone` coordinates a maintenance window:
+  every agent confirms a safe point before the server goes down.
+- **Session security** — per-session Bearer tokens (never in window titles or `ps` args);
+  `lanchu rotate-tokens` invalidates every open session after an exposure.
+
+**Knowledge & memory**
+
+- **Shared, traceable documentation** — categorized docs with section and delta reads, read
+  tracking and usage analytics.
+- **Persistent memory** — three scopes (agent / project / org) stored in the org DB and
+  auto-distilled into each agent's context across sessions.
+
+**Observability**
+
+- **Real-time panel** — Overview home (who's working right now), Projects, Team, Work board,
+  Org life (a force-directed graph of the org built from the audit log), Bugs, Docs, Memory,
+  Tests, Activity, and Processes (server, agent terminals, live MCP transports).
+- **Full audit log** — every action, applied or rejected.
+- **Terminal comfort** — `lanchu statusline` shows the team's pulse inside Claude Code;
+  `lanchu completion install` wires Tab-completion for commands, flags and live board values.
 
 What comes next (recurring functions, skills, cloud organizations…) is in
 the [roadmap](./DEFINITION.md#10-roadmap-deliberately-outside-the-v0).

@@ -1,16 +1,21 @@
 # Lanchu — CLI and startup flow
 
-> Command surface for v0 and exactly what happens when you run `npx lanchu`.
-> Resolves **C2** (commands + org/project/role selection) and **C3** (how the agent's
-> client connects to the MCP server). Delivers pillar #1: *frictionless onboarding*.
+> Command surface and exactly what happens when you run `npx lanchu`.
+> Covers commands + org/project/role selection and how the agent's
+> client connects to the MCP server. Delivers pillar #1: *frictionless onboarding*.
 > Complements [`ARCHITECTURE.md`](./ARCHITECTURE.md) and [`SCHEMA.md`](./SCHEMA.md).
+> `lanchu help` prints the same surface from the CLI; `lanchu help <topic>` narrows
+> to one section (topics: start, orgs, agents, governance, automation, server,
+> maintenance, flags).
 
 ---
 
 ## 1. Invocation
 
 ```bash
-npx lanchu <objective> [options]     # main command (onboard/resume)
+npx lanchu                           # guided onboarding wizard (org, agent, role) + launch Claude
+npx lanchu work ["<objective>"]      # same wizard, optionally pre-filling the objective
+npx lanchu "<objective>" [options]   # non-interactive onboard (for scripting)
 npx lanchu <subcommand> [options]    # management
 ```
 
@@ -34,11 +39,11 @@ npx lanchu 'fix the login'
 | `--org <name>` | Forces the organization (otherwise resolved from the directory; see §4). |
 | `--project <name>` | Forces the project. |
 | `--role <name>` | Role of the **new** agent (otherwise chosen interactively). |
+| `--tags a,b` | Tags for a role created on the fly. |
 | `--as <name>` | Name of the new agent (otherwise derived from the objective: `fix-login`). |
 | `--reuse <agent>` | Reuses that agent without asking. |
 | `--new` | Forces creating a new one (skips the reuse prompt). |
-| `--client <claude\|cursor\|print>` | How to connect the agent (see §5). `print` = just prints the config. |
-| `--run "<cmd>"` | Additionally **launches** that agent command for you (convenience; opt-in). |
+| `--client <claude\|print>` | How to connect the agent (see §5). `print` = just prints the config. |
 
 **Example session:**
 ```text
@@ -120,7 +125,7 @@ Resolved from the **current directory**, git-style:
 The agent (Claude Code, Cursor, …) needs to know **which MCP server to talk to and with which
 token**. The CLI wires it up for you:
 
-- **Known clients** (`--client claude|cursor`): the CLI registers an MCP server
+- **Known clients** (`--client claude`): the CLI registers an MCP server
   *scoped* to this session. For Claude Code this is equivalent to:
   ```bash
   claude mcp add lanchu --transport http \
@@ -142,26 +147,74 @@ tasks live in `lanchu://me`, not in the prompt.
 
 ## 6. Management commands
 
+Grouped as in `lanchu help`.
+
+### Orgs & projects
+
 | Command | What it does |
 |---------|----------|
 | `lanchu init --org <name> [--project <name>] [--force]` | Binds this directory to an org/project (writes `.lanchu/config.json`). `--org` is required (no silent default); the project name defaults from the checkout (repo root / remote / folder) and drift warns; rebinding an already-bound directory needs `--force`. |
+| `lanchu orgs [rm <name>]` | Lists every org (with counts) / deletes one. |
+| `lanchu projects` | Lists this org's projects (each = a repo + local folder). |
+
+### Agents & tasks
+
+| Command | What it does |
+|---------|----------|
 | `lanchu agents` (alias `ls`) | Lists agents: status, role, task count, last activity. |
 | `lanchu agents --available` | Availability in both senses: agent **runtimes** installed on this machine (claude, codex, gemini… with version+path) and idle **teammates** in the org a coordinator can reuse instead of spawning duplicates. |
 | `lanchu tasks` | Lists tasks: status, owner, tags, workspace. Flags the **stale** ones (idle owner with no changes ≥ threshold). |
+| `lanchu spawn ["<objective>"] [--role r] [--model m] [--no-isolate] [--dry]` | Launches a **new agent in a new terminal**, in its own git worktree + branch (skip isolation with `--no-isolate`; preview with `--dry`). `--model` overrides the role's preferred tier for this spawn. |
+| `lanchu tile [--dry]` | Arranges the agent terminals into a mosaic. |
+| `lanchu retire <agent>` | **Safe retirement**: if it has open tasks, requires reassigning or releasing each one; then archives. |
 | `lanchu task release <id>` | **Supervisor override**: releases a task back to the pool even if it has an owner. Audited. Escape hatch for *stale* tasks without retiring the agent. |
 | `lanchu task reassign <id> <agent>` | **Supervisor override**: reassigns a task to another agent. Audited. |
-| `lanchu retire <agent>` | **Safe retirement**: if it has open tasks, requires reassigning or releasing each one; then archives. |
+
+### Governance
+
+| Command | What it does |
+|---------|----------|
 | `lanchu roles` | Lists roles and their tags. |
 | `lanchu roles add <name> --tags ui,css` \| `--wildcard` | Creates a role. |
 | `lanchu roles edit <name> --add-tags a,b --rm-tags c` \| `--tags x,y` \| `--wildcard`/`--no-wildcard` | Edits an existing role's scope: adds/removes tags, `--tags` replaces the whole set, toggles wildcard. Audited as `role.updated`. |
 | `lanchu roles edit <name> --model <opus\|sonnet\|haiku>` \| `--no-model` | Sets/clears the role's **preferred model tier** — agents spawned with the role launch on it by default (`lanchu spawn --model` overrides per spawn). Audited in `role.updated`. |
 | `lanchu roles edit <name> --quota <tokens>` \| `--no-quota` | Sets/clears the role's **self-reported token budget**: agents report tokens on `task_update`; the panel shows consumption vs quota, claims warn at 80% and are blocked at 100% (audited as `quota.exceeded`). |
+| `lanchu rules [set "<text>"]` | Views / sets the org's rules — the guidelines every agent receives. |
+| `lanchu coordinator [set <agent> \| clear]` | Shows the org's **coordinator lease** — one coordinating agent per org, enforced — or grants/revokes it (supervisor). |
 | `lanchu rotate-tokens` | **Security**: ends every open session in the org so their tokens stop authenticating. Run after a token exposure; agents get fresh tokens when they re-register (spawn / panel reveal). Audited as `session.rotated`. |
-| `lanchu stats` | **Local** view for you (agents, tasks, orgs). Never leaves your machine. |
-| `lanchu panel` (alias `open`) | Opens the web panel in the browser. |
+| `lanchu skills [add <name> --tags a,b --instructions "…"]` | Lists skills / creates one — per-task-type instructions agents receive when claiming matching work. |
+| `lanchu skills load <url\|file> [--name n] [--tags a,b]` | Loads a reusable `SKILL.md` from a URL or file. |
+| `lanchu skills reload <id>` \| `rm <id>` | Re-fetches a loaded skill / removes one. |
+| `lanchu stats` (alias `status`) | **Local** view for you (agents, tasks, orgs). Never leaves your machine. |
+
+### Automation
+
+| Command | What it does |
+|---------|----------|
+| `lanchu webhooks [add <url> --events a,b \| rm <id>]` | Outbound webhooks (HMAC-signed) on org events. |
+| `lanchu recurring [add "<title>" --every <min> \| rm <id>]` | Scheduled task creation. |
+
+### Server & panel
+
+| Command | What it does |
+|---------|----------|
 | `lanchu serve` | Runs the server in the foreground (normally it auto-starts). |
 | `lanchu stop` | Stops the background server. |
+| `lanchu restart [--greenzone] [--timeout <s>]` | Restarts the server. `--greenzone` coordinates it: every connected agent confirms a safe point before the server goes down. |
+| `lanchu completion [bash\|zsh\|fish]` \| `install` | Shell Tab-completion for commands, flags and live board values (agent/task/org names); `install` wires it into your shell rc. |
+| `lanchu panel` (alias `open`) | Opens the web panel in the browser. |
+| `lanchu statusline` | Status line for Claude Code (setup shown when run). |
 | `lanchu doctor` | Checks the environment: Node version, free port, config, DB — plus the agent-runtime inventory found on PATH. |
+
+### Maintenance
+
+| Command | What it does |
+|---------|----------|
+| `lanchu upgrade` | Checks npm for a newer version. |
+| `lanchu notify on\|off` | Opt-in update notifications (off by default; only reads the public npm registry). |
+| `lanchu install-commands [--uninstall]` | Adds the `/lanchu` slash command to Claude Code. |
+| `lanchu uninstall [--purge]` | Stops the server; `--purge` deletes local data. |
+| `lanchu help [<topic>]` \| `version` | Shows help (optionally one topic) / prints the version. |
 
 ---
 
