@@ -204,6 +204,24 @@ const TEMPLATE = `<!doctype html>
   /* ── SDLC board ── */
   .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(266px, 1fr); gap: 16px; overflow-x: auto; padding-bottom: 8px; align-items: start; }
   .lane { min-width: 266px; }
+  /* v3 uniform grid: fixed-size cards, full content as a hover/focus overlay */
+  .card.task { position: relative; height: 122px; overflow: hidden; }
+  .card.task .tclip { overflow: hidden; max-height: 100%; }
+  .card.task .tfull { display: none; }
+  .card.task:hover, .card.task:focus-within, .card.task.open { overflow: visible; z-index: 20; }
+  .card.task:hover .tfull, .card.task:focus-within .tfull, .card.task.open .tfull {
+    display: block; position: absolute; top: -1px; left: -1px; right: -1px; z-index: 21;
+    min-height: 122px; background: var(--surface); border: 1px solid var(--accent);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 13px 15px; }
+  .card.task .name { display: block; overflow: hidden; }
+  .card.task .tclip .name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .card.task .wsp { font-family: var(--mono); font-size: 11px; word-break: break-all; }
+  .card.task .tclip .wsp { white-space: nowrap; }
+  /* released-by-version groups */
+  .relgroup { margin-bottom: 8px; }
+  .rel-h { display: flex; width: 100%; justify-content: flex-start; gap: 6px; align-items: center;
+           font-weight: 600; font-size: 12.5px; }
+  .rel-h .c { color: var(--faint); font-weight: 500; }
   .lane-h { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); font-weight: 600;
             margin: 0 0 10px; padding: 0 2px; display: flex; justify-content: space-between; align-items: center; }
   .lane-h .c { color: var(--muted); background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
@@ -447,7 +465,7 @@ const TEMPLATE = `<!doctype html>
 
       <section class="view" id="v-work">
         <h1 class="vhead">Work</h1>
-        <p class="vsub">Tasks across the SDLC — definition, build, review, QA, done — with owner, PR and governance signals. Click a card to read its full title.</p>
+        <p class="vsub">Tasks across the SDLC — definition, build, review, QA, release candidate, released — with owner, PR and governance signals. Hover a card (or focus it) to see everything; the Released lane groups work by the version that shipped it.</p>
         <div class="gwin" id="btabs">
           <button data-btab="open" class="on">Open <span class="c" id="bt-open">0</span></button>
           <button data-btab="shipped">Shipped <span class="c" id="bt-shipped">0</span></button>
@@ -743,6 +761,9 @@ document.addEventListener("click", function (e) {
     else setMemFilter("source", mf.getAttribute("data-msource"), mf);
     return;
   }
+  // Released-version groups fold/unfold; the choice survives re-renders.
+  var rh = e.target.closest ? e.target.closest("button.rel-h[data-relver]") : null;
+  if (rh) { var rv = rh.getAttribute("data-relver"); openRel[rv] = !openRel[rv]; renderBoard(); return; }
   // Clamped activity rows expand/collapse on click.
   var evEl = e.target.closest ? e.target.closest(".ev[data-ev]") : null;
   if (evEl) { var k = evEl.getAttribute("data-ev"); openEvs[k] = !openEvs[k]; renderAuditRows(); return; }
@@ -991,6 +1012,7 @@ function taskCard(t, opts) {
   // Definition history: the audit log keeps every task.redefined with the old
   // title — the pill jumps to Activity where the trail lives.
   if (t.redefined_count) badge += ' <a class="pill p-claimed id-link" data-kind="activity" data-ref="' + t.id + '" title="the definition was refined in place ' + t.redefined_count + ' time' + (t.redefined_count > 1 ? 's' : '') + ' — the Activity log keeps each previous title">definition ×' + t.redefined_count + '</a>';
+  if (t.release_version) badge += ' <span class="pill p-done" title="the release that shipped this work">' + esc(t.release_version) + '</span>';
   var owned = !!t.owner_agent_id;
   var pr = t.pr_url ? ' · <a class="pr-link" href="' + esc(t.pr_url) + '" target="_blank" rel="noopener">PR ↗</a>' : "";
   var rej = t.last_rejection
@@ -1004,21 +1026,31 @@ function taskCard(t, opts) {
     ? '<div class="actions"><button data-act="release" data-id="' + t.id + '">Release</button>' +
       '<select data-reassign="' + t.id + '" title="Picking an agent reassigns this task immediately">' + opts + '</select></div>'
     : "";
-  return '<div class="card task' + (openTasks[t.id] ? " open" : "") + '" data-task-card="' + t.id + '" title="Click to ' + (openTasks[t.id] ? "collapse" : "expand") + '">' +
-    '<div class="top"><span class="name">' + esc(t.title) + '</span>' +
-    '<span><span class="pill p-' + esc(t.status) + '">' + esc(t.status.replace("_", " ")) + '</span> ' + badge + '</span></div>' +
-    '<div>' + (t.tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("") + '</div>' +
-    '<div class="meta">' + (owned ? '<span class="k">owner</span> ' + esc(t.owner_name || t.owner_agent_id) : "unassigned") +
-    (t.workspace ? ' · <span class="k">ws</span> ' + esc(t.workspace) : "") + pr + '</div>' + rej + actions + '</div>';
+  var chips = '<span><span class="pill p-' + esc(t.status) + '">' + esc(t.status.replace("_", " ")) + '</span> ' + badge + '</span>';
+  var tags = '<div>' + (t.tags || []).map(function (x) { return '<span class="tag">' + esc(x) + '</span>'; }).join("") + '</div>';
+  var who = '<div class="meta">' + (owned ? '<span class="k">owner</span> ' + esc(t.owner_name || t.owner_agent_id) : "unassigned") +
+    (t.workspace ? ' · <span class="k">ws</span> <span class="wsp">' + esc(t.workspace) + '</span>' : "") + pr + '</div>';
+  // Uniform grid: every card is the same fixed size with the content clipped;
+  // the FULL card (untruncated title, ws path, rejection history, actions)
+  // reveals as an overlay on hover or keyboard focus, and click pins it open.
+  return '<div class="card task' + (openTasks[t.id] ? " open" : "") + '" data-task-card="' + t.id + '" tabindex="0" title="Hover or focus reveals everything; click pins it open">' +
+    '<div class="tclip">' +
+      '<div class="top"><span class="name">' + esc(t.title) + '</span>' + chips + '</div>' + tags + who +
+    '</div>' +
+    '<div class="tfull">' +
+      '<div class="top"><span class="name">' + esc(t.title) + '</span>' + chips + '</div>' + tags + who + rej + actions +
+    '</div></div>';
 }
 
-var STAGES = [["backlog", "Backlog"], ["definition", "Definition"], ["build", "Build"], ["review", "Review"], ["qa", "QA"], ["done", "Done"]];
-// A done task is done, whatever lane it was last parked in — checking status
-// first is what keeps the board's Done lane and the overview "done" tile from
-// disagreeing. Otherwise an explicit stage wins, and failing that we infer a
-// lane from the signals agents actually produce (PR + status), so cards move
-// Backlog → … → Done as work progresses instead of jumping straight to Done.
+var STAGES = [["backlog", "Backlog"], ["definition", "Definition"], ["build", "Build"], ["review", "Review"], ["qa", "QA"], ["rc", "Release Candidate"], ["released", "Released"], ["done", "Done"]];
+// Which lanes count as shipped (the release pipeline's tail + legacy done).
+var SHIPPED_STAGES = { rc: 1, released: 1, done: 1 };
+// The release pipeline's stages win outright — rc/released are machine-stamped
+// and orthogonal to status=done. Then: a done task is done whatever lane it
+// was parked in; an explicit stage wins; failing that we infer a lane from
+// the signals agents actually produce (PR + status).
 function stageOf(t) {
+  if (t.stage === "rc" || t.stage === "released") return t.stage;
   if (t.status === "done") return "done";
   if (t.stage && t.stage !== "backlog") return t.stage;
   if (t.pr_url) return "review";
@@ -1034,14 +1066,43 @@ function doneStamp(t) { return t.done_at || t.updated_at || t.created_at || ""; 
 // of hiding at the end of the horizontal scroll (task-mrg88fqr1).
 var boardTab = "open";
 var showAllDone = false;
+var openRel = {}; // which released-version groups are expanded
 var lastBoardList = [], lastBoardOpts = "", lastArchivedList = [];
+// The Released lane groups cards by the version that shipped them — the board
+// answers "what exactly went out in v0.5.12" without leaving the page.
+function releasedLane(items, opts) {
+  var byVer = {}, order = [];
+  items.forEach(function (t) {
+    var v = t.release_version || "unversioned";
+    if (!byVer[v]) { byVer[v] = []; order.push(v); }
+    byVer[v].push(t);
+  });
+  // Newest release first: groups sort by their freshest card.
+  order.sort(function (a, b) {
+    var sa = byVer[a].reduce(function (m, t) { return doneStamp(t) > m ? doneStamp(t) : m; }, "");
+    var sb = byVer[b].reduce(function (m, t) { return doneStamp(t) > m ? doneStamp(t) : m; }, "");
+    return sa < sb ? 1 : -1;
+  });
+  var body = order.map(function (v) {
+    var open = !!openRel[v];
+    return '<div class="relgroup">' +
+      '<button class="rel-h" data-relver="' + esc(v) + '">' + (open ? "▾" : "▸") + ' ' + esc(v) + ' <span class="c">' + byVer[v].length + '</span></button>' +
+      (open ? byVer[v].map(function (t) { return taskCard(t, opts); }).join("") : "") +
+      '</div>';
+  }).join("");
+  return '<div class="lane"><div class="lane-h">Released <span class="c">' + items.length + '</span></div>' +
+    (body || '<div class="empty">Nothing released yet — RC items land here grouped by version once a tag ships them.</div>') + '</div>';
+}
 function renderBoard() {
   var list = lastBoardList, opts = lastBoardOpts;
   var byStage = {}; STAGES.forEach(function (s) { byStage[s[0]] = []; });
   list.forEach(function (t) { byStage[stageOf(t)].push(t); });
-  byStage.done.sort(function (a, b) { return doneStamp(a) < doneStamp(b) ? 1 : -1; }); // newest first
-  document.getElementById("bt-open").textContent = list.length - byStage.done.length;
-  document.getElementById("bt-shipped").textContent = byStage.done.length;
+  ["rc", "released", "done"].forEach(function (k) {
+    byStage[k].sort(function (a, b) { return doneStamp(a) < doneStamp(b) ? 1 : -1; }); // newest first
+  });
+  var shippedCount = byStage.released.length + byStage.done.length;
+  document.getElementById("bt-open").textContent = list.length - shippedCount;
+  document.getElementById("bt-shipped").textContent = shippedCount;
   document.getElementById("bt-all").textContent = list.length;
   document.getElementById("bt-archived").textContent = lastArchivedList.length;
   // The archive is its own flat lane: terminal soft-deletes, never in the SDLC flow.
@@ -1054,12 +1115,14 @@ function renderBoard() {
     updateBoardMore();
     return;
   }
-  var stages = boardTab === "open" ? STAGES.filter(function (s) { return s[0] !== "done"; })
-    : boardTab === "shipped" ? STAGES.filter(function (s) { return s[0] === "done"; })
+  // RC is open work for the org (a release is still owed); released + done are shipped.
+  var stages = boardTab === "open" ? STAGES.filter(function (s) { return !(s[0] in SHIPPED_STAGES) || s[0] === "rc"; })
+    : boardTab === "shipped" ? STAGES.filter(function (s) { return s[0] === "released" || s[0] === "done"; })
     : STAGES;
   document.getElementById("tasks").innerHTML = list.length
     ? stages.map(function (s) {
         var items = byStage[s[0]];
+        if (s[0] === "released") return releasedLane(items, opts);
         // An empty lane never costs board width — slim header only (unless it's
         // the tab's sole lane, where the empty state should say something).
         if (!items.length && stages.length > 1)
@@ -1553,7 +1616,7 @@ function renderOverview(board, audit) {
   // QA verification tasks are the gate's own instrument — the shipped feed
   // shows the work itself, not the checks that closed it.
   var shipped = board.tasks.filter(function (t) {
-    return stageOf(t) === "done" && !(t.parent_task_id && t.title.indexOf("QA: verify") === 0);
+    return stageOf(t) in SHIPPED_STAGES && !(t.parent_task_id && t.title.indexOf("QA: verify") === 0);
   }).sort(function (a, b) { return doneStamp(a) < doneStamp(b) ? 1 : -1; }).slice(0, 8);
   document.getElementById("ov-shipped").innerHTML = shipped.map(function (t) {
     var m = (t.pr_url || "").match(/\\/pull\\/(\\d+)/);
@@ -1713,7 +1776,7 @@ function renderStats(board, audit) {
   var active = board.agents.filter(function (a) { return a.presence === "working"; }).length;
   var viol = audit.filter(function (e) { return e.outcome === "rejected"; }).length;
   // Count "done" the same way the board's Done lane does, so tile and lane agree.
-  var done = board.tasks.filter(function (t) { return stageOf(t) === "done"; }).length;
+  var done = board.tasks.filter(function (t) { return stageOf(t) in SHIPPED_STAGES; }).length;
   var prs = board.tasks.filter(function (t) { return t.pr_url; }).length;
   // Release pressure: merged-but-unreleased commits across the org's projects
   // (computed server-side from each checkout's last tag; red once any project

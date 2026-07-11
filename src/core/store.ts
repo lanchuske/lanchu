@@ -1257,11 +1257,12 @@ function loadTask(row: Record<string, unknown>): Task {
     archived_at: (row.archived_at as string) ?? null,
     archived_reason: (row.archived_reason as string) ?? null,
     superseded_by_task_id: (row.superseded_by_task_id as string) ?? null,
+    release_version: (row.release_version as string) ?? null,
   };
 }
 
 const TASK_COLS =
-  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce, archived_at, archived_reason, superseded_by_task_id";
+  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce, archived_at, archived_reason, superseded_by_task_id, release_version";
 
 export function getTask(taskId: string): Task | null {
   const row = db().prepare(`SELECT ${TASK_COLS} FROM task WHERE id = ?`).get(taskId) as
@@ -1677,7 +1678,7 @@ function unblockDependents(projectId: string): void {
 // A2A-notices the next stage's specialist. Rollout via LANCHU_SDLC
 // (off | assist | strict, default assist — route + notice, never block).
 
-const STAGE_ORDER: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "done"];
+const STAGE_ORDER: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "rc", "released", "done"];
 function stageRank(s: TaskStage | null): number {
   const i = STAGE_ORDER.indexOf(s ?? "backlog");
   return i < 0 ? 0 : i;
@@ -1931,7 +1932,7 @@ function createVerificationTask(orig: Task, orgId: string): Task {
  */
 function resolveVerification(verification: Task, qaAgentId: string, note?: string): void {
   const parent = verification.parent_task_id ? getTask(verification.parent_task_id) : null;
-  if (!parent || parent.stage === "done") return;
+  if (!parent || parent.stage === "done" || parent.stage === "rc" || parent.stage === "released") return;
   const qaAgent = getAgent(qaAgentId);
   if (!qaAgent) return;
   const orgId = qaAgent.org_id;
@@ -1987,9 +1988,12 @@ function flipVerifiedOriginal(
   opts?: { notifyOwner?: boolean },
 ): void {
   const now = nowIso();
+  // QA pass parks the work in Release Candidate — the accumulating, visible
+  // form of release pressure. The release sweep stamps rc → released when a
+  // tag covering it appears on origin/main.
   db()
     .prepare(
-      "UPDATE task SET status = 'done', stage = 'done', done_at = COALESCE(done_at, ?), updated_at = ? WHERE id = ?",
+      "UPDATE task SET status = 'done', stage = 'rc', done_at = COALESCE(done_at, ?), updated_at = ? WHERE id = ?",
     )
     .run(now, now, parent.id);
   recordEvent({
@@ -2072,7 +2076,8 @@ export function reconcileSdlcStages(): { toDone: string[]; toQa: string[] } {
     const coveredBy = verifiedBy(task);
     const now = nowIso();
     if (coveredBy) {
-      db().prepare("UPDATE task SET stage = 'done', updated_at = ? WHERE id = ?").run(now, task.id);
+      // Verified work joins the release pipeline; the sweep stamps it further.
+      db().prepare("UPDATE task SET stage = 'rc', updated_at = ? WHERE id = ?").run(now, task.id);
       toDone.push(task.id);
     } else {
       db().prepare("UPDATE task SET stage = 'qa', updated_at = ? WHERE id = ?").run(now, task.id);
@@ -2088,7 +2093,7 @@ export function reconcileSdlcStages(): { toDone: string[]; toQa: string[] } {
       subject_id: task.id,
       data: {
         from_stage: "review",
-        to_stage: coveredBy ? "done" : "qa",
+        to_stage: coveredBy ? "rc" : "qa",
         ...(coveredBy ? { via: coveredBy } : { reason: "done without verification — verification task created" }),
       },
     });
@@ -4582,6 +4587,97 @@ function gitReleaseInfo(project: ProjectRow): ReleaseInfo | null {
   return { lastTag, unreleased: dates.length, oldestIso: dates[dates.length - 1] ?? null };
 }
 
+/** A tag on the project's remote with its creation time. */
+export type ReleaseTag = { tag: string; dateIso: string };
+
+function gitTagList(project: ProjectRow): ReleaseTag[] | null {
+  const out = projectGit(project, [
+    "for-each-ref", "refs/tags", "--sort=creatordate",
+    "--format=%(refname:short)|%(creatordate:iso8601-strict)",
+  ]);
+  if (out === null) return null;
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const i = line.indexOf("|");
+      return { tag: line.slice(0, i), dateIso: line.slice(i + 1) };
+    })
+    .filter((t) => t.tag && t.dateIso);
+}
+
+/**
+ * Stamp the release pipeline (Work board v3): a verified-done task whose work
+ * reached main before an existing tag belongs to that release — it gets
+ * release_version = the earliest covering tag and moves to `released`. Ship
+ * time is the recorded pr.merged event when the landing queue saw the merge,
+ * else done_at. Legacy stage='done' rows that turn out UNRELEASED normalize
+ * to `rc` instead, so merged-but-unshipped work reads as visible pressure.
+ * One idempotent rule is both the live stamping hook and the historical
+ * backfill; verification instruments are never part of a release.
+ */
+export function stampReleases(projectId: string, tags: ReleaseTag[]): { released: string[]; toRc: string[] } {
+  const released: string[] = [];
+  const toRc: string[] = [];
+  const rows = db()
+    .prepare(
+      `SELECT ${TASK_COLS} FROM task WHERE project_id = ? AND status = 'done' AND archived_at IS NULL
+       AND stage IN ('rc','done') AND release_version IS NULL`,
+    )
+    .all(projectId) as Record<string, unknown>[];
+  if (!rows.length) return { released, toRc };
+  const sorted = tags
+    .map((t) => ({ ...t, at: Date.parse(t.dateIso) }))
+    .filter((t) => Number.isFinite(t.at))
+    .sort((a, b) => a.at - b.at);
+  const orgId = orgIdForProject(projectId);
+  const mergedAt = new Map<string, string>();
+  const evRows = db()
+    .prepare(
+      `SELECT subject_id, MIN(created_at) AS at FROM event
+       WHERE type = 'pr.merged' AND project_id = ? GROUP BY subject_id`,
+    )
+    .all(projectId) as { subject_id: string; at: string }[];
+  for (const r of evRows) mergedAt.set(r.subject_id, r.at);
+  const now = nowIso();
+  for (const row of rows) {
+    const task = loadTask(row);
+    if (isVerificationTask(task) || isBatchVerificationTask(task)) continue;
+    const shippedIso = mergedAt.get(task.id) ?? task.done_at ?? task.updated_at ?? task.created_at;
+    const shippedAt = shippedIso ? Date.parse(shippedIso) : NaN;
+    if (!Number.isFinite(shippedAt)) continue;
+    const cover = sorted.find((t) => t.at >= shippedAt);
+    if (cover) {
+      db()
+        .prepare("UPDATE task SET stage = 'released', release_version = ?, updated_at = ? WHERE id = ?")
+        .run(cover.tag, now, task.id);
+      released.push(task.id);
+      recordEvent({
+        org_id: orgId,
+        project_id: projectId,
+        type: "task.stage_changed",
+        actor_agent_id: null,
+        subject_kind: "task",
+        subject_id: task.id,
+        data: { from_stage: task.stage, to_stage: "released", release_version: cover.tag },
+      });
+    } else if (task.stage === "done") {
+      db().prepare("UPDATE task SET stage = 'rc', updated_at = ? WHERE id = ?").run(now, task.id);
+      toRc.push(task.id);
+      recordEvent({
+        org_id: orgId,
+        project_id: projectId,
+        type: "task.stage_reconciled",
+        actor_agent_id: null,
+        subject_kind: "task",
+        subject_id: task.id,
+        data: { from_stage: "done", to_stage: "rc", reason: "merged but unreleased — awaiting the next tag" },
+      });
+    }
+  }
+  return { released, toRc };
+}
+
 function toPressure(project: ProjectRow, info: ReleaseInfo): ReleasePressure {
   const oldestHours =
     info.oldestIso === null ? 0 : Math.max(0, (Date.now() - new Date(info.oldestIso).getTime()) / 3_600_000);
@@ -4615,8 +4711,11 @@ export function releasePressureOf(projectId: string): ReleasePressure | null {
 export function runReleaseSweep(opts?: {
   /** Test seam: release facts per project (default: git). */
   releaseInfo?: (project: ProjectRow) => ReleaseInfo | null;
+  /** Test seam: the project's tag list (default: git). */
+  tagList?: (project: ProjectRow) => ReleaseTag[] | null;
 }): { created: string[] } {
   const infoFor = opts?.releaseInfo ?? gitReleaseInfo;
+  const tagsFor = opts?.tagList ?? gitTagList;
   const created: string[] = [];
   const orgs = db().prepare("SELECT id FROM org").all() as { id: string }[];
   for (const org of orgs) {
@@ -4628,6 +4727,10 @@ export function runReleaseSweep(opts?: {
       }
       const pressure = toPressure(project, info);
       releaseCache.set(project.id, pressure);
+      // Release stamping rides the same tick: when a new tag covers rc work,
+      // it flips to released with its version; stale 'done' rows normalize.
+      const tags = tagsFor(project);
+      if (tags && tags.length) stampReleases(project.id, tags);
       if (!pressure.threshold_hit || !pressure.last_tag) continue;
       const marker = `since ${pressure.last_tag}`;
       const already = db()
