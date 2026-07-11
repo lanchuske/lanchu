@@ -567,7 +567,8 @@ export function createServer(): http.Server {
         const limit = Number.parseInt(url.searchParams.get("limit") ?? "60", 10) || 60;
         const org = store.getOrgByName(orgName);
         if (!org) return sendJson(res, 200, []);
-        return sendJson(res, 200, store.listAuditEvents(org.id, limit));
+        // ?reads=1 opts the high-volume doc.read events back into the feed.
+        return sendJson(res, 200, store.listAuditEvents(org.id, limit, { includeReads: url.searchParams.get("reads") === "1" }));
       }
 
       if (url.pathname === "/api/docs" && req.method === "GET") {
@@ -580,9 +581,14 @@ export function createServer(): http.Server {
           title: d.title,
           category: d.category,
           content: d.content,
+          created_at: d.created_at,
           updated_at: d.updated_at,
           updated_by: d.updated_by_agent_id ? (store.getAgent(d.updated_by_agent_id)?.name ?? null) : null,
           chars: d.content.length,
+          read_count: d.read_count,
+          last_read_at: d.last_read_at,
+          last_read_by: d.last_read_by_agent_id ? (store.getAgent(d.last_read_by_agent_id)?.name ?? null) : null,
+          readers: store.docReaders(d.id),
         }));
         return sendJson(res, 200, docs);
       }

@@ -42,3 +42,19 @@ test("agent cards show the who-is-where fields (worktree, branch, active task)",
   assert.ok(html.includes("worktree"), "expected the worktree on agent cards");
   assert.ok(html.includes("branch"), "expected the branch on agent cards");
 });
+
+test("panel client script is syntactically valid JavaScript", () => {
+  // Regression for the #27 unescaped-apostrophe bug: one bad quote in any
+  // embedded string breaks the ENTIRE panel script in the browser. Extract the
+  // client script and parse it — new Function throws on a syntax error.
+  const m = html.match(/<script>([\s\S]*)<\/script>/);
+  assert.ok(m, "expected an inline client script");
+  assert.doesNotThrow(() => new Function(m[1]));
+});
+
+test("docs cards carry knowledge analytics (reads, readers, freshness flags)", () => {
+  assert.ok(html.includes("read_count"), "expected read-count rendering");
+  assert.ok(html.includes("never read"), "expected the never-read prune flag");
+  assert.ok(html.includes("stale but hot"), "expected the refresh-candidate flag");
+  assert.ok(html.includes("consulted by"), "expected the who-consulted-what list");
+});
