@@ -36,7 +36,9 @@ export function bootstrapCommand(cwd: string, token: string, prompt: string, age
   });
   // Export the agent name so `lanchu statusline` can show which teammate owns this terminal.
   const ident = agentName ? `export LANCHU_AGENT=${sq(agentName)}; ` : "";
-  return `cd ${sq(cwd)}; ${ident}claude --strict-mcp-config --mcp-config ${sq(mcpConfig)} ${sq(prompt)}`;
+  // `--mcp-config` is variadic, so the prompt MUST be separated by `--` — otherwise
+  // Claude slurps it as another config path ("MCP config file not found: <prompt>").
+  return `cd ${sq(cwd)}; ${ident}claude --strict-mcp-config --mcp-config ${sq(mcpConfig)} -- ${sq(prompt)}`;
 }
 
 const asAppleStr = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
