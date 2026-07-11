@@ -1,6 +1,16 @@
 import { spawnSync } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
-import { activeWindowMs, broadcastTtlMs, nudgeAfterMs, nudgeBudget, nudgeCooldownMs, sdlcMode, staleHours } from "../config.js";
+import {
+  activeWindowMs,
+  broadcastTtlMs,
+  nudgeAfterMs,
+  nudgeBudget,
+  nudgeCooldownMs,
+  releaseMaxAgeHours,
+  releaseMaxChanges,
+  sdlcMode,
+  staleHours,
+} from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
 import { gitInfo } from "./git.js";
@@ -2815,6 +2825,7 @@ export interface BoardSnapshot {
   tasks: BoardTask[];
   projects: ProjectRow[];
   landing: LandingSlot[];
+  release: ReleasePressure[];
 }
 
 export interface AuditEvent {
@@ -3456,6 +3467,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
     tasks,
     projects: listProjects(orgId),
     landing: projects.flatMap((p) => landingQueue(p.id)),
+    release: projects.flatMap((p) => releasePressureOf(p.id) ?? []),
   };
 }
 
@@ -3524,25 +3536,31 @@ export function landingQueue(projectId: string): LandingSlot[] {
   }));
 }
 
-/** Recent origin/main squash-merge subjects for a project (throttled fetch). */
-const lastFetchAt = new Map<string, number>();
-function originMainSubjects(project: ProjectRow): string[] | null {
+/** git in a project's checkout; null on any failure (missing repo, timeout). */
+function projectGit(project: ProjectRow, args: string[], timeout = 4000): string | null {
   const cwd = project.local_path;
   if (!cwd) return null;
-  const run = (args: string[], timeout: number): string | null => {
-    try {
-      const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout });
-      return r.status === 0 ? r.stdout : null;
-    } catch {
-      return null;
-    }
-  };
-  const last = lastFetchAt.get(project.id) ?? 0;
-  if (Date.now() - last >= 60_000) {
-    lastFetchAt.set(project.id, Date.now());
-    run(["fetch", "origin", "main", "--quiet"], 8000); // offline is fine — read what we have
+  try {
+    const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout });
+    return r.status === 0 ? r.stdout : null;
+  } catch {
+    return null;
   }
-  const out = run(["log", "origin/main", "-n", "300", "--format=%s"], 4000);
+}
+
+/** At most one origin fetch per project per minute — shared by the sweeps. */
+const lastFetchAt = new Map<string, number>();
+function throttledFetch(project: ProjectRow): void {
+  const last = lastFetchAt.get(project.id) ?? 0;
+  if (Date.now() - last < 60_000) return;
+  lastFetchAt.set(project.id, Date.now());
+  projectGit(project, ["fetch", "origin", "main", "--tags", "--quiet"], 8000); // offline is fine — read what we have
+}
+
+/** Recent origin/main squash-merge subjects for a project (throttled fetch). */
+function originMainSubjects(project: ProjectRow): string[] | null {
+  throttledFetch(project);
+  const out = projectGit(project, ["log", "origin/main", "-n", "300", "--format=%s"]);
   return out === null ? null : out.split("\n");
 }
 
@@ -3620,6 +3638,116 @@ function noticeLandingTurn(orgId: string, projectId: string): void {
       ref: next.task_id,
     });
   }
+}
+
+// ───────────────────────── release train (pressure + checklist) ─────────────────────────
+// Design (task-mrg01wof8): merged-but-unreleased work is invisible debt —
+// v0.5.10 shipped, then PRs kept landing with no release plan while npm users
+// silently fell behind. The server measures the debt (commits on origin/main
+// since the last tag), shows it on the board, and when it crosses a threshold
+// (default 5 changes or 48h) queues ONE release checklist task per tag —
+// it NEVER publishes anything itself; a human or an explicitly authorized
+// agent runs the release.
+
+export interface ReleasePressure {
+  project_id: string;
+  project_name: string;
+  /** Latest tag reachable from origin/main (the last release), or null. */
+  last_tag: string | null;
+  /** Commits on origin/main since that tag. */
+  unreleased: number;
+  /** Age in hours of the oldest unreleased commit (0 when none). */
+  oldest_hours: number;
+  threshold_hit: boolean;
+}
+
+/** Raw release facts for a project; the test seam mirrors landing's logSubjects. */
+export type ReleaseInfo = { lastTag: string | null; unreleased: number; oldestIso: string | null };
+
+function gitReleaseInfo(project: ProjectRow): ReleaseInfo | null {
+  throttledFetch(project);
+  const tagOut = projectGit(project, ["describe", "--tags", "--abbrev=0", "origin/main"]);
+  const lastTag = tagOut?.trim() || null;
+  if (!lastTag) return null; // untagged repo — nothing to measure a release against
+  const log = projectGit(project, ["log", `${lastTag}..origin/main`, "--format=%cI"]);
+  if (log === null) return null;
+  const dates = log.split("\n").filter(Boolean);
+  return { lastTag, unreleased: dates.length, oldestIso: dates[dates.length - 1] ?? null };
+}
+
+function toPressure(project: ProjectRow, info: ReleaseInfo): ReleasePressure {
+  const oldestHours =
+    info.oldestIso === null ? 0 : Math.max(0, (Date.now() - new Date(info.oldestIso).getTime()) / 3_600_000);
+  return {
+    project_id: project.id,
+    project_name: project.name,
+    last_tag: info.lastTag,
+    unreleased: info.unreleased,
+    oldest_hours: Math.round(oldestHours * 10) / 10,
+    threshold_hit:
+      info.unreleased >= releaseMaxChanges() ||
+      (info.unreleased > 0 && oldestHours >= releaseMaxAgeHours()),
+  };
+}
+
+// The board must never shell out to git on a request: the sweep (30s tick)
+// refreshes this cache and boardSnapshot just reads it.
+const releaseCache = new Map<string, ReleasePressure>();
+
+/** Cached release pressure for a project (null until the first sweep). */
+export function releasePressureOf(projectId: string): ReleasePressure | null {
+  return releaseCache.get(projectId) ?? null;
+}
+
+/**
+ * The release sweep (server tick): refresh each project's pressure and, when
+ * the threshold is crossed, queue ONE release checklist task per tag-episode
+ * (the last tag is the episode marker — a new tag means the debt was shipped
+ * and the counter restarts). Publishing stays human/authorized-only.
+ */
+export function runReleaseSweep(opts?: {
+  /** Test seam: release facts per project (default: git). */
+  releaseInfo?: (project: ProjectRow) => ReleaseInfo | null;
+}): { created: string[] } {
+  const infoFor = opts?.releaseInfo ?? gitReleaseInfo;
+  const created: string[] = [];
+  const orgs = db().prepare("SELECT id FROM org").all() as { id: string }[];
+  for (const org of orgs) {
+    for (const project of listProjects(org.id)) {
+      const info = infoFor(project);
+      if (!info) {
+        releaseCache.delete(project.id);
+        continue;
+      }
+      const pressure = toPressure(project, info);
+      releaseCache.set(project.id, pressure);
+      if (!pressure.threshold_hit || !pressure.last_tag) continue;
+      const marker = `since ${pressure.last_tag}`;
+      const already = db()
+        .prepare("SELECT 1 FROM task WHERE project_id = ? AND title LIKE ? LIMIT 1")
+        .get(project.id, `Release train:%${marker}%`);
+      if (already) continue;
+      const task = createTaskSystem({
+        orgId: org.id,
+        projectId: project.id,
+        title:
+          `Release train: ship what's merged ${marker} — ${pressure.unreleased} unreleased change(s), ` +
+          `oldest ${Math.round(pressure.oldest_hours)}h. Checklist: rebase/verify main green, bump patch version, ` +
+          `update changelog, tag, publish to npm. NEVER auto-published — a human or explicitly authorized agent ` +
+          `runs the publish step (org rule: publishing is product/supervisor-only).`,
+        tags: ["governance", "process"],
+      });
+      created.push(task.id);
+      noticeStageSpecialists(
+        org.id,
+        "definition",
+        task.id,
+        `Release pressure on ${project.name}: ${pressure.unreleased} unreleased change(s) ${marker} ` +
+          `(oldest ${Math.round(pressure.oldest_hours)}h). ${task.id} queues the release checklist.`,
+      );
+    }
+  }
+  return { created };
 }
 
 /** On PR attach: tell the owner where their PR sits in the landing train. */

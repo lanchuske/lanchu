@@ -1019,11 +1019,18 @@ export function startServer(): Promise<http.Server> {
       /* keep the server alive */
     }
   }, 30_000).unref();
-  // Landing queue: detect queued PRs that hit origin/main and notice whose
-  // turn it is (fetches are throttled inside the sweep).
+  // Landing queue + release pressure: detect queued PRs that hit origin/main
+  // and notice whose turn it is; measure merged-but-unreleased debt and queue
+  // the release checklist when it crosses the threshold (fetches are
+  // throttled inside the sweeps — one per project per minute, shared).
   setInterval(() => {
     try {
       store.runLandingSweep();
+    } catch {
+      /* keep the server alive */
+    }
+    try {
+      store.runReleaseSweep();
     } catch {
       /* keep the server alive */
     }

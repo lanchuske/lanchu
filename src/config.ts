@@ -77,6 +77,18 @@ export function publicUrl(): string | undefined {
 }
 
 /** After how many hours a task of an idle agent is marked "stale" (C4). */
+/** Release pressure: a release task fires at N unreleased changes on main… */
+export function releaseMaxChanges(): number {
+  const n = Number(process.env.LANCHU_RELEASE_MAX_CHANGES);
+  return Number.isFinite(n) && n > 0 ? n : 5;
+}
+
+/** …or when the oldest unreleased change is older than this many hours. */
+export function releaseMaxAgeHours(): number {
+  const n = Number(process.env.LANCHU_RELEASE_MAX_AGE_HOURS);
+  return Number.isFinite(n) && n > 0 ? n : 48;
+}
+
 export function staleHours(): number {
   const h = process.env.LANCHU_STALE_HOURS;
   const n = h ? Number.parseInt(h, 10) : 24;

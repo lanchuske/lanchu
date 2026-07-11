@@ -1246,12 +1246,19 @@ function renderStats(board, audit) {
   // Count "done" the same way the board's Done lane does, so tile and lane agree.
   var done = board.tasks.filter(function (t) { return stageOf(t) === "done"; }).length;
   var prs = board.tasks.filter(function (t) { return t.pr_url; }).length;
+  // Release pressure: merged-but-unreleased commits across the org's projects
+  // (computed server-side from each checkout's last tag; red once any project
+  // crosses the release threshold).
+  var rel = board.release || [];
+  var unreleased = rel.reduce(function (s, r) { return s + r.unreleased; }, 0);
+  var relHot = rel.some(function (r) { return r.threshold_hit; });
   var tiles = [
     { n: board.agents.length, l: "agents" },
     { n: active, l: "active" },
     { n: board.tasks.length, l: "tasks" },
     { n: done, l: "done" },
     { n: prs, l: "PRs" },
+    { n: unreleased, l: "unreleased", bad: relHot },
     { n: viol, l: "violations", bad: viol > 0 },
   ];
   document.getElementById("tiles").innerHTML = tiles.map(function (t) {
