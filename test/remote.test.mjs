@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 
 // Isolated on-disk state (set before importing anything that opens the DB).
 const dir = path.join(os.tmpdir(), "lanchu-remote-test-" + process.pid);
@@ -11,6 +12,7 @@ process.env.LANCHU_STATE_DIR = dir;
 delete process.env.LANCHU_ACCESS_KEY;
 
 const { createServer } = await import("../dist/server/server.js");
+const store = await import("../dist/core/store.js");
 
 // One server for the whole file; auth is decided per-request from the env, so we
 // flip LANCHU_ACCESS_KEY between requests rather than restarting.
@@ -95,4 +97,32 @@ test("LANCHU_PUBLIC_URL overrides the advertised mcp url", async () => {
     delete process.env.LANCHU_ACCESS_KEY;
     delete process.env.LANCHU_PUBLIC_URL;
   }
+});
+
+// Regression for the attribution bug: the launcher sends its `cwd` on /session,
+// so the agent's real directory/branch/worktree are captured (panel showed a
+// stale, inherited dir before — e.g. an agent in ~/repos/lanchu on `main`
+// displayed as ~/repos/local-mcp on `master`). Guards the /session→captureWorkspace
+// contract that the run.ts fix depends on.
+test("session records the agent's real cwd/branch/worktree from the request", async () => {
+  delete process.env.LANCHU_ACCESS_KEY;
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "lanchu-ws-"));
+  const git = (...a) => spawnSync("git", ["-C", repo, ...a], { encoding: "utf8" });
+  git("init", "-q", "-b", "trunk");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "t");
+  fs.writeFileSync(path.join(repo, "README"), "x");
+  git("add", "-A");
+  git("commit", "-qm", "init");
+
+  const res = await req("/session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ org: "ws-acme", project: "web", objective: "attribution", cwd: repo }),
+  });
+  assert.equal(res.status, 200);
+  const agent = store.getAgent((await res.json()).agentId);
+  assert.equal(agent.cwd, repo, "cwd is recorded from the session request");
+  assert.equal(agent.branch, "trunk", "branch is read from the working tree's git");
+  assert.equal(fs.realpathSync(agent.worktree), fs.realpathSync(repo), "worktree root is captured");
 });

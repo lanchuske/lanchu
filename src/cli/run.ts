@@ -241,7 +241,7 @@ async function cmdOnboard(objective: string): Promise<void> {
     }
   }
 
-  const sessionReq: Record<string, unknown> = { org, project, objective, client: flag("client") };
+  const sessionReq: Record<string, unknown> = { org, project, objective, client: flag("client"), cwd: process.cwd() };
   if (flag("reuse")) sessionReq.reuseAgentId = flag("reuse");
   if (flag("role")) sessionReq.role = flag("role");
   if (flag("tags")) sessionReq.roleTags = flag("tags")!.split(",").map((t) => t.trim());
@@ -694,7 +694,7 @@ async function cmdWork(prefillObjective: string): Promise<void> {
       await api(`/api/reuse?org=${encodeURIComponent(org)}&objective=${encodeURIComponent(objective)}`)
     ).json()) as { agent: { id: string; name: string }; score: number }[];
 
-    const sessionReq: Record<string, unknown> = { org, project, objective, client: "claude" };
+    const sessionReq: Record<string, unknown> = { org, project, objective, client: "claude", cwd: process.cwd() };
     if (cands.length > 0) {
       const choices = [...cands.map((c) => `reuse "${c.agent.name}" (idle, overlap ${c.score})`), "create a new agent"];
       const idx = await pick(rl, "An existing agent may fit this:", choices, choices.length - 1);
