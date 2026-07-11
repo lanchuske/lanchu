@@ -57,7 +57,6 @@ export function panelHtml(): string {
   .brand small { display: block; font-weight: 500; color: var(--muted); font-size: 12px; margin-top: 2px; }
   .orgfield { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; padding: 0 8px 8px; }
   .orgfield input { min-width: 0; }
-  .orgfield .neworg { flex: none; padding: 4px 8px; line-height: 1; }
   input { padding: 6px 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg);
           color: inherit; font: inherit; outline: none; transition: border-color .15s; width: 100%; }
   input:focus { border-color: var(--accent); }
@@ -242,7 +241,7 @@ export function panelHtml(): string {
   <div class="app">
     <nav class="sidebar">
       <div class="brand">Lanchu <small>control &amp; trust</small></div>
-      <div class="orgfield"><span>org</span><input id="org" value="lanchu" list="orglist" autocomplete="off" placeholder="pick or switch…" /><datalist id="orglist"></datalist><button id="neworg" class="neworg" title="Create a new org">+ new</button></div>
+      <div class="orgfield"><span>org</span><input id="org" value="lanchu" list="orglist" autocomplete="off" placeholder="pick an existing org…" title="Picks an existing org — orgs are created from the terminal (run lanchu in your repo)" /><datalist id="orglist"></datalist></div>
       <span id="live" class="live"><span class="pip"></span><span id="live-t">connecting</span></span>
       <div id="orgwarn" class="orgwarn" style="display:none"></div>
       <ul class="nav" id="nav">
@@ -750,21 +749,8 @@ function connect() {
   refresh();
 }
 document.getElementById("org").addEventListener("change", connect);
-// Explicit org creation — reads no longer auto-create, so this is the one panel
-// path (besides onboarding an agent) that brings a new org into being.
-document.getElementById("neworg").addEventListener("click", function () {
-  var name = (window.prompt("Name for the new org:", "") || "").trim();
-  if (!name) return;
-  authFetch("/org/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: name }) })
-    .then(function (r) { return r.json(); })
-    .then(function (r) {
-      if (r && r.error) { toast("Couldn't create org — " + r.error, true); return; }
-      document.getElementById("org").value = name;
-      connect();
-      toast("Created org “" + name + "”");
-    })
-    .catch(function () { toast("Couldn't create the org", true); });
-});
+// No creation here by design: the panel observes and guides; orgs (like every
+// entity) are created from the terminal. Unknown names get the #orgwarn hint.
 setInterval(refresh, 10000);
 setInterval(refreshProcesses, 3000); // live pid/uptime + terminal liveness, only while the Processes view is open
 routeFromHash();
