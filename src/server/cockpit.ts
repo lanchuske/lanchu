@@ -113,7 +113,20 @@ export function installStopHook(cwd: string, token: string, agentName?: string):
     const hooks = (settings.hooks ??= {}) as Record<string, unknown>;
     const stop = (hooks.Stop ??= []) as unknown[];
     // Idempotency: the token-file path identifies this agent's hook entry.
-    if (!JSON.stringify(stop).includes(tokenFile)) {
+    // Compare against the RAW command strings — serializing the array first
+    // (JSON.stringify) escapes Windows path backslashes, so the path never
+    // matched and every respawn appended a duplicate hook (Windows CI red).
+    const installed = stop.some((entry) => {
+      const entryHooks = (entry as { hooks?: unknown })?.hooks;
+      return (
+        Array.isArray(entryHooks) &&
+        entryHooks.some((h) => {
+          const cmd = (h as { command?: unknown })?.command;
+          return typeof cmd === "string" && cmd.includes(tokenFile);
+        })
+      );
+    });
+    if (!installed) {
       stop.push({ hooks: [{ type: "command", command }] });
     }
     fs.mkdirSync(path.dirname(file), { recursive: true });
