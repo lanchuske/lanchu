@@ -24,7 +24,11 @@ test("the spawn command never carries the token — it lives in a mode-600 confi
   assert.ok(m, "command references a config file path");
   const file = m[1];
   assert.ok(file.startsWith(path.join(dir, "run")), "config lives in the user-only state dir");
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600, "config file is owner-read/write only");
+  // POSIX-only: Windows has no chmod semantics (stat reports 0o666 regardless);
+  // there the protection is the user-profile state dir + the token never touching argv.
+  if (process.platform !== "win32") {
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600, "config file is owner-read/write only");
+  }
   const config = JSON.parse(fs.readFileSync(file, "utf8"));
   assert.equal(config.mcpServers.lanchu.headers.Authorization, `Bearer ${TOKEN}`);
 
