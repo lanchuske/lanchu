@@ -937,6 +937,9 @@ export function runNudgeSweep(
     for (const c of store.agentsNeedingNudge(org.id)) {
       try {
         if (!alive(c.terminal_ref)) continue;
+        // The alive probe can take seconds — cancel if delivery or a tool
+        // call happened since this candidate was computed.
+        if (!store.nudgeStillNeeded(c.agent_id)) continue;
         if (!nudge(c.terminal_ref, NUDGE_LINE)) continue;
         store.recordNudge(org.id, c.agent_id, c.queued_notices);
         nudged.push(c.agent_name);
