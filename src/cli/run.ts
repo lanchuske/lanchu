@@ -640,7 +640,7 @@ async function cmdRestart(): Promise<void> {
 }
 
 const SPAWN_PROMPT =
-  "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work.";
+  "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work. While you work, watch for friction in Lanchu itself and file it with task_create using the taxonomy tags (bug | extension | idea | process) plus area tags and evidence — the help tool has the details.";
 
 async function cmdSpawn(): Promise<void> {
   const found = findConfig();
