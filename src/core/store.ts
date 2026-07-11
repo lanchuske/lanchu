@@ -10,6 +10,7 @@ import {
   releaseMaxChanges,
   sdlcMode,
   staleHours,
+  workingWindowMs,
 } from "../config.js";
 import { openDb } from "../db/db.js";
 import { bus } from "./events.js";
@@ -29,6 +30,7 @@ import {
   type MemoryEntry,
   type MemoryScope,
   type MemorySource,
+  type PresenceState,
   type RejectReason,
   type Role,
   type Task,
@@ -898,6 +900,54 @@ export function isRecentlyActive(agent: Agent): boolean {
  */
 export function isPresent(agent: Agent): boolean {
   return isAgentLive(agent.id) || isRecentlyActive(agent);
+}
+
+// ── tri-state presence (dot v2): working / idle-online / off ──
+// The probe lives in the server layer (cockpit spawns tmux/osascript); core
+// receives it at startup so presence can see terminals without owning them.
+let terminalAliveProbe: ((ref: TerminalRef) => boolean) | null = null;
+export function setTerminalAliveProbe(probe: (ref: TerminalRef) => boolean): void {
+  terminalAliveProbe = probe;
+}
+
+// Probing spawns a process; the panel recomputes presence for every agent on
+// every poll, so cache each terminal's answer briefly.
+const TERMINAL_ALIVE_TTL_MS = 5_000;
+const terminalAliveCache = new Map<string, { alive: boolean; at: number }>();
+
+/** null = no handle (or no probe wired) — aliveness is unknowable here. */
+function agentTerminalAlive(agentId: string): boolean | null {
+  if (!terminalAliveProbe) return null;
+  const ref = getAgentTerminal(agentId);
+  if (!ref) return null;
+  const key = ref.method + ":" + ref.id;
+  const hit = terminalAliveCache.get(key);
+  if (hit && Date.now() - hit.at < TERMINAL_ALIVE_TTL_MS) return hit.alive;
+  const alive = terminalAliveProbe(ref);
+  terminalAliveCache.set(key, { alive, at: Date.now() });
+  return alive;
+}
+
+/** True while the agent's last MCP call is fresh (workingWindowMs). */
+export function isWorkingRecently(agent: Agent): boolean {
+  if (!agent.last_activity_at) return false;
+  return Date.now() - new Date(agent.last_activity_at).getTime() < workingWindowMs();
+}
+
+/**
+ * The truthful dot: WORKING = online and called a tool recently; IDLE =
+ * reachable (open transport or alive terminal) but quiet — at the prompt;
+ * OFF = no transport and no alive terminal. An agent with no terminal handle
+ * to probe falls back to call recency, so the post-restart gap (transports
+ * reconnect on the next tool call) doesn't gray out a live teammate.
+ */
+export function presenceOf(agent: Agent): PresenceState {
+  if (agent.state === "retired") return "off";
+  if (isAgentLive(agent.id)) return isWorkingRecently(agent) ? "working" : "idle";
+  const termAlive = agentTerminalAlive(agent.id);
+  if (termAlive === true) return isWorkingRecently(agent) ? "working" : "idle";
+  if (termAlive === false) return "off";
+  return isWorkingRecently(agent) ? "working" : "off";
 }
 
 export function touchActivity(agentId: string, summary: string): void {
@@ -2833,6 +2883,8 @@ export type BoardAgent = Agent & {
   nudged_at: string | null;
   /** nudge budget spent and still starved — needs the supervisor, not the sweep */
   unreachable: boolean;
+  /** tri-state dot: working / idle-online / off — same meaning on every surface */
+  presence: PresenceState;
 };
 
 export interface BoardSnapshot {
@@ -3488,6 +3540,7 @@ export function boardSnapshot(orgId: string): BoardSnapshot {
       color: agentColorOf(a),
       nudged_at: nudges.get(a.id) ?? null,
       unreachable: unreachable.has(a.id),
+      presence: presenceOf(a),
     };
   });
 
@@ -3888,6 +3941,8 @@ export interface GraphNode {
   weight: number;
   /** agents only — retired nodes render faded */
   state?: AgentState;
+  /** agents only — tri-state ring: working / idle / off */
+  presence?: PresenceState;
 }
 
 export interface GraphEdge {
@@ -3965,6 +4020,7 @@ export function orgGraph(orgId: string, windowHours: number): OrgGraph {
         label: a.name,
         weight: 0,
         state: a.state === "retired" ? "retired" : isPresent(a) ? "active" : "idle",
+        presence: presenceOf(a),
       });
     }
     return a.id;
@@ -4083,6 +4139,8 @@ export interface AgentMcpStatus {
   id: string;
   name: string;
   state: AgentState;
+  /** tri-state dot: working / idle-online / off */
+  presence: PresenceState;
   /** Open MCP transports held right now (in-memory; 0 right after a restart
    * until sessions reconnect — exactly the gap the panel should show). */
   live_transports: number;
@@ -4105,6 +4163,7 @@ export function mcpAgentStatus(orgId: string): AgentMcpStatus[] {
         id: a.id,
         name: a.name,
         state: (isPresent(a) ? "active" : "idle") as AgentState,
+        presence: presenceOf(a),
         live_transports: liveSessionCount(a.id),
         open_sessions: rows.length,
         clients: [...new Set(rows.map((r) => r.client).filter((c): c is string => !!c))],

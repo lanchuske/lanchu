@@ -102,6 +102,13 @@ export function activeWindowMs(): number {
   return (Number.isFinite(n) && n > 0 ? n : 45) * 1000;
 }
 
+/** An online agent shows as WORKING while its last MCP call is this fresh. */
+export function workingWindowMs(): number {
+  const s = process.env.LANCHU_WORKING_WINDOW_MS;
+  const n = s ? Number.parseInt(s, 10) : 120_000;
+  return Number.isFinite(n) && n > 0 ? n : 120_000;
+}
+
 /**
  * Reconnect grace after server start: while it lasts, a second MCP session for
  * an already-live agent is treated as the SAME terminal re-establishing its

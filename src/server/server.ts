@@ -692,13 +692,21 @@ export function createServer(): http.Server {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
         const org = store.getOrgByName(orgName);
-        const terminals = (org ? store.listTerminals(org.id) : []).map((t) => ({
-          agentId: t.agentId,
-          name: t.name,
-          method: t.ref.method,
-          id: t.ref.id,
-          alive: terminalAlive(t.ref),
-        }));
+        const terminals = (org ? store.listTerminals(org.id) : []).map((t) => {
+          const agent = store.getAgent(t.agentId);
+          const alive = terminalAlive(t.ref);
+          // Same tri-state as every other dot, scoped to THIS terminal: dead
+          // window = off; alive = idle or working by the agent's call recency.
+          const agentPresence = agent ? store.presenceOf(agent) : "idle";
+          return {
+            agentId: t.agentId,
+            name: t.name,
+            method: t.ref.method,
+            id: t.ref.id,
+            alive,
+            presence: !alive ? "off" : agentPresence === "off" ? "idle" : agentPresence,
+          };
+        });
         return sendJson(res, 200, {
           server: {
             pid: process.pid,
@@ -1021,6 +1029,9 @@ export function runNudgeSweep(
 
 export function startServer(): Promise<http.Server> {
   startWebhookDelivery();
+  // Presence dot v2: core computes the working/idle/off tri-state; the
+  // terminal-alive probe belongs to the cockpit, so hand it over here.
+  store.setTerminalAliveProbe(terminalAlive);
   // Heal done/review inconsistencies left by pre-batch-flip history (audited,
   // idempotent — see reconcileSdlcStages). Must never stop the server.
   try {

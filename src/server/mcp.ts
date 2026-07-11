@@ -857,6 +857,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       const roster = store.boardSnapshot(ctx.orgId).agents.map((a) => ({
         name: a.name,
         state: a.state,
+        presence: a.presence,
         worktree: a.worktree,
         branch: a.branch,
         active_task: a.active_task_id ? { id: a.active_task_id, title: a.active_task_title } : null,

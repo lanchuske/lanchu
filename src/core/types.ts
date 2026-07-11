@@ -1,5 +1,12 @@
 export type AgentState = "active" | "idle" | "retired";
 
+/**
+ * Display presence, tri-state: "working" = online with a fresh MCP call
+ * (workingWindowMs), "idle" = reachable (live transport or alive terminal)
+ * but quiet, "off" = no transport and no alive terminal — needs reattach.
+ */
+export type PresenceState = "working" | "idle" | "off";
+
 export type TaskStatus =
   | "available"
   | "claimed"

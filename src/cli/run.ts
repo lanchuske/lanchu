@@ -773,7 +773,7 @@ async function cmdTile(): Promise<void> {
   const res = await api(`/api/board?org=${encodeURIComponent(found.config.org)}`);
   const b = (await res.json()) as {
     agents: {
-      name: string; state: string; branch: string | null; worktree: string | null;
+      name: string; state: string; presence?: string; branch: string | null; worktree: string | null;
       active_task_id: string | null; active_task_title: string | null;
       color?: { hex: string; ansi256: number };
     }[];
@@ -786,7 +786,12 @@ async function cmdTile(): Promise<void> {
   for (const a of b.agents) {
     // Same hue as the terminal border and panel chip — one identity everywhere.
     // The board carries the de-collided slot; the hash is only the offline fallback.
-    const dot = ansiColorize(a.state === "active" ? "●" : "○", a.color ?? agentColor(a.name));
+    // Glyph = the panel's presence tri-state: ● working · ◐ idle · ○ off.
+    const glyph = a.presence === "working" ? "●"
+      : a.presence === "idle" ? "◐"
+      : a.presence === "off" ? "○"
+      : a.state === "active" ? "●" : "○"; // pre-v2 server fallback
+    const dot = ansiColorize(glyph, a.color ?? agentColor(a.name));
     const where = a.worktree
       ? `${tilde(a.worktree)}  (${a.branch ?? "no branch"})`
       : a.branch
@@ -915,13 +920,15 @@ async function statusLine(): Promise<string> {
     const b = (await (await api(`/api/board?org=${encodeURIComponent(org)}`, {
       signal: AbortSignal.timeout(400),
     })).json()) as {
-      agents: { name: string; state: string; color?: { ansi256: number } }[];
+      agents: { name: string; state: string; presence?: string; color?: { ansi256: number } }[];
       tasks: { status: string }[];
     };
-    const active = b.agents.filter((a) => a.state === "active").length;
+    // "working" is the presence tri-state's truthful count — agents with fresh
+    // MCP calls, not everyone merely connected (pre-v2 servers fall back to state).
+    const working = b.agents.filter((a) => (a.presence ? a.presence === "working" : a.state === "active")).length;
     const open = b.tasks.filter((t) => ["claimed", "in_progress", "blocked"].includes(t.status)).length;
     const mine = myName ? b.agents.find((a) => a.name === myName)?.color : undefined;
-    return `lanchu ● ${org}/${project}${mine ? meWith(mine) : me} · ${active} active · ${open} open`;
+    return `lanchu ● ${org}/${project}${mine ? meWith(mine) : me} · ${working} working · ${open} open`;
   } catch {
     return `lanchu ● running${me}`;
   }

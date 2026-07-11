@@ -150,11 +150,17 @@ const TEMPLATE = `<!doctype html>
   .id { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
   .hint { color: var(--faint); font-size: 11.5px; margin-top: 6px; }
 
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; box-sizing: border-box; }
   .dot.active { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
   .dot.idle { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-bg); }
   .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-bg); }
   .dot.unknown { background: var(--faint); }
+  /* tri-state presence: working pulses green, idle is amber, off is a gray hollow */
+  .dot.working { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); animation: dotpulse 2.2s ease-in-out infinite; }
+  .dot.off { background: transparent; border: 2px solid var(--faint); }
+  @keyframes dotpulse { 50% { box-shadow: 0 0 0 5px var(--ok-bg); } }
+  .preslegend { color: var(--faint); font-size: 12px; margin: -6px 0 12px; }
+  .preslegend .dot { margin-right: 3px; }
 
   .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; letter-spacing: .01em; }
   .p-available { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
@@ -201,8 +207,10 @@ const TEMPLATE = `<!doctype html>
   .gwrap { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
   #gsvg { display: block; width: 100%; height: 560px; }
   #gsvg circle.agent { fill: var(--accent); }
-  #gsvg circle.agent.idle { fill: var(--faint); }
-  #gsvg circle.agent.active { stroke: var(--ok); stroke-width: 2px; }
+  /* node ring = the same presence tri-state as every dot */
+  #gsvg circle.agent.working { stroke: var(--ok); stroke-width: 2.5px; }
+  #gsvg circle.agent.idle { stroke: var(--warn); stroke-width: 2px; }
+  #gsvg circle.agent.off { fill: var(--faint); stroke: var(--line); stroke-width: 2px; }
   #gsvg circle.docn { fill: var(--info); }
   #gsvg circle.arean { fill: var(--warn); opacity: .75; }
   #gsvg g.retired { opacity: .35; }
@@ -218,6 +226,10 @@ const TEMPLATE = `<!doctype html>
   .glegend span { display: inline-flex; align-items: center; gap: 6px; }
   .gsw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .gsw.agent { background: var(--accent); } .gsw.docn { background: var(--info); } .gsw.arean { background: var(--warn); opacity: .75; }
+  /* agent-ring swatches: the same presence tri-state as the dots */
+  .gsw.ringw { background: var(--accent); box-shadow: 0 0 0 2px var(--ok); }
+  .gsw.ringi { background: var(--accent); box-shadow: 0 0 0 2px var(--warn); }
+  .gsw.ringo { background: var(--faint); box-shadow: 0 0 0 2px var(--line); }
   .gln { width: 18px; height: 0; border-top: 2px solid var(--faint); display: inline-block; }
   .gln.msg { border-color: var(--accent); } .gln.flow { border-color: var(--info); } .gln.warnl { border-color: var(--warn); border-top-style: dashed; }
 
@@ -393,6 +405,7 @@ const TEMPLATE = `<!doctype html>
       <section class="view" id="v-team">
         <h1 class="vhead">Team</h1>
         <p class="vsub">Agents in this org. Click a card to focus its terminal — or open a fresh one if it's closed.</p>
+        <div class="preslegend"><span class="dot working"></span>working — recent MCP call · <span class="dot idle"></span>idle — online, no recent calls · <span class="dot off"></span>off — no transport or terminal</div>
         <div id="agents"></div>
         <h2 class="sub-h2">Roles</h2>
         <div id="roles"></div>
@@ -420,7 +433,9 @@ const TEMPLATE = `<!doctype html>
         </div>
         <div class="gwrap"><svg id="gsvg"></svg><div class="gempty" id="gempty" style="display:none">No activity in this window yet.</div></div>
         <div class="glegend">
-          <span><i class="gsw agent"></i> agent</span>
+          <span><i class="gsw ringw"></i> working</span>
+          <span><i class="gsw ringi"></i> idle</span>
+          <span><i class="gsw ringo"></i> off</span>
           <span><i class="gsw docn"></i> doc</span>
           <span><i class="gsw arean"></i> work area</span>
           <span><i class="gln msg"></i> message / handoff</span>
@@ -766,6 +781,20 @@ function colorChip(name) {
   return '<span class="cdot" style="background:' + hex + '" title="agent color (same in terminal + tile)"></span>';
 }
 
+// One presence dot, one meaning, every surface. Tooltip spells out the state.
+var PRESENCE_TIP = {
+  working: "working — MCP tool call within the working window (~2 min)",
+  idle: "idle — online (transport or terminal) but no recent calls",
+  off: "off — no transport and no alive terminal; click to reopen"
+};
+function presDot(p) {
+  p = PRESENCE_TIP[p] ? p : "off";
+  return '<span class="dot ' + p + '" title="' + PRESENCE_TIP[p] + '"></span>';
+}
+function presLegend() {
+  return '<div class="preslegend">' + presDot("working") + 'working · ' + presDot("idle") + 'idle · ' + presDot("off") + 'off</div>';
+}
+
 function renderAgents(list) {
   document.getElementById("c-agents").textContent = list.length;
   // GitHub-side attribution is ambiguous when several agents push as one
@@ -786,7 +815,7 @@ function renderAgents(list) {
         (a.git_author_name ? ' · <span class="k">author</span> ' + esc(a.git_author_name) : "") +
         '</div>'
       : "";
-    var reveal = a.state === "active" ? "focus terminal" : "open terminal";
+    var reveal = a.presence !== "off" ? "focus terminal" : "open terminal";
     // Auto-wake trace: show "nudged" while the last nudge is recent (10 min);
     // "unreachable" when the sweep spent its budget and gave up — this agent
     // needs the supervisor (focus its terminal or retire it), not more typing.
@@ -799,7 +828,7 @@ function renderAgents(list) {
       ? ' <span class="pill coord-pill" title="holds the coordinator lease' + (COORD.expired ? " (EXPIRED)" : "") + '">coordinator' + (COORD.expired ? " ⌛" : "") + '</span>'
       : "";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to ' + reveal + '">' +
-      '<div class="top"><span class="name"><span class="dot ' + (a.state === "active" ? "active" : "idle") + '"></span>' +
+      '<div class="top"><span class="name">' + presDot(a.presence) +
       colorChip(a.name) + esc(a.name) + coord + '</span><span>' + nudged + '<button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></span></div>' +
       '<div class="meta"><span class="k">role</span> ' + esc(a.role_name || "—") +
       (a.model ? ' · <span class="k">model</span> ' + esc(a.model) : "") + ' · <b>' + a.open_tasks + '</b> open' + branch +
@@ -810,7 +839,7 @@ function renderAgents(list) {
       (a.objective ? '<div class="meta"><span class="k">obj</span> ' + esc(a.objective) + '</div>' : "") +
       gh +
       '<div class="meta"><span class="k">last</span> ' + esc(a.last_activity || "no activity yet") + '</div>' +
-      '<div class="hint">' + (a.state === "active" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
+      '<div class="hint">' + (a.presence !== "off" ? "● click to focus its terminal" : "○ click to open a terminal") + '</div>' +
       '<div class="meta" style="color:var(--bad)" id="retire-msg-' + a.id + '"></div></div>';
   }).join("") || '<div class="empty">No agents yet. Agents are started from the terminal — inside a project folder, run ' + cmdSnippet('lanchu spawn "your objective"') + ' and supervise it from here.</div>';
 }
@@ -1164,15 +1193,17 @@ function renderAudit(list) {
 // branch/worktree), the freshest slice of the audit log, and any friction
 // (conflict warnings, rejected actions) — all on one screen.
 function renderOverview(board, audit) {
-  var live = board.agents.filter(function (a) { return a.state === "active"; });
+  // "Working now" means WORKING — a fresh MCP call — not merely connected;
+  // idle-online teammates stay on the Team view with their amber dot.
+  var live = board.agents.filter(function (a) { return a.presence === "working"; });
   document.getElementById("wnow").innerHTML = live.map(function (a) {
     var task = a.active_task_title ? (a.active_task_title.length > 76 ? a.active_task_title.slice(0, 76) + "…" : a.active_task_title) : "";
     var branch = a.branch ? '<span class="branch">⌥ ' + esc(a.branch) + '</span>' : "";
     var wt = a.worktree ? '<div class="meta"><span class="k">wt</span> <span style="font-family:var(--mono);font-size:11px">' + esc(shortPath(a.worktree)) + '</span></div>' : "";
     return '<div class="card clickable" data-agent="' + a.id + '" data-name="' + esc(a.name) + '" title="Click to focus its terminal">' +
-      '<div class="top"><span class="name"><span class="dot active"></span>' + colorChip(a.name) + esc(a.name) + '</span>' + branch + '</div>' +
+      '<div class="top"><span class="name">' + presDot(a.presence) + colorChip(a.name) + esc(a.name) + '</span>' + branch + '</div>' +
       '<div class="meta">' + (task ? '<span class="k">task</span> <span title="' + esc(a.active_task_title) + '">' + esc(task) + '</span>' : '<span class="empty-inline">no active task</span>') + '</div>' + wt + '</div>';
-  }).join("") || '<div class="empty">Nobody is working right now — agents appear here while they hold a live session.</div>';
+  }).join("") || '<div class="empty">Nobody is working right now — agents appear here while their MCP calls are fresh.</div>';
 
   // Momentum without leaving home: the last 8 shipped tasks, PR link prominent.
   var shipped = board.tasks.filter(function (t) { return stageOf(t) === "done"; })
@@ -1215,7 +1246,7 @@ function renderProcesses(p) {
   var terms = p.terminals || [];
   document.getElementById("c-proc").textContent = terms.length;
   document.getElementById("terminals").innerHTML = terms.map(function (t) {
-    return '<div class="card"><div class="top"><span class="name"><span class="dot ' + (t.alive ? "active" : "idle") + '"></span>' + esc(t.name) + '</span>' +
+    return '<div class="card"><div class="top"><span class="name">' + presDot(t.presence || (t.alive ? "idle" : "off")) + esc(t.name) + '</span>' +
       '<span><button data-act="focus-term" data-id="' + t.agentId + '" data-name="' + esc(t.name) + '">Focus</button> ' +
       '<button data-act="logs" data-id="' + t.agentId + '">Logs</button> ' +
       '<button class="danger" data-act="close-term" data-id="' + t.agentId + '" data-name="' + esc(t.name) + '">Close</button></span></div>' +
@@ -1233,7 +1264,7 @@ function renderMcps(m) {
       ? ' <span class="pill stale-pill" title="two terminals sharing one identity causes misattribution">' + a.live_transports + ' transports</span>' : "";
     var gap = !live && a.open_sessions > 0
       ? ' <span class="hint">(session on record, transport down — reconnects on its next tool call)</span>' : "";
-    return '<div class="card"><div class="top"><span class="name"><span class="dot ' + (live ? "active" : "idle") + '"></span>' +
+    return '<div class="card"><div class="top"><span class="name">' + presDot(a.presence || (live ? "idle" : "off")) +
       colorChip(a.name) + esc(a.name) + dupe + '</span>' +
       '<span class="meta">' + a.live_transports + ' live · ' + a.open_sessions + ' session' + (a.open_sessions === 1 ? "" : "s") + '</span></div>' +
       '<div class="meta"><span class="k">client</span> ' + esc((a.clients || []).join(", ") || "—") +
@@ -1304,7 +1335,8 @@ function updateProcBadge() {
 }
 
 function renderStats(board, audit) {
-  var active = board.agents.filter(function (a) { return a.state === "active"; }).length;
+  // Count by the presence tri-state so the tile agrees with the dots.
+  var active = board.agents.filter(function (a) { return a.presence === "working"; }).length;
   var viol = audit.filter(function (e) { return e.outcome === "rejected"; }).length;
   // Count "done" the same way the board's Done lane does, so tile and lane agree.
   var done = board.tasks.filter(function (t) { return stageOf(t) === "done"; }).length;
@@ -1317,7 +1349,7 @@ function renderStats(board, audit) {
   var relHot = rel.some(function (r) { return r.threshold_hit; });
   var tiles = [
     { n: board.agents.length, l: "agents" },
-    { n: active, l: "active" },
+    { n: active, l: "working" },
     { n: board.tasks.length, l: "tasks" },
     { n: done, l: "done" },
     { n: prs, l: "PRs" },
@@ -1328,7 +1360,7 @@ function renderStats(board, audit) {
     return '<div class="tile' + (t.bad ? " bad" : "") + '"><div class="n">' + t.n + '</div><div class="l">' + t.l + '</div></div>';
   }).join("");
   document.getElementById("sidestat").innerHTML =
-    '<b>' + active + '</b> active · <b>' + board.agents.length + '</b> agents<br><b>' + done + '</b> done · <b>' + board.tasks.length + '</b> tasks' +
+    '<b>' + active + '</b> working · <b>' + board.agents.length + '</b> agents<br><b>' + done + '</b> done · <b>' + board.tasks.length + '</b> tasks' +
     (viol ? ' · <span style="color:var(--bad)"><b>' + viol + '</b> violations</span>' : "");
 }
 
@@ -1348,7 +1380,7 @@ function renderAttention(orgs, agents) {
   });
   (agents || []).forEach(function (a) {
     if (a.state === "idle" && a.open_tasks === 0) {
-      items.push('<div class="card"><div class="top"><span class="name"><span class="dot idle"></span>' + esc(a.name) + '</span>' +
+      items.push('<div class="card"><div class="top"><span class="name">' + presDot(a.presence) + esc(a.name) + '</span>' +
         '<button class="danger" data-act="retire" data-id="' + a.id + '">Retire</button></div>' +
         '<div class="meta">No live session and nothing assigned' + (a.worktree || a.workspace ? '' : ', and no bound folder') +
         ' — retire it, or give it work from the Work board.</div></div>');
@@ -1426,7 +1458,7 @@ function renderGraph(g) {
   nodes.forEach(function (n) {
     var p = gPos[n.id];
     var r = n.kind === "agent" ? 8 + Math.min(16, 6 * Math.sqrt(n.weight)) : 5 + Math.min(10, 4 * Math.sqrt(n.weight));
-    var cls = n.kind === "agent" ? "agent " + esc(n.state || "") : (n.kind === "doc" ? "docn" : "arean");
+    var cls = n.kind === "agent" ? "agent " + esc(n.presence || n.state || "") : (n.kind === "doc" ? "docn" : "arean");
     var label = n.label.length > 22 ? n.label.slice(0, 22) + "…" : n.label;
     out += '<g class="gnode' + (n.state === "retired" ? " retired" : "") + '" data-id="' + esc(n.id) + '" data-kind="' + esc(n.kind) + '">' +
       '<circle class="' + cls + '" cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + r.toFixed(1) + '"><title>' + esc(n.label) + '</title></circle>' +
