@@ -1037,10 +1037,28 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
     "message_ack",
     {
       title: "Acknowledge notices",
-      description: "Marks notices from your inbox as read/handled so they stop counting as pending.",
+      description:
+        "Marks notices from your inbox as read/handled so they stop counting as pending. " +
+        "Acking a greenzone request notice also counts as your greenzone confirmation.",
       inputSchema: { ids: z.array(z.string()) },
     },
-    async ({ ids }) => text({ acked: store.ackNotices(ctx.agentId, ids) }),
+    async ({ ids }) => {
+      // Bridge for sessions minted before greenzone_ack existed (tool lists
+      // are fixed at session init, so they can't see that tool): acking the
+      // greenzone request notice IS the confirmation. Resolve which ids are
+      // greenzone notices BEFORE acking marks them handled.
+      const isGzAck = store.greenzoneNoticeIds(ctx.agentId, ids).length > 0;
+      const acked = store.ackNotices(ctx.agentId, ids);
+      let greenzone;
+      if (isGzAck) {
+        try {
+          greenzone = ackGreenzone(ctx.orgId, ctx.agentId);
+        } catch {
+          /* window already executed or gone — the notice ack stays valid */
+        }
+      }
+      return text({ acked, ...(greenzone ? { greenzone } : {}) });
+    },
   );
 
   registerTool(
