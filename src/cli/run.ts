@@ -23,6 +23,7 @@ import {
 import { agentColor, ansiColorize } from "../core/colors.js";
 import { buildProvenance } from "../core/provenance.js";
 import { gitInfo } from "../core/git.js";
+import { slugify } from "../core/worktree.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
@@ -770,18 +771,43 @@ const SPAWN_PROMPT =
 async function cmdSpawn(): Promise<void> {
   const found = findConfig();
   if (!found) return console.log("no .lanchu/config.json here — run `lanchu init` first");
-  await ensureServer();
   const { org, project } = found.config;
   const role = flag("role");
   const roleName = role ?? "generalist";
   const objective = positional().slice(1).join(" ") || undefined;
   // Honor --as; otherwise default to a tidy role-based name (matches spawn_agent)
   // rather than a long slug of the objective.
+  const agentName = flag("as") || roleName;
+  const isolate = !hasFlag("no-isolate");
+  const dry = hasFlag("dry");
+
+  if (dry) {
+    // task-mrg3xi2x2: a dry run must touch NOTHING server-side — no agent
+    // registered, no session/token minted, no worktree created, no leaked
+    // mcp-config token file. Preview only; the server is never called.
+    const previewCwd = isolate
+      ? path.join(gitInfo(process.cwd()).worktree ?? process.cwd(), ".lanchu", "worktrees", slugify(agentName))
+      : process.cwd();
+    const result = spawnTerminal({
+      title: `${org}·${agentName}`, agentName, cwd: previewCwd, token: "<token — minted only on a real spawn>",
+      prompt: SPAWN_PROMPT, model: flag("model"), dry: true,
+    });
+    console.log(`Would open [${result.method}] ${result.note.replace(/^Opened /, "Would open ")}`);
+    console.log(
+      isolate
+        ? `  would create worktree: ${previewCwd}  (branch: agent/${slugify(agentName)})`
+        : `  would share this directory (--no-isolate)`,
+    );
+    console.log("\nCommand:\n  " + result.command);
+    return;
+  }
+
+  await ensureServer();
   const s = (await post("/session", {
     org, project, objective, cwd: process.cwd(), role: roleName, wildcard: role ? false : true,
-    agentName: flag("as") || roleName,
+    agentName,
     model: flag("model"),
-    isolate: !hasFlag("no-isolate"),
+    isolate,
     // Spawn always mints a fresh teammate: keep dedupe-on-collision instead of
     // the /session default of reusing an existing agent by name.
     create: true,
@@ -795,13 +821,13 @@ async function cmdSpawn(): Promise<void> {
   const cwd = s.worktree ?? process.cwd();
   const result = spawnTerminal({
     title: `${org}·${s.agentName}`, agentName: s.agentName, cwd, token: s.token, prompt: SPAWN_PROMPT,
-    colorHex: s.color?.hex, model: s.model ?? undefined, dry: hasFlag("dry"),
+    colorHex: s.color?.hex, model: s.model ?? undefined,
   });
   // Persist the terminal handle so the panel can re-focus this agent later.
-  if (!hasFlag("dry") && result.ref) await post("/agent/terminal", { agentId: s.agentId, ref: result.ref });
+  if (result.ref) await post("/agent/terminal", { agentId: s.agentId, ref: result.ref });
   console.log(`Agent '${s.agentName}' · [${result.method}] ${result.note}`);
   if (s.worktree) console.log(`  worktree: ${s.worktree}  (branch: ${s.branch})`);
-  if (result.method === "print" || hasFlag("dry")) console.log("\nCommand:\n  " + result.command);
+  if (result.method === "print") console.log("\nCommand:\n  " + result.command);
 }
 
 async function cmdTile(): Promise<void> {
