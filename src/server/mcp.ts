@@ -1015,12 +1015,19 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         "Optionally set ref to the task/doc/PR id the message is about.",
       inputSchema: {
         to: z.string().describe("Recipient agent name, or '*' to broadcast to the whole org"),
-        text: z.string(),
+        // task-mrg6tx5f9: notices/store expose the field as `body`, so agents
+        // guessing that name hit a validation error on their first send.
+        // Accept both — whichever is set wins; `text` is checked first only
+        // because it was the original name.
+        text: z.string().optional().describe("Message text (alias: body — either works)"),
+        body: z.string().optional().describe("Alias for text — either works"),
         ref: z.string().optional().describe("Optional task/doc/PR id this message is about"),
       },
     },
-    async ({ to, text: body, ref }) => {
+    async ({ to, text: msgText, body: msgBody, ref }) => {
       try {
+        const body = msgText ?? msgBody;
+        if (!body) return fail(new Error("text (or body) is required"));
         // Broadcasts steer the whole org — coordinator-only. 1:1 stays free.
         if (to === "*") store.assertCoordinator(ctx.orgId, ctx.agentId, "broadcast (to:'*')");
         return text(store.sendNotice({ orgId: ctx.orgId, fromAgentId: ctx.agentId, to, body, ref }));
