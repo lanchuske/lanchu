@@ -496,20 +496,68 @@ export interface TileResult {
   note: string;
 }
 
-/** Arrange the agent terminals into a mosaic. */
-export function tileTerminals(dry?: boolean): TileResult {
-  if (hasTmux()) {
+/**
+ * Arrange the agent terminals into a mosaic. `refs` is the org's own live
+ * terminal handles (store.listTerminals) — the macOS branch matches windows
+ * by these ids, exactly like focusTerminal/closeTerminal/terminalLogs do,
+ * instead of grabbing every Terminal.app `windows` unconditionally.
+ *
+ * task-mrg6z88g13: the old blanket `windows` sweep both mis-arranged windows
+ * that don't belong to this org and silently reported 0 the moment the whole
+ * script errored (e.g. `bounds of window of desktop` throwing with no Finder
+ * window open, or Stage Manager) — nothing in that path ever isolated the
+ * failure, so a global error read as "no windows". Scoping to known ids and
+ * wrapping the bounds lookup in try/on error fixes both.
+ */
+export function tileTerminals(
+  refs: TerminalRef[],
+  dry?: boolean,
+  effects: { hasTmux?: () => boolean; isMac?: () => boolean; run?: (osa: string) => string } = {},
+): TileResult {
+  const tmuxAvailable = effects.hasTmux ?? hasTmux;
+  const mac = effects.isMac ?? isMac;
+  const run = effects.run ?? ((osa: string) => (spawnSync("osascript", ["-e", osa], { encoding: "utf8" }).stdout ?? "").trim());
+  if (tmuxAvailable()) {
     if (!dry) spawnSync("tmux", ["select-layout", "-t", TMUX_SESSION, "tiled"]);
     const out = spawnSync("tmux", ["list-panes", "-t", TMUX_SESSION], { encoding: "utf8" });
     const count = (out.stdout ?? "").split("\n").filter(Boolean).length;
     return { method: "tmux", count, note: `Tiled ${count} panes in tmux session '${TMUX_SESSION}'.` };
   }
-  if (isMac()) {
-    // Grid-arrange Terminal.app windows by setting their bounds. No Accessibility needed.
+  if (mac()) {
+    const ids = refs
+      .filter((r) => r.method === "terminal.app" && /^\d+$/.test(r.id))
+      .map((r) => r.id);
+    if (dry) {
+      return {
+        method: "terminal.app",
+        count: ids.length,
+        note: `Would grid-arrange ${ids.length} known agent Terminal.app window(s).`,
+      };
+    }
+    if (ids.length === 0) {
+      return {
+        method: "terminal.app",
+        count: 0,
+        note: "No known agent Terminal.app windows to arrange — spawn agents with 'lanchu spawn' first.",
+      };
+    }
+    // Grid-arrange only the org's own windows, matched by id — never the raw
+    // `windows` list, which sweeps up unrelated Terminal.app windows too.
     const osa = [
-      'tell application "Finder" to set sb to bounds of window of desktop',
+      'tell application "Finder"',
+      "  try",
+      "    set sb to bounds of window of desktop",
+      "  on error",
+      "    set sb to {0, 0, 1440, 900}",
+      "  end try",
+      "end tell",
       'tell application "Terminal"',
-      "  set ws to windows",
+      "  set ws to {}",
+      `  repeat with wid in {${ids.join(", ")}}`,
+      "    try",
+      "      set end of ws to (first window whose id is wid)",
+      "    end try",
+      "  end repeat",
       "  set n to count of ws",
       "  if n is 0 then return 0",
       "  set cols to (round (n ^ 0.5) rounding up)",
@@ -528,10 +576,12 @@ export function tileTerminals(dry?: boolean): TileResult {
       "  return n",
       "end tell",
     ].join("\n");
-    if (dry) return { method: "terminal.app", count: 0, note: "Would grid-arrange Terminal.app windows." };
-    const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8" });
-    const count = Number.parseInt((out.stdout ?? "0").trim(), 10) || 0;
-    return { method: "terminal.app", count, note: `Arranged ${count} Terminal.app windows into a mosaic.` };
+    const count = Number.parseInt(run(osa) || "0", 10) || 0;
+    const note =
+      count < ids.length
+        ? `Arranged ${count} of ${ids.length} known agent Terminal.app windows into a mosaic (${ids.length - count} no longer open).`
+        : `Arranged ${count} Terminal.app windows into a mosaic.`;
+    return { method: "terminal.app", count, note };
   }
   return { method: "unsupported", count: 0, note: "Terminal tiling needs tmux or macOS." };
 }

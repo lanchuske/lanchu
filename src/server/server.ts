@@ -576,6 +576,14 @@ export function createServer(): http.Server {
         return sendJson(res, 200, store.boardSnapshot(org.id));
       }
 
+      if (url.pathname === "/api/terminals" && req.method === "GET") {
+        const orgName = url.searchParams.get("org");
+        if (!orgName) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(orgName);
+        if (!org) return sendJson(res, 200, { terminals: [] });
+        return sendJson(res, 200, { terminals: store.listTerminals(org.id) });
+      }
+
       if (url.pathname === "/api/landing" && req.method === "GET") {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
