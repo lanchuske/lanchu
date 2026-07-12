@@ -75,7 +75,17 @@ test("timeout executes with partial confirms and says so", async () => {
 
   gz.requestGreenzone({ orgId: org.id, timeoutMs: 60, execute: () => executed++ });
   gz.ackGreenzone(org.id, a.id); // only one of two confirms
-  await new Promise((r) => setTimeout(r, 150));
+
+  // task-mrgqd61m19: a single fixed 150ms sleep raced the internal setTimeout
+  // on a loaded windows-latest runner (PR #92 run 29164356374 — the deadline
+  // hadn't fired yet at 150ms, identical commit passed clean on rerun).
+  // Poll-until with a generous ceiling instead: deterministic regardless of
+  // how late the runner schedules the timer, still genuinely exercises the
+  // real deadline mechanism rather than mocking it away.
+  const pollDeadline = Date.now() + 5000;
+  while (executed === 0 && Date.now() < pollDeadline) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
 
   assert.equal(executed, 1, "deadline fires the op anyway");
   const status = gz.greenzoneStatus(org.id);
