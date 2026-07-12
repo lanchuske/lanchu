@@ -580,8 +580,11 @@ export function createServer(): http.Server {
         const orgName = url.searchParams.get("org");
         if (!orgName) return sendJson(res, 400, { error: "org required" });
         const org = store.getOrgByName(orgName);
-        if (!org) return sendJson(res, 200, { terminals: [] });
-        return sendJson(res, 200, { terminals: store.listTerminals(org.id) });
+        if (!org) return sendJson(res, 200, { terminals: [], coordinator_agent_id: null });
+        return sendJson(res, 200, {
+          terminals: store.listTerminals(org.id),
+          coordinator_agent_id: store.resolveTileCoordinator(org.id),
+        });
       }
 
       if (url.pathname === "/api/landing" && req.method === "GET") {

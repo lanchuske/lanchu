@@ -1025,14 +1025,19 @@ async function cmdTile(): Promise<void> {
   // project config there is no org to scope by, so nothing gets arranged.
   const found = findConfig();
   let refs: TerminalRef[] = [];
+  let coordinatorRefId: string | undefined;
   if (found) {
     const tRes = await api(`/api/terminals?org=${encodeURIComponent(found.config.org)}`);
     if (tRes.ok) {
-      const { terminals } = (await tRes.json()) as { terminals: { ref: TerminalRef }[] };
+      const { terminals, coordinator_agent_id } = (await tRes.json()) as {
+        terminals: { agentId: string; ref: TerminalRef }[];
+        coordinator_agent_id: string | null;
+      };
       refs = terminals.map((t) => t.ref);
+      coordinatorRefId = terminals.find((t) => t.agentId === coordinator_agent_id)?.ref.id;
     }
   }
-  const r = tileTerminals(refs, hasFlag("dry"));
+  const r = tileTerminals(refs, hasFlag("dry"), { coordinatorRefId });
   console.log(`[${r.method}] ${r.note}`);
   // The "who is where" half of tiling: each agent's worktree, branch and
   // active task. Best-effort — skipped outside a lanchu project.

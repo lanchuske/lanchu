@@ -536,7 +536,22 @@ export interface TileResult {
 export function tileTerminals(
   refs: TerminalRef[],
   dry?: boolean,
-  effects: { hasTmux?: () => boolean; isMac?: () => boolean; run?: (osa: string) => string } = {},
+  effects: {
+    hasTmux?: () => boolean;
+    isMac?: () => boolean;
+    run?: (osa: string) => string;
+    /**
+     * task-mrg75clh15 (tile v2): window id of the coordinator's terminal — on
+     * an ODD count it gets a full-height double-width pane instead of an
+     * equal grid cell (store.resolveTileCoordinator + its ref's id). Ignored
+     * unless every known id still resolves to an open window (n === ids.length)
+     * — with any stale/closed id in the mix, position 1 in the matched list is
+     * no longer guaranteed to be the coordinator's window, so the big-pane
+     * layout is skipped in favor of the plain grid rather than risk handing
+     * the larger pane to the wrong agent.
+     */
+    coordinatorRefId?: string;
+  } = {},
 ): TileResult {
   const tmuxAvailable = effects.hasTmux ?? hasTmux;
   const mac = effects.isMac ?? isMac;
@@ -548,9 +563,14 @@ export function tileTerminals(
     return { method: "tmux", count, note: `Tiled ${count} panes in tmux session '${TMUX_SESSION}'.` };
   }
   if (mac()) {
-    const ids = refs
+    let ids = refs
       .filter((r) => r.method === "terminal.app" && /^\d+$/.test(r.id))
       .map((r) => r.id);
+    // Put the coordinator's id first — that's the position the AppleScript
+    // below treats as the "big pane" candidate.
+    const coordId = effects.coordinatorRefId;
+    const hasCoordinator = !!coordId && ids.includes(coordId);
+    if (hasCoordinator) ids = [coordId as string, ...ids.filter((id) => id !== coordId)];
     if (dry) {
       return {
         method: "terminal.app",
@@ -567,6 +587,9 @@ export function tileTerminals(
     }
     // Grid-arrange only the org's own windows, matched by id — never the raw
     // `windows` list, which sweeps up unrelated Terminal.app windows too.
+    // hasBig only fires when every known id still resolves (n = ids.length):
+    // that's the only way item 1 of `ws` is guaranteed to be the
+    // coordinator's window rather than whoever's window happened to survive.
     const osa = [
       'tell application "Finder"',
       "  try",
@@ -584,27 +607,46 @@ export function tileTerminals(
       "  end repeat",
       "  set n to count of ws",
       "  if n is 0 then return 0",
-      "  set cols to (round (n ^ 0.5) rounding up)",
-      "  set rows to (round (n / cols) rounding up)",
       "  set sw to (item 3 of sb) - (item 1 of sb)",
       "  set sh to (item 4 of sb) - (item 2 of sb)",
-      "  set cw to sw div cols",
-      "  set ch to sh div rows",
-      "  repeat with i from 1 to n",
-      "    set c to (i - 1) mod cols",
-      "    set r to (i - 1) div cols",
-      "    set x1 to (item 1 of sb) + c * cw",
-      "    set y1 to (item 2 of sb) + r * ch",
-      "    set bounds of (item i of ws) to {x1, y1, x1 + cw, y1 + ch}",
-      "  end repeat",
+      `  set hasBig to (${hasCoordinator ? "true" : "false"} and n is ${ids.length} and n > 1 and (n mod 2 is 1))`,
+      "  if hasBig then",
+      "    set bw to sw div 2",
+      "    set bounds of (item 1 of ws) to {item 1 of sb, item 2 of sb, (item 1 of sb) + bw, (item 2 of sb) + sh}",
+      "    set rest to n - 1",
+      "    set rcols to (round (rest ^ 0.5) rounding up)",
+      "    set rrows to (round (rest / rcols) rounding up)",
+      "    set rcw to (sw - bw) div rcols",
+      "    set rch to sh div rrows",
+      "    repeat with i from 2 to n",
+      "      set c to (i - 2) mod rcols",
+      "      set r to (i - 2) div rcols",
+      "      set x1 to (item 1 of sb) + bw + c * rcw",
+      "      set y1 to (item 2 of sb) + r * rch",
+      "      set bounds of (item i of ws) to {x1, y1, x1 + rcw, y1 + rch}",
+      "    end repeat",
+      "  else",
+      "    set cols to (round (n ^ 0.5) rounding up)",
+      "    set rows to (round (n / cols) rounding up)",
+      "    set cw to sw div cols",
+      "    set ch to sh div rows",
+      "    repeat with i from 1 to n",
+      "      set c to (i - 1) mod cols",
+      "      set r to (i - 1) div cols",
+      "      set x1 to (item 1 of sb) + c * cw",
+      "      set y1 to (item 2 of sb) + r * ch",
+      "      set bounds of (item i of ws) to {x1, y1, x1 + cw, y1 + ch}",
+      "    end repeat",
+      "  end if",
       "  return n",
       "end tell",
     ].join("\n");
     const count = Number.parseInt(run(osa) || "0", 10) || 0;
+    const bigPaneApplied = hasCoordinator && count === ids.length && count > 1 && count % 2 === 1;
     const note =
       count < ids.length
         ? `Arranged ${count} of ${ids.length} known agent Terminal.app windows into a mosaic (${ids.length - count} no longer open).`
-        : `Arranged ${count} Terminal.app windows into a mosaic.`;
+        : `Arranged ${count} Terminal.app windows into a mosaic${bigPaneApplied ? " (coordinator gets the larger pane)" : ""}.`;
     return { method: "terminal.app", count, note };
   }
   return { method: "unsupported", count: 0, note: "Terminal tiling needs tmux or macOS." };

@@ -3113,6 +3113,26 @@ export function getCoordinator(orgId: string): CoordinatorLease | null {
 }
 
 /**
+ * Who gets the "larger pane" in `lanchu tile` v2's odd-count layout
+ * (task-mrg75clh15): the current coordinator lease holder, read live from the
+ * coordinator table, if the lease hasn't expired; else the first non-retired
+ * agent on a product/supervisor role — the org's de facto lead when nobody is
+ * formally holding the lease.
+ */
+export function resolveTileCoordinator(orgId: string): string | null {
+  const lease = getCoordinator(orgId);
+  if (lease && !lease.expired) return lease.agent_id;
+  const row = db()
+    .prepare(
+      `SELECT a.id FROM agent a JOIN role r ON r.id = a.role_id
+       WHERE a.org_id = ? AND a.state != 'retired' AND r.name IN ('product', 'supervisor')
+       ORDER BY a.created_at ASC LIMIT 1`,
+    )
+    .get(orgId) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+/**
  * Take (or renew) the lease. Grants when the lease is free, expired, or its
  * holder has no live transport; fails while a LIVE holder's lease is current.
  */
