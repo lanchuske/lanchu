@@ -166,6 +166,18 @@ async function latestVersion(): Promise<string | null> {
 }
 
 /**
+ * `claude` resolves to a `.cmd` shim on Windows (npm's own install
+ * mechanism); node's spawnSync/spawn without shell:true does not run
+ * PATH-resolved .cmd/.bat files there (a well-known Node/Windows gap —
+ * EINVAL or a silent non-zero exit). shell:true is Windows-only here:
+ * POSIX needs no shell, and node's own argv quoting for shell:true keeps
+ * `--header "Authorization: Bearer <token>"` intact either way.
+ */
+function spawnClaude(args: string[]) {
+  return spawnSync("claude", args, { encoding: "utf8" as const, shell: process.platform === "win32" });
+}
+
+/**
  * Read this cwd's `lanchu` MCP entry straight from the Claude CLI (never
  * hand-parse its config file — same reasoning bootstrapCommand already
  * follows: `claude mcp add/remove` is the only stable interface, the file
@@ -173,7 +185,7 @@ async function latestVersion(): Promise<string | null> {
  * output all just mean "nothing to diagnose here", never a crash.
  */
 function readLocalMcpEntry(): { scope: "local" | "user" | "project" | "unknown"; token: string } | null {
-  const res = spawnSync("claude", ["mcp", "get", "lanchu"], { encoding: "utf8" });
+  const res = spawnClaude(["mcp", "get", "lanchu"]);
   if (res.status !== 0 || !res.stdout) return null;
   const token = /Authorization:\s*Bearer\s+(\S+)/.exec(res.stdout)?.[1];
   if (!token) return null;
@@ -712,8 +724,8 @@ async function cmdReconnect(): Promise<void> {
   const s = (await post("/session", {
     org: found.config.org, project: found.config.project, reuseAgentId: diagnosis.agent_id, cwd: process.cwd(),
   })) as { token: string; agentName: string; mcpUrl: string };
-  spawnSync("claude", ["mcp", "remove", "lanchu", "-s", entry.scope === "unknown" ? "local" : entry.scope]);
-  const added = spawnSync("claude", [
+  spawnClaude(["mcp", "remove", "lanchu", "-s", entry.scope === "unknown" ? "local" : entry.scope]);
+  const added = spawnClaude([
     "mcp", "add", "--transport", "http", "lanchu", s.mcpUrl, "--header", `Authorization: Bearer ${s.token}`,
   ]);
   if (added.status !== 0) {
