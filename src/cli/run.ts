@@ -169,12 +169,22 @@ async function latestVersion(): Promise<string | null> {
  * `claude` resolves to a `.cmd` shim on Windows (npm's own install
  * mechanism); node's spawnSync/spawn without shell:true does not run
  * PATH-resolved .cmd/.bat files there (a well-known Node/Windows gap —
- * EINVAL or a silent non-zero exit). shell:true is Windows-only here:
- * POSIX needs no shell, and node's own argv quoting for shell:true keeps
- * `--header "Authorization: Bearer <token>"` intact either way.
+ * EINVAL or a silent non-zero exit). shell:true is required on Windows,
+ * but node's ARRAY-to-cmd.exe auto-quoting for shell:true is unreliable
+ * for an arg containing both a space and a colon (`Authorization: Bearer
+ * <token>` arrived at the child as just `Authorization:`, verified live
+ * in CI) — build the whole command as one explicitly-quoted string
+ * instead of trusting that conversion. POSIX needs neither: no shell,
+ * array args passed through exactly as given.
  */
+function quoteForWindowsShell(arg: string): string {
+  return /[\s"]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+}
 function spawnClaude(args: string[]) {
-  return spawnSync("claude", args, { encoding: "utf8" as const, shell: process.platform === "win32" });
+  if (process.platform === "win32") {
+    return spawnSync(["claude", ...args].map(quoteForWindowsShell).join(" "), { encoding: "utf8" as const, shell: true });
+  }
+  return spawnSync("claude", args, { encoding: "utf8" as const });
 }
 
 /**
