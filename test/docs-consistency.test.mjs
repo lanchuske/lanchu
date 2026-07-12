@@ -32,3 +32,16 @@ test("CHANGELOG has an entry for the current version", () => {
     `CHANGELOG.md must have a "## ${version}" entry before releasing`,
   );
 });
+
+// task-mrgp5aad3: the v0.5.13 release shipped to npm with config.ts's
+// VERSION frozen at 0.5.12 (CLI --version, server banner and MCP serverInfo
+// all reported the previous version) while every doc surface above was
+// correctly bumped and this exact suite passed — it never compared against
+// the compiled config, only against docs. config.ts now COMPUTES its
+// VERSION from package.json at load time instead of duplicating it as a
+// hardcoded string, so the class of bug is structurally impossible; this
+// test is the regression guard against ever going back to a copy.
+test("src/config.ts VERSION matches package.json (computed, not copied)", async () => {
+  const { VERSION } = await import("../dist/config.js");
+  assert.equal(VERSION, version);
+});
