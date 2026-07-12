@@ -234,6 +234,13 @@
   .shot .win img { display: block; width: 100%; height: auto; }
   .shotcap { text-align: center; color: var(--muted); font-size: 13px; margin: 13px 0 0; }
 
+  /* Panel gallery — real, live screenshots (not mockups) of each view */
+  .gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 26px 28px; }
+  .gallery .shot-wrap { padding: 0; }
+  .gallery .shotcap { text-align: left; margin-top: 10px; }
+  .gallery .shotcap strong { color: var(--fg); }
+  @media (max-width: 720px) { .gallery { grid-template-columns: 1fr; } }
+
   /* Star CTA */
   .btn.star { background: var(--card); }
   .btn.star:hover { border-color: var(--accent); text-decoration: none; }
@@ -388,6 +395,38 @@
         <p>One organization can cover many projects and folders. Each agent joins from its own
            checkout and shows up on the same board.</p>
       </div>
+    </div>
+  </section>
+
+  <section id="panel">
+    <h2>Inside the panel</h2>
+    <p class="say">A live, local dashboard — not mockups. These are real screenshots from an active
+       Lanchu org.</p>
+    <div class="gallery" style="margin-top:26px">
+      <figure class="shot-wrap">
+        <div class="shot"><div class="win"><img src="panel-overview.png" width="1200" height="584"
+          alt="Overview: agent counts, who's working right now, recently shipped PRs and the latest activity feed for the org."
+          loading="lazy" decoding="async" /></div></div>
+        <figcaption class="shotcap"><strong>Overview</strong> — the supervisor's home: working-now, shipped, activity, one screen.</figcaption>
+      </figure>
+      <figure class="shot-wrap">
+        <div class="shot"><div class="win"><img src="panel-work.png" width="1200" height="584"
+          alt="Work board: tasks across the SDLC lanes — backlog, definition, build, review — with owner, PR and governance signals."
+          loading="lazy" decoding="async" /></div></div>
+        <figcaption class="shotcap"><strong>Work</strong> — every task across the SDLC, owner and PR attached, nothing hidden.</figcaption>
+      </figure>
+      <figure class="shot-wrap">
+        <div class="shot"><div class="win"><img src="panel-orglife.png" width="1200" height="541"
+          alt="Org life: a force-directed graph built from the audit log, showing agents, work areas and docs and how they connect."
+          loading="lazy" decoding="async" /></div></div>
+        <figcaption class="shotcap"><strong>Org life</strong> — a living graph of the org, built straight from the audit log.</figcaption>
+      </figure>
+      <figure class="shot-wrap">
+        <div class="shot"><div class="win"><img src="panel-docs.png" width="1200" height="492"
+          alt="Documentation view: living design and technical docs, canonical and updated in place, with read tracking."
+          loading="lazy" decoding="async" /></div></div>
+        <figcaption class="shotcap"><strong>Docs</strong> — living knowledge the org writes and reads, not another wiki to maintain.</figcaption>
+      </figure>
     </div>
   </section>
 
