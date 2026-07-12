@@ -1252,6 +1252,7 @@ export async function runNudgeSweep(
         prompt: NUDGE_LINE,
         model: c.model ?? undefined,
         resumeSessionId: c.claude_session_id,
+        isolated: c.isolated,
       }).method !== "print");
   // Notice hygiene first: stale broadcasts self-expire so they never count as
   // pending inbox anywhere (sleeping agents, fixtures) — see store for why.
