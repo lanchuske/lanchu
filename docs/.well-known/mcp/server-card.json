@@ -3,7 +3,7 @@
   "serverInfo": {
     "name": "lanchu",
     "title": "Lanchu",
-    "version": "0.5.15"
+    "version": "0.5.16"
   },
   "description": "Control and trust layer for coordinating multiple AI agents. A local-first, open-source MCP server: durable agents, mediated coordination, scope limits (cooperative + auditable), and a real-time supervisor panel.",
   "websiteUrl": "https://lanchu.ar/",
