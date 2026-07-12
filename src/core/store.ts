@@ -2905,6 +2905,31 @@ export function retireAgent(
   return { retired: true, blockedBy: [] };
 }
 
+export interface ShutdownBlocker {
+  agent: string;
+  task_id: string;
+  task_title: string;
+}
+
+/**
+ * Pre-flight for `lanchu shutdown` (task-mrgjh7uk1): refuse a clean shutdown
+ * while real work is in flight — an end-of-day close-out must never silently
+ * drop a claimed task. Pure check, no side effects; the caller (server.ts,
+ * which also checks isGreenzoneActive — store.ts cannot import greenzone.ts,
+ * which itself imports store.ts) decides what --force means: closing
+ * terminals, retiring agents and stopping the server all happen there.
+ */
+export function shutdownBlockers(orgId: string): ShutdownBlocker[] {
+  const blockedBy: ShutdownBlocker[] = [];
+  for (const a of listAgents(orgId)) {
+    if (a.state === "retired") continue;
+    for (const t of openTasksForAgent(a.id)) {
+      blockedBy.push({ agent: a.name, task_id: t.id, task_title: t.title });
+    }
+  }
+  return blockedBy;
+}
+
 export interface RetirementRequest {
   agent_id: string;
   agent_name: string | null;
@@ -3735,6 +3760,32 @@ export function noticeServerRestart(version: string): number {
       });
       queued += 1;
     }
+  }
+  return queued;
+}
+
+/**
+ * Courtesy heads-up before `lanchu shutdown` closes terminals (task-mrgjh7uk1)
+ * — every non-retired agent in the org hears it's coming and what survives,
+ * before anything actually closes. Broadcast-class: never wakes anyone,
+ * expires on its own — this is informational, not a request to confirm.
+ */
+export function noticeOrgShutdown(orgId: string, opts: { retire?: boolean } = {}): number {
+  let queued = 0;
+  for (const a of listAgents(orgId)) {
+    if (a.state === "retired") continue;
+    insertNotice({
+      orgId,
+      kind: "system",
+      fromAgentId: null,
+      toAgentId: a.id,
+      body: opts.retire
+        ? "The org is shutting down: your terminal is about to close and you will be retired. The DB, your worktree/branch and your identity all survive."
+        : "The org is shutting down: your terminal is about to close. You stay durable — DB, worktree/branch and identity all survive — respawn or reconnect to resume.",
+      ref: "org-shutdown",
+      isBroadcast: true,
+    });
+    queued += 1;
   }
   return queued;
 }

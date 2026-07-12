@@ -150,6 +150,13 @@ export function sdlcMode(): SdlcMode {
   return m === "off" || m === "strict" ? m : "assist";
 }
 
+/** `lanchu shutdown`: how long the courtesy broadcast gets to land before terminals actually close. */
+export function shutdownDelayMs(): number {
+  const s = process.env.LANCHU_SHUTDOWN_DELAY_MS;
+  const n = s !== undefined ? Number.parseInt(s, 10) : 2000;
+  return Number.isFinite(n) && n >= 0 ? n : 2000;
+}
+
 /** How long a notice may sit undelivered before its idle recipient gets nudged. */
 export function nudgeAfterMs(): number {
   const s = process.env.LANCHU_NUDGE_AFTER_SECONDS;
