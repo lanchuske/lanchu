@@ -25,7 +25,7 @@ import { buildProvenance } from "../core/provenance.js";
 import { gitInfo } from "../core/git.js";
 import { slugify } from "../core/worktree.js";
 import { detectRuntimes } from "../core/runtimes.js";
-import { spawnTerminal, tileTerminals, type TerminalRef } from "../server/cockpit.js";
+import { spawnTerminal, terminalTitle, tileTerminals, type TerminalRef } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
 
 const args = process.argv.slice(2);
@@ -978,7 +978,7 @@ async function cmdSpawn(): Promise<void> {
       ? path.join(gitInfo(process.cwd()).worktree ?? process.cwd(), ".lanchu", "worktrees", slugify(agentName))
       : process.cwd();
     const result = spawnTerminal({
-      title: `${org}·${agentName}`, agentName, cwd: previewCwd, token: "<token — minted only on a real spawn>",
+      title: terminalTitle(org, agentName, roleName), agentName, cwd: previewCwd, token: "<token — minted only on a real spawn>",
       prompt: SPAWN_PROMPT, model: flag("model"), dry: true,
     });
     console.log(`Would open [${result.method}] ${result.note.replace(/^Opened /, "Would open ")}`);
@@ -1009,7 +1009,7 @@ async function cmdSpawn(): Promise<void> {
   // or when the directory isn't a git repo).
   const cwd = s.worktree ?? process.cwd();
   const result = spawnTerminal({
-    title: `${org}·${s.agentName}`, agentName: s.agentName, cwd, token: s.token, prompt: SPAWN_PROMPT,
+    title: terminalTitle(org, s.agentName, roleName), agentName: s.agentName, cwd, token: s.token, prompt: SPAWN_PROMPT,
     colorHex: s.color?.hex, model: s.model ?? undefined,
   });
   // Persist the terminal handle so the panel can re-focus this agent later.

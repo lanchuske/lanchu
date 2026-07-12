@@ -14,6 +14,21 @@ import { agentColor, contrastRatio16, tintedBg16, type Rgb16 } from "../core/col
 
 const TMUX_SESSION = "lanchu";
 
+/**
+ * The short, human title a spawned terminal opens with (task-mrg7b6oz19).
+ * Default `org·agent` (e.g. "lanchu·builder-core-2") matches every surface
+ * that already shows that pairing (panel chips, tmux pane borders). Set
+ * LANCHU_TERM_TITLE=agent for just the agent name, or =role for the role
+ * name (falls back to the agent name when the agent has none) — anything
+ * else, including unset, keeps the default.
+ */
+export function terminalTitle(orgName: string, agentName: string, roleName?: string | null): string {
+  const mode = process.env.LANCHU_TERM_TITLE;
+  if (mode === "agent") return agentName;
+  if (mode === "role") return roleName || agentName;
+  return `${orgName}·${agentName}`;
+}
+
 function has(cmd: string): boolean {
   try {
     return spawnSync(cmd, ["-V"], { stdio: "ignore" }).status === 0;
@@ -268,7 +283,11 @@ export function spawnTerminal(input: {
    */
   isolated?: boolean;
   dry?: boolean;
+  /** Test seam — same DI shape as tileTerminals' effects, so platform/tmux and the macOS AppleScript call are deterministic in tests. */
+  effects?: { hasTmux?: () => boolean; isMac?: () => boolean; run?: (osa: string) => string };
 }): SpawnResult {
+  const tmuxAvailable = input.effects?.hasTmux ?? hasTmux;
+  const mac = input.effects?.isMac ?? isMac;
   const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model, input.resumeSessionId, input.dry);
   const isolated = input.isolated ?? true;
   // Wake v4: the Stop hook keeps the agent from idling with queued notices —
@@ -281,7 +300,7 @@ export function spawnTerminal(input: {
     ? " Shared directory (isolate:false) — Stop/wake hooks were NOT installed (they would leak into every other session using this cwd); this agent relies on piggyback notices during tool calls only."
     : "";
 
-  if (hasTmux()) {
+  if (tmuxAvailable()) {
     const plan: SpawnResult = {
       method: "tmux",
       title: input.title,
@@ -312,7 +331,7 @@ export function spawnTerminal(input: {
     return plan;
   }
 
-  if (isMac()) {
+  if (mac()) {
     const plan: SpawnResult = {
       method: "terminal.app",
       title: input.title,
@@ -321,17 +340,22 @@ export function spawnTerminal(input: {
     };
     if (input.dry) return plan;
     // Return the new window's id so we can re-focus it later regardless of title.
+    // `custom title` alone only supplies one component of Terminal's title-bar
+    // composition — the profile's own settings (shell path, dimensions, command
+    // name) still get appended around it. `title displays custom title` is the
+    // separate property that tells the tab to show ONLY the custom title.
     const osa = [
       'tell application "Terminal"',
       "  activate",
       `  set t to do script ${asAppleStr(command)}`,
       "  delay 0.4",
       `  set custom title of t to ${asAppleStr(input.title)}`,
+      "  set title displays custom title of t to true",
       "  return id of front window",
       "end tell",
     ].join("\n");
-    const out = spawnSync("osascript", ["-e", osa], { encoding: "utf8" });
-    const winId = (out.stdout ?? "").trim();
+    const run = input.effects?.run ?? ((s: string) => (spawnSync("osascript", ["-e", s], { encoding: "utf8" }).stdout ?? "").trim());
+    const winId = run(osa);
     if (/^\d+$/.test(winId)) plan.ref = { method: "terminal.app", id: winId };
     if (/^\d+$/.test(winId) && input.agentName) {
       tintTerminalWindow(winId, input.colorHex ?? agentColor(input.agentName).hex);

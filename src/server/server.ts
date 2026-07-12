@@ -13,7 +13,7 @@ import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn, removeAgentWorktree } from "../core/worktree.js";
 import { ScopeError } from "../core/types.js";
-import { claudeLiveSessionIds, closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs } from "./cockpit.js";
+import { claudeLiveSessionIds, closeTerminal, focusTerminal, spawnTerminal, terminalAlive, terminalLogs, terminalTitle } from "./cockpit.js";
 import { clearContexts, getContext, putContext } from "./context.js";
 import { addLiveSession, isAgentLive, removeLiveSession } from "../core/presence.js";
 import { buildProvenance, packageRoot } from "../core/provenance.js";
@@ -386,7 +386,7 @@ function revealAgent(agentId: string): {
   const agent = store.getAgent(agentId);
   if (!agent) return { action: "unavailable", reason: "agent not found" };
   const org = store.getOrg(agent.org_id);
-  const title = `${org?.name ?? "lanchu"}·${agent.name}`;
+  const title = terminalTitle(org?.name ?? "lanchu", agent.name, store.getRole(agent.role_id)?.name);
 
   const ref = store.getAgentTerminal(agent.id);
   if (ref && focusTerminal(ref)) return { action: "focused" };

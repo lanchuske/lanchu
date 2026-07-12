@@ -240,6 +240,10 @@ Grouped as in `lanchu help`.
   does leak, `lanchu rotate-tokens` invalidates every open session in the org.
 - **`LANCHU_STALE_HOURS`** (default `24`): after how many hours a task belonging to an
   idle agent is marked **stale**.
+- **`LANCHU_TERM_TITLE`**: spawned-terminal title format — default `org·agent` (e.g.
+  `lanchu·builder-core-2`); `agent` for just the agent name; `role` for just the role
+  (falls back to the agent name when the agent has none). Purely cosmetic — `lanchu tile`
+  matches terminals by window/pane id, never by title.
 
 ### Remote backend + authentication
 
