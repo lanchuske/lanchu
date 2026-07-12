@@ -43,11 +43,13 @@ const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
  * shell removes the file on exit (trap EXIT); a leftover from a hard kill is
  * still unreadable to other users.
  */
-function writeMcpConfigFile(token: string, agentName?: string): string {
+/** dry: task-mrg3xi2x2 — a preview must never touch disk; only the path is needed to render the command string. */
+function writeMcpConfigFile(token: string, agentName?: string, dry?: boolean): string {
   const dir = path.join(stateDir(), "run");
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const slug = (agentName ?? "agent").replace(/[^a-zA-Z0-9._-]/g, "_");
   const file = path.join(dir, `${slug}-${randomBytes(4).toString("hex")}.mcp.json`);
+  if (dry) return file;
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const config = JSON.stringify({
     mcpServers: { lanchu: { type: "http", url: mcpUrl(), headers: { Authorization: `Bearer ${token}` } } },
   });
@@ -56,7 +58,7 @@ function writeMcpConfigFile(token: string, agentName?: string): string {
 }
 
 /** Shell command that wires Claude to Lanchu and launches it with a first prompt. */
-export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string, title?: string, model?: string, resumeSessionId?: string): string {
+export function bootstrapCommand(cwd: string, token: string, prompt: string, agentName?: string, title?: string, model?: string, resumeSessionId?: string, dry?: boolean): string {
   // Carry this agent's identity as a per-process MCP config FILE. We
   // deliberately avoid `claude mcp add lanchu`, which writes a shared,
   // project-scoped server: a second agent in the same repo would then either
@@ -64,7 +66,7 @@ export function bootstrapCommand(cwd: string, token: string, prompt: string, age
   // exists) or clobber it — both cause the agent's lanchu://me to report the
   // wrong identity/role. --strict-mcp-config makes the identity deterministic.
   // The file (not inline JSON) keeps the token out of window titles and ps.
-  const mcpConfigFile = writeMcpConfigFile(token, agentName);
+  const mcpConfigFile = writeMcpConfigFile(token, agentName, dry);
   // Name the window before anything else runs, so the terminal never titles
   // itself after the raw command.
   const setTitle = title ? `printf '\\033]0;%s\\007' ${sq(title)}; ` : "";
@@ -267,7 +269,7 @@ export function spawnTerminal(input: {
   isolated?: boolean;
   dry?: boolean;
 }): SpawnResult {
-  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model, input.resumeSessionId);
+  const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model, input.resumeSessionId, input.dry);
   const isolated = input.isolated ?? true;
   // Wake v4: the Stop hook keeps the agent from idling with queued notices —
   // preferred over any terminal wake. Installed for every launch method (the
