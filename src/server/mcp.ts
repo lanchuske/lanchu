@@ -9,7 +9,7 @@ import { detectRuntimes } from "../core/runtimes.js";
 import { sameModelTier, suggestModel } from "../core/routing.js";
 import { QuotaError, ScopeError } from "../core/types.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn } from "../core/worktree.js";
-import { spawnTerminal, tileTerminals } from "./cockpit.js";
+import { spawnTerminal, terminalTitle, tileTerminals } from "./cockpit.js";
 import { putContext, type SessionContext } from "./context.js";
 
 const INSTRUCTIONS = [
@@ -900,7 +900,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         const prompt =
           "You are a new Lanchu teammate. Greet the user in one line, then IMMEDIATELY read org_context (never wait for input first): if your objective or a pending notice names your task, claim it and start working right away, narrating as you go. Only ask the user which task to take when nothing assigns you work. While you work, watch for friction in Lanchu itself and file it with task_create using the taxonomy tags (bug | extension | idea | process) plus area tags and evidence — the help tool has the details.";
         const result = spawnTerminal({
-          title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd, token, prompt,
+          title: terminalTitle(ctx.orgName, agent.name, roleName), agentName: agent.name, cwd, token, prompt,
           colorHex: store.agentColorOf(agent).hex,
           model: launchModel ?? undefined,
           isolated: !!wt,
