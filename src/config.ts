@@ -1,9 +1,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-/** Single source of truth for the version (keep in sync with package.json). */
-export const VERSION = "0.5.14";
+/**
+ * The version, read from package.json — the ONE source of truth (task-
+ * mrgp5aad3). Previously a second hardcoded copy lived here; it drifted from
+ * package.json in the v0.5.13 release (config.ts stayed at 0.5.12 while
+ * package.json/CHANGELOG/docs were all correctly bumped) and nobody caught
+ * it until users saw the wrong `--version` on npm — the 232-test suite
+ * passed because it only ever compared docs surfaces against package.json,
+ * never against the compiled config. Reading it here instead of copying it
+ * makes the whole class of bug impossible: there is nothing left to drift.
+ */
+export const VERSION: string = (() => {
+  // dist/config.js -> package root is one level up (package.json ships in
+  // every npm tarball regardless of the "files" field, right beside dist/).
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { version: string };
+  return pkg.version;
+})();
 
 /**
  * Local server paths and configuration, OS-agnostic.
