@@ -2,6 +2,17 @@
 
 Notable changes to [lanchu](https://www.npmjs.com/package/lanchu). Numbers reference pull requests in this repository.
 
+## 0.5.16 — 2026-07-12
+
+`lanchu tile` fixed and extended, and the site gets real product evidence.
+
+- Bug (tile): `lanchu tile` now grid-arranges the org's own terminals, matched by window id — never every open Terminal.app window, and never a silent "0 windows" on a script error (#112).
+- CLI: spawned terminals title with only the short name — `LANCHU_TERM_TITLE=agent|role` overrides the default `org·agent` (#113).
+- CLI: `lanchu tile` v2 — the coordinator's terminal gets the larger pane on an odd count (#114).
+- Site: copy-to-clipboard on the install command, with a Clarity event to measure it (#115).
+- Site: a real panel screenshot gallery — Overview, Work, Org life, Docs — replaces "trust us" with an actual look (#116).
+- Site: the hero demo GIF now includes the Org life graph (#117).
+
 ## 0.5.15 — 2026-07-12
 
 Backlog sweep: orphaned bugs, spawn/dry-run correctness, and a new `lanchu reconnect`.
