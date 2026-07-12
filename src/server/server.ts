@@ -1302,14 +1302,6 @@ export function startServer(): Promise<http.Server> {
   } catch {
     /* reconciliation is best-effort */
   }
-  // Session freshness (task-mrgou4pl1): pre-restart sessions can't see tools
-  // this build added — tell every agent through the channel that never goes
-  // stale (piggyback notices). Broadcast-class: expires, never wakes anyone.
-  try {
-    store.noticeServerRestart(VERSION);
-  } catch {
-    /* the heads-up is best-effort */
-  }
   // Warm the runtime inventory off the startup path (each probe is capped at
   // 1.5s; deferring keeps `lanchu serve` responsive on machines with many CLIs).
   setTimeout(() => detectRuntimes({ refresh: true }), 0).unref();
@@ -1356,6 +1348,21 @@ export function startServer(): Promise<http.Server> {
       }
       reject(err);
     });
-    server.listen(port(), host(), () => resolve(server));
+    server.listen(port(), host(), () => {
+      // Session freshness (task-mrgou4pl1): pre-restart sessions can't see
+      // tools this build added — tell every agent through the channel that
+      // never goes stale (piggyback notices). Broadcast-class: expires,
+      // never wakes anyone. Fired only once the port is actually bound — a
+      // boot that dies with EADDRINUSE must never have already told every
+      // agent the server restarted (task-mrgqzvxf6: a boot that died on
+      // port-in-use still broadcast, 19s after a boot that actually
+      // succeeded, confusing which build was really live).
+      try {
+        store.noticeServerRestart(VERSION);
+      } catch {
+        /* the heads-up is best-effort */
+      }
+      resolve(server);
+    });
   });
 }
