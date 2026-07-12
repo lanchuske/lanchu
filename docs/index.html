@@ -167,9 +167,15 @@
   .btn.ghost:hover { text-decoration: none; border-color: var(--accent); }
 
   pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 10px;
-        padding: 14px 16px; overflow-x: auto; margin: 0 0 22px; }
+        padding: 14px 16px; overflow-x: auto; margin: 0 0 22px; position: relative; }
   code { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .prompt { color: var(--muted); user-select: none; }
+  pre.install { padding-right: 66px; }
+  .copy-btn { position: absolute; top: 8px; right: 8px; padding: 4px 10px; font-size: 12px;
+        font-weight: 600; border-radius: 6px; border: 1px solid var(--line); background: var(--bg);
+        color: var(--muted); cursor: pointer; line-height: 1.4; }
+  .copy-btn:hover { color: var(--fg); border-color: var(--accent); }
+  .copy-btn.copied { color: var(--accent); border-color: var(--accent); }
   p code, li code, dd code { background: var(--code-bg); border: 1px solid var(--line);
         border-radius: 6px; padding: 1px 5px; font-size: 13.5px; }
 
@@ -265,7 +271,7 @@
        and you can't really tell what they did. <strong>Lanchu</strong> keeps them organized — like a
        shared control room. Each agent stays in its lane, and you get one screen that shows,
        and remembers, everything they do. It runs entirely on your own computer.</p>
-    <pre><code><span class="prompt">$ </span>npx lanchu</code></pre>
+    <pre class="install"><code><span class="prompt">$ </span>npx lanchu</code></pre>
     <div class="cta">
       <a class="btn primary" href="#start">Get started</a>
       <a class="btn star" href="https://github.com/lanchuske/lanchu"><span class="s">★</span> Star on GitHub</a>
@@ -420,7 +426,7 @@
       <li>
         <h3>Start it in your project</h3>
         <p>A technical person runs one command; a short guided wizard sets up your team, agents and roles.</p>
-        <pre><code><span class="prompt">$ </span>npx lanchu</code></pre>
+        <pre class="install"><code><span class="prompt">$ </span>npx lanchu</code></pre>
       </li>
       <li>
         <h3>Connect your agents</h3>
@@ -531,6 +537,44 @@
     <a href="https://github.com/lanchuske/lanchu/discussions">Discussions</a>
   </footer>
 </main>
+
+<!-- Copy-to-clipboard on the install command (task-mrgqiwn221). Fires a
+     Clarity custom event (copy_install_cmd) via the snippet above; the
+     window.clarity guard just keeps this a silent no-op if that script is
+     ever blocked or slow to load, not a sign it's unconfigured. -->
+<script>
+(function () {
+  document.querySelectorAll('pre.install').forEach(function (pre) {
+    var btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.type = 'button';
+    btn.textContent = 'Copy';
+    btn.setAttribute('aria-label', 'Copy command to clipboard');
+    function copied() {
+      if (window.clarity) window.clarity('event', 'copy_install_cmd');
+      btn.textContent = 'Copied';
+      btn.classList.add('copied');
+      setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    }
+    function legacyCopy(text) {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { if (document.execCommand('copy')) copied(); } catch (e) { /* nothing left to try */ }
+      document.body.removeChild(ta);
+    }
+    btn.addEventListener('click', function () {
+      var text = pre.textContent.replace(/^\$\s*/, '').trim();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(copied).catch(function () { legacyCopy(text); });
+      } else {
+        legacyCopy(text);
+      }
+    });
+    pre.appendChild(btn);
+  });
+})();
+</script>
 
 <!-- Live project stats: public, anonymous, read-only calls to the npm & GitHub APIs. -->
 <script>
