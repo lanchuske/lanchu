@@ -25,7 +25,7 @@ import { buildProvenance } from "../core/provenance.js";
 import { gitInfo } from "../core/git.js";
 import { slugify } from "../core/worktree.js";
 import { detectRuntimes } from "../core/runtimes.js";
-import { spawnTerminal, tileTerminals } from "../server/cockpit.js";
+import { spawnTerminal, tileTerminals, type TerminalRef } from "../server/cockpit.js";
 import { startServer } from "../server/server.js";
 
 const args = process.argv.slice(2);
@@ -1021,11 +1021,21 @@ async function cmdSpawn(): Promise<void> {
 
 async function cmdTile(): Promise<void> {
   await ensureServer();
-  const r = tileTerminals(hasFlag("dry"));
+  // Scope the mosaic to this org's own known agent terminals — without a
+  // project config there is no org to scope by, so nothing gets arranged.
+  const found = findConfig();
+  let refs: TerminalRef[] = [];
+  if (found) {
+    const tRes = await api(`/api/terminals?org=${encodeURIComponent(found.config.org)}`);
+    if (tRes.ok) {
+      const { terminals } = (await tRes.json()) as { terminals: { ref: TerminalRef }[] };
+      refs = terminals.map((t) => t.ref);
+    }
+  }
+  const r = tileTerminals(refs, hasFlag("dry"));
   console.log(`[${r.method}] ${r.note}`);
   // The "who is where" half of tiling: each agent's worktree, branch and
   // active task. Best-effort — skipped outside a lanchu project.
-  const found = findConfig();
   if (!found) return;
   const res = await api(`/api/board?org=${encodeURIComponent(found.config.org)}`);
   const b = (await res.json()) as {

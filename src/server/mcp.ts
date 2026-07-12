@@ -929,7 +929,8 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         branch: a.branch,
         active_task: a.active_task_id ? { id: a.active_task_id, title: a.active_task_title } : null,
       }));
-      return text({ ...tileTerminals(), agents: roster });
+      const refs = store.listTerminals(ctx.orgId).map((t) => t.ref);
+      return text({ ...tileTerminals(refs), agents: roster });
     },
   );
 
