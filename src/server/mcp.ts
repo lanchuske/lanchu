@@ -929,8 +929,11 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         branch: a.branch,
         active_task: a.active_task_id ? { id: a.active_task_id, title: a.active_task_title } : null,
       }));
-      const refs = store.listTerminals(ctx.orgId).map((t) => t.ref);
-      return text({ ...tileTerminals(refs), agents: roster });
+      const terminals = store.listTerminals(ctx.orgId);
+      const coordinatorAgentId = store.resolveTileCoordinator(ctx.orgId);
+      const coordinatorRefId = terminals.find((t) => t.agentId === coordinatorAgentId)?.ref.id;
+      const refs = terminals.map((t) => t.ref);
+      return text({ ...tileTerminals(refs, false, { coordinatorRefId }), agents: roster });
     },
   );
 
