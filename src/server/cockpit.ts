@@ -253,20 +253,38 @@ export function spawnTerminal(input: {
   model?: string;
   /** Wake v5 refire: reopen this Claude session instead of starting fresh. */
   resumeSessionId?: string;
+  /**
+   * Was this agent given its own isolated worktree? Hooks are only ever
+   * installed into an isolated cwd — writing them into a SHARED directory's
+   * settings.local.json would apply THIS agent's Stop/wake hooks (bearing its
+   * token, its inbox) to every OTHER session using that same directory,
+   * coordinator included (task-mrgqt7eh4: a probe spawned isolate:false
+   * leaked its hooks into the repo root, and every session there started
+   * reporting the probe's notice count as its own Stop feedback). Defaults
+   * true so existing callers that already operate on a known-isolated cwd
+   * (refire, tests) are unaffected.
+   */
+  isolated?: boolean;
   dry?: boolean;
 }): SpawnResult {
   const command = bootstrapCommand(input.cwd, input.token, input.prompt, input.agentName, input.title, input.model, input.resumeSessionId);
+  const isolated = input.isolated ?? true;
   // Wake v4: the Stop hook keeps the agent from idling with queued notices —
   // preferred over any terminal wake. Installed for every launch method (the
-  // print path's user runs the command in this same cwd).
-  if (!input.dry) installStopHook(input.cwd, input.token, input.agentName);
+  // print path's user runs the command in this same cwd) — but ONLY into an
+  // isolated worktree; a shared directory's settings.local.json is never a
+  // safe home for one agent's hooks (see `isolated` doc above).
+  if (!input.dry && isolated) installStopHook(input.cwd, input.token, input.agentName);
+  const hooksNote = !isolated
+    ? " Shared directory (isolate:false) — Stop/wake hooks were NOT installed (they would leak into every other session using this cwd); this agent relies on piggyback notices during tool calls only."
+    : "";
 
   if (hasTmux()) {
     const plan: SpawnResult = {
       method: "tmux",
       title: input.title,
       command,
-      note: `tmux pane in session '${TMUX_SESSION}'. Attach with: tmux attach -t ${TMUX_SESSION}`,
+      note: `tmux pane in session '${TMUX_SESSION}'. Attach with: tmux attach -t ${TMUX_SESSION}${hooksNote}`,
     };
     if (input.dry) return plan;
     // ensure session, add a tiled pane titled org·agent, and capture its pane id
@@ -297,7 +315,7 @@ export function spawnTerminal(input: {
       method: "terminal.app",
       title: input.title,
       command,
-      note: "Opened a new Terminal.app window.",
+      note: `Opened a new Terminal.app window.${hooksNote}`,
     };
     if (input.dry) return plan;
     // Return the new window's id so we can re-focus it later regardless of title.
@@ -323,7 +341,7 @@ export function spawnTerminal(input: {
     method: "print",
     title: input.title,
     command,
-    note: "No tmux and not macOS — run this command in a new terminal yourself.",
+    note: `No tmux and not macOS — run this command in a new terminal yourself.${hooksNote}`,
   };
 }
 

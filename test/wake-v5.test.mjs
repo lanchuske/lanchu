@@ -13,7 +13,7 @@ process.env.LANCHU_NUDGE_AFTER_SECONDS = "1";
 
 const store = await import("../dist/core/store.js");
 const { runNudgeSweep, NUDGE_LINE } = await import("../dist/server/server.js");
-const { bootstrapCommand, installStopHook } = await import("../dist/server/cockpit.js");
+const { bootstrapCommand, installStopHook, spawnTerminal } = await import("../dist/server/cockpit.js");
 
 function setup(orgName) {
   const org = store.getOrCreateOrg(orgName);
@@ -206,4 +206,53 @@ test("the asyncRewake rung's lock-cleanup trap survives a state dir with a space
   } finally {
     process.env.LANCHU_STATE_DIR = prev;
   }
+});
+
+// ── shared-directory hook leak (task-mrgqt7eh4) ─────────────────
+// isolate:false spawns share the caller's cwd instead of getting a worktree;
+// hooks must never be installed there — they'd apply this agent's Stop/wake
+// feedback (its token, its inbox) to every OTHER session in that directory.
+
+test("spawnTerminal warns and skips hook installation for a shared (isolated:false) cwd", () => {
+  const shared = spawnTerminal({
+    title: "shared-agent", agentName: "shared-agent", cwd: "/tmp/shared-wt",
+    token: "tok", prompt: "hi", isolated: false, dry: true,
+  });
+  assert.match(shared.note, /Stop\/wake hooks were NOT installed/, "the caller is told hooks were skipped, not left to discover it");
+
+  const iso = spawnTerminal({
+    title: "iso-agent", agentName: "iso-agent", cwd: "/tmp/iso-wt",
+    token: "tok", prompt: "hi", isolated: true, dry: true,
+  });
+  assert.ok(!/NOT installed/.test(iso.note), "an isolated worktree gets no such warning");
+
+  const def = spawnTerminal({
+    title: "default-agent", agentName: "default-agent", cwd: "/tmp/default-wt",
+    token: "tok", prompt: "hi", dry: true,
+  });
+  assert.ok(!/NOT installed/.test(def.note), "omitting isolated defaults to true — existing callers (refire, tests) are unaffected");
+});
+
+test("agentsNeedingRefire carries isolated=true only when the agent has its own worktree", async () => {
+  const { org, sender, parked, role } = setup("wake5-isolated");
+  store.setAgentClaudeSession(parked.id, "sid-iso");
+  store.setAgentWorkspace(parked.id, { cwd: "/tmp/shared", worktree: "/tmp/shared/.lanchu/worktrees/parked", branch: "agent/parked" });
+  store.parkAgent(parked.id, "exit");
+
+  const shared = store.createAgent({ orgId: org.id, roleId: role.id, name: "shared-sibling" });
+  store.setAgentClaudeSession(shared.id, "sid-shared");
+  store.setAgentWorkspace(shared.id, { cwd: "/tmp/shared" }); // no worktree — isolate:false spawn
+  store.parkAgent(shared.id, "exit");
+
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "parked", body: "x" });
+  store.sendNotice({ orgId: org.id, fromAgentId: sender.id, to: "shared-sibling", body: "y" });
+  await graceElapsed();
+
+  const candidates = store.agentsNeedingRefire(org.id);
+  const isoCandidate = candidates.find((c) => c.agent_id === parked.id);
+  const sharedCandidate = candidates.find((c) => c.agent_id === shared.id);
+  assert.equal(isoCandidate.isolated, true, "worktree set -> isolated");
+  assert.equal(isoCandidate.cwd, "/tmp/shared/.lanchu/worktrees/parked");
+  assert.equal(sharedCandidate.isolated, false, "no worktree -> not isolated, even though parked/claude_session_id are set");
+  assert.equal(sharedCandidate.cwd, "/tmp/shared");
 });

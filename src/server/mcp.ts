@@ -903,6 +903,7 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           title: `${ctx.orgName}·${agent.name}`, agentName: agent.name, cwd, token, prompt,
           colorHex: store.agentColorOf(agent).hex,
           model: launchModel ?? undefined,
+          isolated: !!wt,
         });
         store.setAgentTerminal(agent.id, result.ref ?? null);
         return text({ agent: agent.name, model: launchModel, worktree: wt?.path ?? null, branch: wt?.branch ?? null, ...result });

@@ -4081,6 +4081,10 @@ export interface RefireCandidate {
   claude_session_id: string;
   /** Where to reopen the session: the agent's isolated worktree, else its cwd. */
   cwd: string;
+  /** True when `cwd` is this agent's own isolated worktree, not a shared dir
+   * (task-mrgqt7eh4) — refire must never re-install Stop/wake hooks into a
+   * directory other sessions share. */
+  isolated: boolean;
   model: string | null;
   queued_notices: number;
   /** Cleanly parked (SessionEnd hook fired); null = the session may have crashed. */
@@ -4136,6 +4140,7 @@ export function agentsNeedingRefire(orgId: string): RefireCandidate[] {
       agent_name: r.agent_name as string,
       claude_session_id: r.claude_session_id as string,
       cwd: (r.worktree as string) || (r.cwd as string),
+      isolated: !!r.worktree,
       model: (r.model as string) ?? null,
       queued_notices: Number(r.queued_notices),
       parked_at: (r.parked_at as string) ?? null,
