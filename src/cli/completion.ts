@@ -122,7 +122,8 @@ export const COMMANDS: CommandSpec[] = [
   { name: "greenzone", desc: "show the org's maintenance window / abort it", sub: [
     { name: "cancel", desc: "abort the requested window (supervisor override)" },
   ] },
-  { name: "doctor", desc: "check the environment (node, port, config, DB)" },
+  { name: "doctor", desc: "check the environment (node, port, config, DB); also diagnoses a dead MCP token" },
+  { name: "reconnect", desc: "restore /mcp in this directory when its session died" },
   { name: "statusline", desc: "status line for Claude Code" },
   { name: "install-commands", desc: "install lanchu slash-commands for Claude Code" },
   { name: "upgrade", desc: "upgrade the lanchu CLI" },

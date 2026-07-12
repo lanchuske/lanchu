@@ -1,0 +1,35 @@
+#!/usr/bin/env node
+// Fake `claude` CLI for testing `lanchu doctor`/`lanchu reconnect` without
+// ever touching a real Claude Code config (task-mrgk65hj2). Controlled by
+// env vars set per-test: FAKE_CLAUDE_MCP_ENTRY points at a text file whose
+// contents are what `claude mcp get lanchu` should print (absent/missing =
+// "no such server"); FAKE_CLAUDE_LOG_DIR is where remove/add calls get
+// logged (one JSON line per call) so a test can assert on them afterward.
+import fs from "node:fs";
+const args = process.argv.slice(2);
+const logDir = process.env.FAKE_CLAUDE_LOG_DIR;
+
+function log(name, argv) {
+  if (!logDir) return;
+  fs.appendFileSync(`${logDir}/${name}.log`, JSON.stringify(argv) + "\n");
+}
+
+if (args[0] === "mcp" && args[1] === "get" && args[2] === "lanchu") {
+  const entryFile = process.env.FAKE_CLAUDE_MCP_ENTRY;
+  if (entryFile && fs.existsSync(entryFile)) {
+    process.stdout.write(fs.readFileSync(entryFile, "utf8"));
+    process.exit(0);
+  }
+  process.stderr.write("No MCP server found with name: lanchu\n");
+  process.exit(1);
+}
+if (args[0] === "mcp" && args[1] === "remove") {
+  log("remove", args);
+  process.exit(0);
+}
+if (args[0] === "mcp" && args[1] === "add") {
+  log("add", args);
+  process.exit(0);
+}
+process.stderr.write("fake claude: unhandled args " + JSON.stringify(args) + "\n");
+process.exit(1);

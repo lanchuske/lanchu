@@ -1195,6 +1195,41 @@ export function agentIdForToken(token: string): string | null {
   return row?.agent_id ?? null;
 }
 
+export interface TokenDiagnosis {
+  /** unknown: no session row ever minted this token (typo/copy-paste, or DB reset).
+   *  live: the session is open — a 401 with this diagnosis means something else is wrong.
+   *  retired: the token's agent has since been retired.
+   *  ended: the session ended for some other reason (rotated, or the agent simply
+   *  restarted, which ends+reopens a session under a new token). */
+  kind: "unknown" | "live" | "retired" | "ended";
+  agent_id?: string;
+  agent_name?: string;
+  ended_at?: string | null;
+}
+
+/**
+ * Session freshness (task-mrgk65hj2): a dead token must self-explain. `/mcp`'s
+ * 401 and `lanchu doctor` both used to say nothing more than "invalid or
+ * missing session token" — recovering required DB spelunking (token -> session
+ * -> agent id) by hand. This is the one place that answers "why is this token
+ * dead, and whose was it" — read-only, safe to call from a diagnostic path.
+ */
+export function diagnoseToken(token: string): TokenDiagnosis {
+  const row = db()
+    .prepare("SELECT agent_id, ended_at FROM session WHERE token = ?")
+    .get(token) as { agent_id: string; ended_at: string | null } | undefined;
+  if (!row) return { kind: "unknown" };
+  const agent = getAgent(row.agent_id);
+  if (!agent) return { kind: "unknown" }; // orphaned row — shouldn't happen (FK cascade), fail safe
+  if (row.ended_at === null) return { kind: "live", agent_id: agent.id, agent_name: agent.name };
+  return {
+    kind: agent.state === "retired" ? "retired" : "ended",
+    agent_id: agent.id,
+    agent_name: agent.name,
+    ended_at: row.ended_at,
+  };
+}
+
 // ──────────────── wake v5: park & refire (session lifecycle hooks) ────────────────
 // Design doc "Orchestrating agents on Claude Code": the SessionStart hook
 // reports the Claude Code session id (zero heuristics — no JSONL scraping),

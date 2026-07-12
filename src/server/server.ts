@@ -447,9 +447,21 @@ async function handleMcp(req: http.IncomingMessage, res: http.ServerResponse): P
     return sendJson(res, 400, { error: "missing or unknown mcp-session-id" });
   }
 
-  const ctx = getContext(bearer(req.headers.authorization ?? undefined) ?? "");
+  const token = bearer(req.headers.authorization ?? undefined) ?? "";
+  const ctx = getContext(token);
   if (!ctx) {
-    return sendJson(res, 401, { error: "invalid or missing session token" });
+    // task-mrgk65hj2: an actionable 401 instead of a dead end. Claude Code
+    // only ever shows "Server rejected the configured Authorization header"
+    // — this body is what `lanchu doctor`/`lanchu reconnect` read to name
+    // the cause and the fix, since the client's own error never will.
+    const diagnosis = store.diagnoseToken(token);
+    const remedy =
+      diagnosis.kind === "unknown"
+        ? "This token doesn't match any session Lanchu ever minted — re-onboard (lanchu spawn, or the onboarding wizard)."
+        : diagnosis.kind === "live"
+          ? "This token IS a live session — the 401 isn't about the token itself (check the server is actually reachable at this URL)."
+          : `Fix: run 'lanchu reconnect' in this project directory to restore a working /mcp for '${diagnosis.agent_name}'.`;
+    return sendJson(res, 401, { error: "invalid or missing session token", diagnosis, remedy });
   }
 
   const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
@@ -619,6 +631,14 @@ export function createServer(): http.Server {
           return sendJson(res, 400, { error: "org and project required" });
         }
         return handleSession(req, body, res);
+      }
+      // `lanchu doctor`/`lanchu reconnect` (task-mrgk65hj2): why is this
+      // token dead, and whose was it — the one diagnostic the generic 401
+      // ("invalid or missing session token") never answered.
+      if (url.pathname === "/session/diagnose" && req.method === "POST") {
+        const body = (await readJson(req)) as { token?: string };
+        if (!body?.token) return sendJson(res, 400, { error: "token required" });
+        return sendJson(res, 200, store.diagnoseToken(body.token));
       }
 
       if (url.pathname === "/api/roles" && req.method === "GET") {
@@ -791,6 +811,10 @@ export function createServer(): http.Server {
         });
         // Prune the retired agent's isolated worktree; its branch stays for PR/merge.
         const worktree = result.retired ? removeAgentWorktree(agent?.worktree) : undefined;
+        // task-mrgk65hj2: without this, a cached in-memory context for this
+        // agent's now-dead token keeps authenticating until the server
+        // restarts — the same class of gap /tokens/rotate already closes.
+        if (result.retired) clearContexts();
         return sendJson(res, 200, { ...result, worktree });
       }
       // Resolve a pending retirement request (panel Needs-attention buttons).
@@ -801,6 +825,7 @@ export function createServer(): http.Server {
           const agent = store.getAgent(body.agentId);
           const result = store.resolveRetirement({ agentId: body.agentId, approve: body.approve === true, note: body.note, override: true });
           const worktree = result.retired ? removeAgentWorktree(agent?.worktree) : undefined;
+          if (result.retired) clearContexts();
           return sendJson(res, 200, { ...result, worktree });
         } catch (err) {
           return sendJson(res, 400, { error: (err as Error).message });
@@ -876,6 +901,7 @@ export function createServer(): http.Server {
             // alone — that agent stays durable, exactly like the single-
             // agent /agent/retire path already handles it.
           }
+          if (retired.length) clearContexts(); // task-mrgk65hj2: same cache-staleness gap /agent/retire closes
         }
         store.recordEvent({
           org_id: org.id,
