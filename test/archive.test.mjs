@@ -129,6 +129,32 @@ test("the product role can archive any task", () => {
   assert.ok(archived.archived_at);
 });
 
+// task-mrgpb0a15: the accountable OWNER of a claimed task can resolve it —
+// same trust level task_reject and task_update(done) already give owners —
+// even when they are neither its creator nor holding the coordinator lease.
+test("the owner of a claimed (non-probe) task can archive it, without being its creator or coordinator", () => {
+  const ctx = setup("arch9b");
+  const creator = store.createAgent({ orgId: ctx.org.id, roleId: ctx.role.id, objective: "files work" });
+  const owner = store.createAgent({ orgId: ctx.org.id, roleId: ctx.role.id, objective: "does work" });
+  const t = mkTask(ctx, "a real feature definition", { agentId: creator.id });
+  store.claimTask({ agentId: owner.id, taskId: t.id });
+  const archived = store.archiveTask({ taskId: t.id, byAgentId: owner.id, reason: "resolved, evidence attached" });
+  assert.ok(archived.archived_at);
+});
+
+test("an agent who is neither owner, creator, nor coordinator still cannot archive it", () => {
+  const ctx = setup("arch9c");
+  const creator = store.createAgent({ orgId: ctx.org.id, roleId: ctx.role.id, objective: "files work" });
+  const owner = store.createAgent({ orgId: ctx.org.id, roleId: ctx.role.id, objective: "does work" });
+  const stranger = store.createAgent({ orgId: ctx.org.id, roleId: ctx.role.id, objective: "uninvolved" });
+  const t = mkTask(ctx, "a real feature definition", { agentId: creator.id });
+  store.claimTask({ agentId: owner.id, taskId: t.id });
+  assert.throws(
+    () => store.archiveTask({ taskId: t.id, byAgentId: stranger.id }),
+    (err) => err instanceof ScopeError,
+  );
+});
+
 // ── supersede ───────────────────────────────────────────────────
 
 test("supersede archives old with a link to new and retargets dependents", () => {
@@ -176,6 +202,27 @@ test("a random agent cannot supersede someone else's task", () => {
     () => store.supersedeTask({ oldTaskId: oldT.id, newTaskId: newT.id, byAgentId: stranger.id }),
     (err) => err instanceof ScopeError,
   );
+});
+
+// task-mrgpb0a15 (builder-gov-3, 2026-07-11 18:30): resolving a task per
+// product's instruction ("supersede it against wake v5 with evidence") was
+// blocked because the owner wasn't its creator and the coordinator lease was
+// held elsewhere — needed a product round-trip just to close it out.
+test("the owner (not the creator) of a claimed task can supersede it", () => {
+  const ctx = setup("arch12b");
+  const creator = store.createAgent({ orgId: ctx.org.id, roleId: ctx.role.id, objective: "files work" });
+  const owner = store.createAgent({ orgId: ctx.org.id, roleId: ctx.role.id, objective: "does work" });
+  const oldT = mkTask(ctx, "wake v5 draft", { agentId: creator.id });
+  store.claimTask({ agentId: owner.id, taskId: oldT.id });
+  const newT = mkTask(ctx, "wake v5.1, with evidence", { agentId: creator.id });
+  const archived = store.supersedeTask({
+    oldTaskId: oldT.id,
+    newTaskId: newT.id,
+    byAgentId: owner.id, // owner, NOT the creator, NOT the coordinator
+    note: "superseded against v5.1 with drill evidence",
+  });
+  assert.ok(archived.archived_at);
+  assert.equal(archived.superseded_by_task_id, newT.id);
 });
 
 // ── archived dependencies never block ───────────────────────────

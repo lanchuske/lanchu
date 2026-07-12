@@ -2434,6 +2434,11 @@ function mayArchive(agent: Agent, task: Task): boolean {
   const lease = getCoordinator(agent.org_id);
   if (lease && !lease.expired && lease.agent_id === agent.id) return true;
   if (getRole(agent.role_id)?.name === "product") return true;
+  // task-mrgpb0a15: the accountable owner of a claimed task can resolve it —
+  // same trust level task_reject and task_update(done) already give owners.
+  // Without this, an owner-but-not-creator resolution needs a coordinator or
+  // product round-trip even when the coordinator lease is held elsewhere.
+  if (task.owner_agent_id === agent.id) return true;
   return task.created_by_agent_id === agent.id && isProbeTask(task);
 }
 
