@@ -89,7 +89,9 @@ export type EventType =
   | "test.reported"
   | "tool.response"
   | "agent.nudged"
-  | "notice.expired";
+  | "notice.expired"
+  | "agent.terminal_closed"
+  | "org.shutdown";
 
 export interface Org {
   id: string;

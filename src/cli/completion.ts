@@ -99,6 +99,12 @@ export const COMMANDS: CommandSpec[] = [
   ] },
   { name: "tile", desc: "arrange agent terminals into a mosaic", flags: [{ name: "dry", desc: "print the plan" }] },
   { name: "retire", desc: "safe agent retirement (handoff enforced)", arg: "agent-ids", flags: [{ name: "force", desc: "supervisor override of the coordinator retirement gate" }] },
+  { name: "shutdown", desc: "close the org cleanly: broadcast, close every terminal, optionally retire/stop", flags: [
+    { name: "stop-server", desc: "also stop the Lanchu server" },
+    { name: "retire", desc: "retire agents instead of leaving them durable" },
+    { name: "force", desc: "override open-task/greenzone guards (supervisor only)" },
+  ] },
+  { name: "close", desc: "notify + close one agent's terminal (leaves it durable-idle)", arg: "agent-ids" },
   { name: "task", desc: "supervisor overrides on tasks", sub: [
     { name: "release", desc: "release a task back to the pool", arg: "tasks" },
     { name: "reassign", desc: "reassign a task to an agent", arg: "tasks" },

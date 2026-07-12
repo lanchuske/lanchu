@@ -5,9 +5,9 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { accessKey, host, port, publicUrl, reconnectGraceMs, VERSION } from "../config.js";
+import { accessKey, host, port, publicUrl, reconnectGraceMs, shutdownDelayMs, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
-import { cancelGreenzone, greenzoneStatus, requestGreenzone } from "../core/greenzone.js";
+import { cancelGreenzone, greenzoneStatus, isGreenzoneActive, requestGreenzone } from "../core/greenzone.js";
 import { uuid } from "../core/ids.js";
 import * as store from "../core/store.js";
 import { detectRuntimes } from "../core/runtimes.js";
@@ -814,6 +814,89 @@ export function createServer(): http.Server {
         const body = (await readJson(req)) as { agentId: string; ref: store.TerminalRef | null };
         store.setAgentTerminal(body.agentId, body.ref ?? null);
         return sendJson(res, 200, { ok: true });
+      }
+      // `lanchu close <agent>` (task-mrgjh7uk1): notify, close terminal, leave
+      // durable-idle — the agent's identity/worktree/DB row are all untouched.
+      if (url.pathname === "/agent/close" && req.method === "POST") {
+        const body = (await readJson(req)) as { agentId: string };
+        if (!body?.agentId) return sendJson(res, 400, { error: "agentId required" });
+        const agent = store.getAgent(body.agentId);
+        if (!agent) return sendJson(res, 404, { error: "unknown agent" });
+        store.recordEvent({
+          org_id: agent.org_id,
+          type: "agent.terminal_closed",
+          actor_agent_id: null,
+          subject_kind: "agent",
+          subject_id: agent.id,
+          data: { note: "lanchu close" },
+        });
+        const ref = store.getAgentTerminal(agent.id);
+        const closed = ref ? closeTerminal(ref) : false;
+        store.setAgentTerminal(agent.id, null);
+        return sendJson(res, 200, { agent: agent.name, closed });
+      }
+      // `lanchu shutdown` (task-mrgjh7uk1): one command to close the org
+      // cleanly instead of the hand-rolled broadcast -> per-agent close ->
+      // optional stop sequence this replaces. Refuses (unless force) while a
+      // task is claimed/in_progress or a greenzone is active — a close-out
+      // must never silently drop live work or race a maintenance window.
+      if (url.pathname === "/org/shutdown" && req.method === "POST") {
+        const body = (await readJson(req)) as {
+          org: string; stopServer?: boolean; retire?: boolean; force?: boolean; source?: string;
+        };
+        if (!body?.org) return sendJson(res, 400, { error: "org required" });
+        const org = store.getOrgByName(body.org);
+        if (!org) return sendJson(res, 404, { error: `no org named '${body.org}'` });
+        const force = body.force === true;
+        const greenzoneActive = isGreenzoneActive(org.id);
+        const blockedBy = store.shutdownBlockers(org.id);
+        if (!force && (greenzoneActive || blockedBy.length)) {
+          return sendJson(res, 200, { ok: false, greenzoneActive, blockedBy });
+        }
+        const notified = store.noticeOrgShutdown(org.id, { retire: body.retire === true });
+        await new Promise((r) => setTimeout(r, shutdownDelayMs()));
+        const closed: string[] = [];
+        const retired: string[] = [];
+        const retireBlocked: { agent: string; blockedBy: string[] }[] = [];
+        for (const t of store.listTerminals(org.id)) {
+          if (closeTerminal(t.ref)) closed.push(t.name);
+          store.setAgentTerminal(t.agentId, null);
+        }
+        if (body.retire === true) {
+          for (const a of store.listAgents(org.id)) {
+            if (a.state === "retired") continue;
+            const result = store.retireAgent(a.id, { override: force, source: body.source ?? "shutdown" });
+            if (result.retired) {
+              removeAgentWorktree(a.worktree);
+              retired.push(a.name);
+            } else if (result.blockedBy.length) {
+              retireBlocked.push({ agent: a.name, blockedBy: result.blockedBy.map((t) => t.id) });
+            }
+            // requested (coordinator lease held by someone else) is left
+            // alone — that agent stays durable, exactly like the single-
+            // agent /agent/retire path already handles it.
+          }
+        }
+        store.recordEvent({
+          org_id: org.id,
+          type: "org.shutdown",
+          actor_agent_id: null,
+          subject_kind: "org",
+          subject_id: org.id,
+          data: { notified, closed: closed.length, retired: retired.length, stopServer: body.stopServer === true, force },
+        });
+        if (body.stopServer === true) {
+          setTimeout(() => process.exit(0), 50);
+        }
+        return sendJson(res, 200, {
+          ok: true,
+          notified,
+          closed,
+          retired,
+          retireBlocked,
+          serverStopping: body.stopServer === true,
+          survives: { db: true, worktrees: true, identities: retired.length === 0 },
+        });
       }
 
       // ── processes (server + agent terminals) ──

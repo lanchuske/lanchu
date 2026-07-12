@@ -647,6 +647,56 @@ async function cmdRetire(agentId: string): Promise<void> {
   console.log("\nUse `lanchu task reassign <id> <agent>` or `lanchu task release <id>`.");
 }
 
+async function cmdShutdown(): Promise<void> {
+  const org = await orgOf();
+  const retire = hasFlag("retire");
+  const stopServer = hasFlag("stop-server");
+  // Same rule-10 discriminator as `lanchu retire`: --retire --force can shut
+  // down the whole org's identities, not just one — an agent (non-TTY) must
+  // never wield that, only the human supervisor at a real terminal.
+  const forceDenied = retireForceDenied(hasFlag("force"), process.stdin.isTTY === true);
+  if (forceDenied) {
+    console.log("shutdown --force requires an interactive terminal (rule 10). Running without --force — open work or an active greenzone will hold the shutdown.");
+  }
+  const force = hasFlag("force") && !forceDenied;
+  const r = (await post("/org/shutdown", {
+    org, stopServer, retire, force, source: hasFlag("force") ? "cli-force" : "cli",
+  })) as {
+    ok: boolean;
+    greenzoneActive?: boolean;
+    blockedBy?: { agent: string; task_id: string; task_title: string }[];
+    notified?: number;
+    closed?: string[];
+    retired?: string[];
+    retireBlocked?: { agent: string; blockedBy: string[] }[];
+    serverStopping?: boolean;
+    survives?: { db: boolean; worktrees: boolean; identities: boolean };
+  };
+  if (!r.ok) {
+    if (r.greenzoneActive) console.log("Blocked — a greenzone maintenance window is active. Re-run with --force to override.");
+    if (r.blockedBy?.length) {
+      console.log("Blocked — open tasks must be handed off first:");
+      for (const b of r.blockedBy) console.log(`  • ${b.agent}: ${b.task_id}  ${b.task_title}`);
+      console.log("\nUse `lanchu task reassign <id> <agent>` or `lanchu task release <id>`, or re-run with --force.");
+    }
+    return;
+  }
+  console.log(`Notified ${r.notified ?? 0} agent(s); closed ${r.closed?.length ?? 0} terminal(s)${r.closed?.length ? ": " + r.closed.join(", ") : ""}.`);
+  if (retire) {
+    console.log(`Retired ${r.retired?.length ?? 0} agent(s)${r.retired?.length ? ": " + r.retired.join(", ") : ""}.`);
+    for (const b of r.retireBlocked ?? []) console.log(`  • ${b.agent} not retired — open tasks: ${b.blockedBy.join(", ")}`);
+  }
+  if (r.serverStopping) console.log("Server stopping.");
+  console.log(`Survives: DB, worktrees${r.survives?.identities ? ", identities" : ""}.`);
+}
+
+async function cmdClose(agentId: string): Promise<void> {
+  if (!agentId) return console.log("usage: lanchu close <agentId>");
+  await orgOf();
+  const r = (await post("/agent/close", { agentId })) as { agent: string; closed: boolean };
+  console.log(r.closed ? `Closed ${r.agent}'s terminal — left durable-idle.` : `${r.agent} had no open terminal to close.`);
+}
+
 async function cmdTask(sub: string, id: string, extra?: string[]): Promise<void> {
   await orgOf();
   if (sub === "release") {
@@ -1202,6 +1252,8 @@ const HELP_SECTIONS: HelpSection[] = [
       ['lanchu spawn ["<objective>"] [--role r] [--model m] [--no-isolate] [--dry]', "new agent in a new terminal, in its own git worktree + branch"],
       ["lanchu tile [--dry]", "arrange agent terminals into a mosaic"],
       ["lanchu retire <agentId> [--force]", "safe retirement (handoff enforced; --force = supervisor override of the coordinator gate)"],
+      ["lanchu shutdown [--stop-server] [--retire] [--force]", "courtesy broadcast, close every org terminal (durable by default), optionally retire/stop"],
+      ["lanchu close <agentId>", "notify + close one agent's terminal; leaves it durable-idle"],
       ["lanchu task release <id>", "supervisor override: release a task"],
       ["lanchu task reassign <id> <agent>", "supervisor override: reassign a task"],
       ["lanchu task archive <id> [reason…]", "supervisor override: archive a task (terminal, soft — audit stays)"],
@@ -1379,6 +1431,10 @@ async function main(): Promise<void> {
       return cmdStatusline();
     case "retire":
       return cmdRetire(positional()[1] ?? "");
+    case "shutdown":
+      return cmdShutdown();
+    case "close":
+      return cmdClose(positional()[1] ?? "");
     case "task": {
       const p = positional();
       return cmdTask(p[1] ?? "", p[2] ?? "", p.slice(3));

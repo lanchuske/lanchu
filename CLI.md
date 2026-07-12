@@ -167,6 +167,8 @@ Grouped as in `lanchu help`.
 | `lanchu spawn ["<objective>"] [--role r] [--model m] [--no-isolate] [--dry]` | Launches a **new agent in a new terminal**, in its own git worktree + branch (skip isolation with `--no-isolate`; preview with `--dry`). `--model` overrides the role's preferred tier for this spawn. |
 | `lanchu tile [--dry]` | Arranges the agent terminals into a mosaic. |
 | `lanchu retire <agent>` | **Safe retirement**: if it has open tasks, requires reassigning or releasing each one; then archives. |
+| `lanchu shutdown [--stop-server] [--retire] [--force]` | Closes the org cleanly: courtesy broadcast, closes every agent terminal (agents stay **durable** by default — `--retire` retires them instead, handoff-enforced per agent), optionally stops the server. Refuses if any task is claimed/in_progress or a greenzone is active; `--force` overrides (human-only — denied from a non-TTY). |
+| `lanchu close <agent>` | Closes **one** agent's terminal: notifies it first, then closes, leaving it durable-idle (not retired). |
 | `lanchu task release <id>` | **Supervisor override**: releases a task back to the pool even if it has an owner. Audited. Escape hatch for *stale* tasks without retiring the agent. |
 | `lanchu task reassign <id> <agent>` | **Supervisor override**: reassigns a task to another agent. Audited. |
 
