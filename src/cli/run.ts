@@ -165,6 +165,29 @@ async function latestVersion(): Promise<string | null> {
   }
 }
 
+/**
+ * Read this cwd's `lanchu` MCP entry straight from the Claude CLI (never
+ * hand-parse its config file — same reasoning bootstrapCommand already
+ * follows: `claude mcp add/remove` is the only stable interface, the file
+ * format isn't). Best-effort: no `claude` on PATH, no entry, or unexpected
+ * output all just mean "nothing to diagnose here", never a crash.
+ */
+function readLocalMcpEntry(): { scope: "local" | "user" | "project" | "unknown"; token: string } | null {
+  const res = spawnSync("claude", ["mcp", "get", "lanchu"], { encoding: "utf8" });
+  if (res.status !== 0 || !res.stdout) return null;
+  const token = /Authorization:\s*Bearer\s+(\S+)/.exec(res.stdout)?.[1];
+  if (!token) return null;
+  const scopeText = /Scope:\s*(.+)/i.exec(res.stdout)?.[1] ?? "";
+  const scope = /local config/i.test(scopeText)
+    ? "local"
+    : /user config|global/i.test(scopeText)
+      ? "user"
+      : /project config|\.mcp\.json/i.test(scopeText)
+        ? "project"
+        : "unknown";
+  return { scope, token };
+}
+
 async function cmdDoctor(): Promise<void> {
   const node = process.versions.node;
   const [major, minor] = node.split(".").map(Number) as [number, number];
@@ -191,6 +214,32 @@ async function cmdDoctor(): Promise<void> {
   console.log(`runtimes    ${runtimes.length ? "" : "none of the known agent CLIs found on PATH"}`);
   for (const r of runtimes) {
     console.log(`  ${r.cmd.padEnd(14)} ${(r.version ?? "version unknown").padEnd(28)} ${r.path}`);
+  }
+  // task-mrgk65hj2: `auth` above is the shared-key BIND gate, not this — /mcp
+  // always needs a live session token, and a dead one used to report all-green
+  // here while Claude Code just showed a generic 401. Name the cause and the fix.
+  const entry = readLocalMcpEntry();
+  if (entry) {
+    try {
+      const d = (await post("/session/diagnose", { token: entry.token })) as {
+        kind?: "unknown" | "live" | "retired" | "ended"; agent_name?: string; ended_at?: string | null;
+      };
+      const status =
+        d.kind === "live"
+          ? "live — /mcp should work; if it doesn't, check the server is actually reachable"
+          : d.kind === "unknown"
+            ? "DEAD — unknown token (no session ever minted it). Fix: re-onboard this directory (lanchu spawn, or the onboarding wizard)."
+            : d.kind === "retired"
+              ? `DEAD — agent '${d.agent_name}' was retired (session ended ${d.ended_at}). Fix: lanchu reconnect`
+              : d.kind === "ended"
+                ? `DEAD — session for '${d.agent_name}' ended ${d.ended_at} (rotated or restarted). Fix: lanchu reconnect`
+                : "could not diagnose — the running server may predate this check (rebuild/restart it)";
+      console.log(`mcp token   ${status}`);
+    } catch {
+      console.log("mcp token   could not reach the server to check — see 'server' above");
+    }
+  } else {
+    console.log("mcp token   no 'lanchu' entry in this directory's Claude config (claude mcp get lanchu found nothing)");
   }
 }
 
@@ -615,6 +664,66 @@ export function retireForceDenied(force: boolean, isTTY: boolean): boolean {
   return force && !isTTY;
 }
 
+/**
+ * task-mrgk65hj2: restore a working /mcp for this directory in one command
+ * instead of DB spelunking (token -> session -> agent id) + manual re-onboard.
+ * Never a bare `claude mcp add` — same root cause as the wrong-identity spawn
+ * bug: `add` is a no-op when the server name already exists, silently keeping
+ * the old dead token in place. Always remove, then add.
+ */
+async function cmdReconnect(): Promise<void> {
+  const entry = readLocalMcpEntry();
+  if (!entry) {
+    console.log("No 'lanchu' MCP entry found in this directory (claude mcp get lanchu found nothing). Nothing to reconnect — onboard normally instead (lanchu spawn, or the onboarding wizard).");
+    return;
+  }
+  await orgOf();
+  const diagnosis = (await post("/session/diagnose", { token: entry.token })) as {
+    kind?: "unknown" | "live" | "retired" | "ended"; agent_id?: string; agent_name?: string; ended_at?: string | null;
+  };
+  if (!diagnosis.kind) {
+    console.log("Could not diagnose this token — the running server may predate this check (rebuild/restart it) or is unreachable.");
+    return;
+  }
+  if (diagnosis.kind === "unknown") {
+    console.log("This token doesn't match any session Lanchu ever minted. Onboard normally instead (lanchu spawn, or the onboarding wizard).");
+    return;
+  }
+  if (diagnosis.kind === "live") {
+    console.log(`This token is still live (agent '${diagnosis.agent_name}') — nothing to reconnect. If /mcp still fails, check the server is actually reachable at this URL.`);
+    return;
+  }
+  if (diagnosis.kind === "retired") {
+    console.log(`Agent '${diagnosis.agent_name}' was RETIRED (session ended ${diagnosis.ended_at}).`);
+    if (process.stdin.isTTY !== true) {
+      console.log("Reviving a retired agent needs an interactive terminal to confirm — run this in a real shell.");
+      return;
+    }
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ans = (await rl.question("Revive it and reconnect this terminal to it? [y/N] ")).trim().toLowerCase();
+    rl.close();
+    if (ans !== "y" && ans !== "yes") {
+      console.log("Cancelled.");
+      return;
+    }
+  }
+  const found = findConfig();
+  if (!found) return console.log("no .lanchu/config.json here — run `lanchu init` first");
+  const s = (await post("/session", {
+    org: found.config.org, project: found.config.project, reuseAgentId: diagnosis.agent_id, cwd: process.cwd(),
+  })) as { token: string; agentName: string; mcpUrl: string };
+  spawnSync("claude", ["mcp", "remove", "lanchu", "-s", entry.scope === "unknown" ? "local" : entry.scope]);
+  const added = spawnSync("claude", [
+    "mcp", "add", "--transport", "http", "lanchu", s.mcpUrl, "--header", `Authorization: Bearer ${s.token}`,
+  ]);
+  if (added.status !== 0) {
+    console.log("Minted a fresh session, but 'claude mcp add' failed — wire it manually:");
+    console.log(`  claude mcp add lanchu --transport http ${s.mcpUrl} --header "Authorization: Bearer ${s.token}"`);
+    return;
+  }
+  console.log(`Reconnected '${s.agentName}'. Now run /mcp → reconnect (inside Claude Code) to pick up the fresh session.`);
+}
+
 async function cmdRetire(agentId: string): Promise<void> {
   if (!agentId) return console.log("usage: lanchu retire <agentId> [--force]");
   await orgOf();
@@ -634,7 +743,15 @@ async function cmdRetire(agentId: string): Promise<void> {
     coordinator?: string;
     blockedBy: { id: string; title: string }[];
   };
-  if (r.retired) return console.log(`Retired ${agentId}.`);
+  if (r.retired) {
+    console.log(`Retired ${agentId}.`);
+    // task-mrgk65hj2: the terminal that WAS this agent doesn't know its
+    // session just died underneath it — the next tool call gets a generic
+    // 401 with no clue why. Name it here instead of leaving that terminal
+    // to hit a dead end on its own.
+    console.log("Any terminal still wired to this agent just lost MCP access — in that terminal, run `lanchu reconnect` to re-onboard it as a fresh identity (or `lanchu spawn` for a new one).");
+    return;
+  }
   if (r.requested) {
     console.log(
       `A coordinator lease is active — retirement filed as a REQUEST for '${r.coordinator}' to resolve.`,
@@ -1296,7 +1413,8 @@ const HELP_SECTIONS: HelpSection[] = [
       ["lanchu completion [bash|zsh|fish] | install", "shell Tab-completion (commands, flags, live agent/task/org names); install wires your shell rc"],
       ["lanchu panel", "open the panel in your browser"],
       ["lanchu statusline", "status line for Claude Code (setup shown when run)"],
-      ["lanchu doctor", "environment checks"],
+      ["lanchu doctor", "environment checks (now also diagnoses a dead MCP token, not just all-green)"],
+      ["lanchu reconnect", "restore /mcp in this directory when its session died (retired/rotated agent) — reads the local Claude MCP entry, mints a fresh session, rewrites the entry"],
     ],
   },
   {
@@ -1431,6 +1549,8 @@ async function main(): Promise<void> {
       return cmdStatusline();
     case "retire":
       return cmdRetire(positional()[1] ?? "");
+    case "reconnect":
+      return cmdReconnect();
     case "shutdown":
       return cmdShutdown();
     case "close":

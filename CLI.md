@@ -206,7 +206,8 @@ Grouped as in `lanchu help`.
 | `lanchu completion [bash\|zsh\|fish]` \| `install` | Shell Tab-completion for commands, flags and live board values (agent/task/org names); `install` wires it into your shell rc. |
 | `lanchu panel` (alias `open`) | Opens the web panel in the browser. |
 | `lanchu statusline` | Status line for Claude Code (setup shown when run). |
-| `lanchu doctor` | Checks the environment: Node version, free port, config, DB — plus the agent-runtime inventory found on PATH. |
+| `lanchu doctor` | Checks the environment: Node version, free port, config, DB — plus the agent-runtime inventory found on PATH. Also reads this directory's `lanchu` MCP entry (if any) and names why its token is dead (unknown / retired / rotated) instead of a bare all-green. |
+| `lanchu reconnect` | Restores `/mcp` in this directory when its session died: reads the local Claude MCP entry, mints a fresh session reusing that identity (confirms first if the agent was retired), rewrites the entry via `claude mcp remove` + `add`. Then run `/mcp` → reconnect inside Claude Code. |
 
 ### Maintenance
 

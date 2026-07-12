@@ -276,6 +276,33 @@ test("getContext rehydrates a persisted session from the DB after a restart", ()
   assert.equal(getContext("lsk_not_a_real_token"), undefined);
 });
 
+// task-mrgk65hj2: diagnoseToken is the one place that answers WHY a dead
+// token is dead, and whose it was — both `lanchu doctor` and the /mcp 401
+// body read it instead of leaving the caller to spelunk the DB by hand.
+test("diagnoseToken distinguishes unknown / live / ended / retired", () => {
+  const { agent: live } = setup("diag-live-org");
+  const { token: liveToken } = store.openSession(live.id);
+  assert.deepEqual(store.diagnoseToken(liveToken), { kind: "live", agent_id: live.id, agent_name: live.name });
+
+  assert.deepEqual(store.diagnoseToken("lsk_never_minted"), { kind: "unknown" });
+
+  const { agent: ended } = setup("diag-ended-org");
+  const { token: endedToken } = store.openSession(ended.id);
+  store.endSessionsForAgent(ended.id); // rotated/respawned, NOT retired
+  const endedDiag = store.diagnoseToken(endedToken);
+  assert.equal(endedDiag.kind, "ended");
+  assert.equal(endedDiag.agent_name, ended.name);
+  assert.ok(endedDiag.ended_at);
+
+  const { agent: retiree } = setup("diag-retired-org");
+  const { token: retiredToken } = store.openSession(retiree.id);
+  store.retireAgent(retiree.id, { override: true });
+  const retiredDiag = store.diagnoseToken(retiredToken);
+  assert.equal(retiredDiag.kind, "retired");
+  assert.equal(retiredDiag.agent_name, retiree.name);
+  assert.ok(retiredDiag.ended_at);
+});
+
 test("board marks a live-transport agent active even without recent activity", () => {
   // Regression: a Claude agent holds its MCP transport open but calls tools
   // only sporadically, so recency alone false-idles it between calls.

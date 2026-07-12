@@ -101,6 +101,70 @@ test("two REAL terminals at steady state (the old session answers the ping) stil
   }
 });
 
+// ── task-mrgk65hj2: /session/diagnose and the actionable 401 body ──
+
+test("/session/diagnose distinguishes unknown / live / retired for a real minted token", async () => {
+  const diagnose = async (token) => {
+    const res = await fetch(base + "/session/diagnose", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  const unknown = await diagnose("lsk_never_minted_anywhere");
+  assert.equal(unknown.status, 200);
+  assert.deepEqual(unknown.body, { kind: "unknown" });
+
+  const { token } = await join("diag-live-agent");
+  const live = await diagnose(token);
+  assert.equal(live.body.kind, "live");
+  assert.equal(live.body.agent_name, "diag-live-agent");
+
+  const org = store.getOrgByName("reconnect-org");
+  const agent = store.findAgentByName(org.id, "diag-live-agent");
+  store.retireAgent(agent.id, { override: true });
+  const retired = await diagnose(token);
+  assert.equal(retired.body.kind, "retired");
+  assert.equal(retired.body.agent_name, "diag-live-agent");
+  assert.ok(retired.body.ended_at);
+});
+
+test("/mcp 401 names the cause and the fix instead of a bare rejection", async () => {
+  const post401 = async (token) => {
+    const res = await fetch(base + "/mcp", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test", version: "0" } },
+      }),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  const unknown = await post401("lsk_totally_bogus");
+  assert.equal(unknown.status, 401);
+  assert.equal(unknown.body.diagnosis.kind, "unknown");
+  assert.match(unknown.body.remedy, /re-onboard/);
+
+  const { token, agentId } = await join("diag-401-agent");
+  // Through the real /agent/retire route, not store.retireAgent directly —
+  // this is what actually clears the in-memory context cache (see below).
+  const retireRes = await fetch(base + "/agent/retire", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId }),
+  });
+  assert.equal((await retireRes.json()).retired, true);
+  const retired = await post401(token);
+  assert.equal(retired.status, 401);
+  assert.equal(retired.body.diagnosis.kind, "retired");
+  assert.equal(retired.body.diagnosis.agent_name, "diag-401-agent");
+  assert.match(retired.body.remedy, /lanchu reconnect/);
+});
+
 test("regression (task-mrgmbqyv2): a LAZY reconnect past the grace window — dead old session — replaces silently", async () => {
   process.env.LANCHU_RECONNECT_GRACE_MS = "0"; // minutes after the restart
   setSessionPingProbe(async () => false); // the old session is a half-open ghost
