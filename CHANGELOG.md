@@ -2,6 +2,20 @@
 
 Notable changes to [lanchu](https://www.npmjs.com/package/lanchu). Numbers reference pull requests in this repository.
 
+## 0.5.15 — 2026-07-12
+
+Backlog sweep: orphaned bugs, spawn/dry-run correctness, and a new `lanchu reconnect`.
+
+- Spawn: `isolate:false` no longer leaks the spawned agent's Stop hooks into the shared directory (#102).
+- MCP: `message_send` accepts `body` as well as `text` (#103).
+- Governance: a task's owner can supersede/archive their own claimed task (#104).
+- Server: the restart notice fires only after `listen()` succeeds — a boot that dies on a port conflict no longer tells the whole org a restart happened (#105).
+- Release: `config.ts`'s `VERSION` is computed from `package.json` instead of duplicated as a hardcoded string — the class of bug that shipped v0.5.13 with the wrong `--version` is now structurally impossible (#106).
+- CLI: `lanchu spawn --dry` now touches nothing — no agent, no session, no worktree, no token file (#107).
+- Test: the flaky windows-latest greenzone timeout test now polls instead of racing a fixed sleep (#108).
+- CLI: `lanchu shutdown` / `lanchu close` — one command to close the org cleanly, courtesy-broadcast first, agents stay durable by default (#109).
+- CLI: `lanchu reconnect` restores `/mcp` in one command when its session died (retired/rotated agent); `lanchu doctor` and the `/mcp` 401 body now name the cause and the fix instead of a bare rejection (#110).
+
 ## 0.5.14 — 2026-07-11
 
 Governance hardening after the wake v5.1 drill.
