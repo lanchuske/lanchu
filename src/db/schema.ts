@@ -5,8 +5,10 @@
 // 14 = task archive; 15 = doc lifecycle; 16 = wake v5 park & refire (agent session id + parked_at);
 // 17 = release pipeline (task.release_version; rc/released stages stamped by the release sweep);
 // 18 = network mode Piece 1 (person table; agent.person_id/agent.kind — see
-// "Design: Person identity & Membership (network mode — Piece 1)").
-export const SCHEMA_VERSION = 18;
+// "Design: Person identity & Membership (network mode — Piece 1)");
+// 19 = network mode Piece 4 (contribution_event table — see
+// "Design: Contribution ledger (network mode — Piece 4)").
+export const SCHEMA_VERSION = 19;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -274,6 +276,22 @@ CREATE TABLE IF NOT EXISTS test_run (
   created_at      TEXT NOT NULL
 );
 
+-- Network mode: the transparent, non-monetary contribution ledger (see
+-- "Design: Contribution ledger", Piece 4). Written once, at QA-pass time,
+-- only for network-mode projects — flipVerifiedOriginal in store.ts is the
+-- hook point (Task 2, not yet built). person_id is the contributor who gets
+-- credit; verified_by is who checked the work (must not be the same
+-- Person — enforced by Task 3, not yet built).
+CREATE TABLE IF NOT EXISTS contribution_event (
+  id          TEXT PRIMARY KEY,
+  person_id   TEXT NOT NULL REFERENCES person(id),
+  project_id  TEXT NOT NULL REFERENCES project(id),
+  task_id     TEXT NOT NULL REFERENCES task(id),
+  weight      INTEGER NOT NULL,
+  verified_by TEXT REFERENCES person(id),
+  created_at  TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
@@ -286,4 +304,6 @@ CREATE INDEX IF NOT EXISTS idx_event_actor         ON event(actor_agent_id, id);
 CREATE INDEX IF NOT EXISTS idx_notice_pending      ON notice(to_agent_id, acked_at);
 CREATE INDEX IF NOT EXISTS idx_memory_subject      ON memory(org_id, scope, subject_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_test_run_case       ON test_run(case_id, id);
+CREATE INDEX IF NOT EXISTS idx_contribution_person  ON contribution_event(person_id);
+CREATE INDEX IF NOT EXISTS idx_contribution_project ON contribution_event(project_id);
 `;

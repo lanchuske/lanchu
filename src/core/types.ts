@@ -168,6 +168,24 @@ export interface Person {
   created_at: string;
 }
 
+/**
+ * Network mode: the transparent, non-monetary contribution ledger. Written
+ * once per task at QA-pass time, only for network-mode projects. See
+ * "Design: Contribution ledger (network mode — Piece 4)".
+ */
+export interface ContributionEvent {
+  id: string;
+  /** The contributor who gets credit. */
+  person_id: string;
+  project_id: string;
+  task_id: string;
+  /** Fibonacci-ish scale (1/2/3/5/8), assigned by the verifier at QA-pass time. */
+  weight: number;
+  /** Who checked the work; must not be the same Person as person_id (enforced elsewhere). */
+  verified_by: string | null;
+  created_at: string;
+}
+
 /** Why an agent bounced a task back to definition instead of guessing. */
 export type RejectReason =
   | "out_of_scope"
