@@ -267,8 +267,11 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       inputSchema: { filter: z.enum(["mine", "available", "all", "archived"]).default("all") },
     },
     async ({ filter }) => {
-      if (filter === "archived") return text(store.listArchivedTasks(ctx.projectId));
-      let tasks = store.listTasks(ctx.projectId);
+      // Network mode (Piece 5): contract tasks are visible only to the
+      // project owner or to their own assigned contributor — see
+      // taskVisibleTo. No effect on internal tasks or local-mode orgs.
+      if (filter === "archived") return text(store.listArchivedTasksVisibleTo(ctx.projectId, ctx.agentId));
+      let tasks = store.listTasksVisibleTo(ctx.projectId, ctx.agentId);
       if (filter === "mine") tasks = tasks.filter((t) => t.owner_agent_id === ctx.agentId);
       else if (filter === "available") tasks = tasks.filter((t) => t.status === "available");
       return text(tasks);
@@ -549,7 +552,10 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       inputSchema: { taskId: z.string() },
     },
     async ({ taskId }) => {
-      const task = store.getTask(taskId);
+      const raw = store.getTask(taskId);
+      // Network mode (Piece 5): same lockdown as task_list — a contract task
+      // not owned by, or assigned to, the caller doesn't exist for them.
+      const task = raw ? store.taskVisibleTo(raw, ctx.agentId) : null;
       return task
         ? text({ ...task, applicable_skills: store.skillsForTags(ctx.orgId, task.tags) })
         : fail(new Error("task not found"));
