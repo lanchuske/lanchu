@@ -12,8 +12,10 @@
 // task.published_at — see "Design: Cross-org task marketplace (Piece 6)");
 // 21 = network mode Piece 5 (task.kind='contract' + contract_spec/
 // contract_tests/contract_deps — see "Design: Contract-based contributor
-// isolation (network mode — Piece 5)").
-export const SCHEMA_VERSION = 21;
+// isolation (network mode — Piece 5)");
+// 22 = network mode Piece 5 Task 5 (project.owner_agent_id — the exemption
+// for the contract-task visibility lockdown).
+export const SCHEMA_VERSION = 22;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -52,6 +54,12 @@ CREATE TABLE IF NOT EXISTS project (
   -- never parses, escrows, or enforces it. See "Design: Cross-org task
   -- marketplace", Piece 6, "Where the line is drawn, explicitly".
   compensation_terms  TEXT,
+  -- Network mode (Piece 5): the only agent exempt from the contract-task
+  -- visibility lockdown. NULL means nobody is exempt yet — a project with
+  -- no declared owner locks contract tasks down to each contributor's own
+  -- assignment for everyone, including whoever created it. See "Design:
+  -- Contract-based contributor isolation", Piece 5.
+  owner_agent_id       TEXT REFERENCES agent(id),
   created_at          TEXT NOT NULL,
   UNIQUE (org_id, name)
 );

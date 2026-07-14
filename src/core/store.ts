@@ -474,9 +474,11 @@ export interface ProjectRow {
   network_mode: boolean;
   /** Network mode (Piece 6): free text, stored/displayed only — Lanchu never parses, escrows, or enforces it. */
   compensation_terms: string | null;
+  /** Network mode (Piece 5): the only agent exempt from the contract-task visibility lockdown. Null = nobody exempt yet. */
+  owner_agent_id: string | null;
 }
 
-const PROJECT_COLS = "id, name, repo_url, local_path, network_mode, compensation_terms";
+const PROJECT_COLS = "id, name, repo_url, local_path, network_mode, compensation_terms, owner_agent_id";
 
 function loadProject(row: Record<string, unknown>): ProjectRow {
   return {
@@ -486,6 +488,7 @@ function loadProject(row: Record<string, unknown>): ProjectRow {
     local_path: (row.local_path as string) ?? null,
     network_mode: Boolean(row.network_mode),
     compensation_terms: (row.compensation_terms as string) ?? null,
+    owner_agent_id: (row.owner_agent_id as string) ?? null,
   };
 }
 
@@ -545,7 +548,15 @@ export function getOrCreateProject(orgId: string, name: string): ProjectRow {
   db()
     .prepare("INSERT INTO project(id, org_id, name, created_at) VALUES (?,?,?,?)")
     .run(id, orgId, name, nowIso());
-  return { id, name, repo_url: null, local_path: null, network_mode: false, compensation_terms: null };
+  return {
+    id,
+    name,
+    repo_url: null,
+    local_path: null,
+    network_mode: false,
+    compensation_terms: null,
+    owner_agent_id: null,
+  };
 }
 
 /** Toggle a project's network-mode opt-in and/or set its compensation declaration (Piece 6). */
@@ -559,6 +570,15 @@ export function setProjectNetworkMode(
   if (input.compensationTerms !== undefined) {
     db().prepare("UPDATE project SET compensation_terms = ? WHERE id = ?").run(input.compensationTerms, projectId);
   }
+}
+
+/**
+ * Network mode (Piece 5): declare who's exempt from the contract-task
+ * visibility lockdown for this project. Until this is set, nobody is
+ * exempt — see `taskVisibleTo`.
+ */
+export function setProjectOwner(projectId: string, ownerAgentId: string | null): void {
+  db().prepare("UPDATE project SET owner_agent_id = ? WHERE id = ?").run(ownerAgentId, projectId);
 }
 
 export function listProjects(orgId: string): ProjectRow[] {
@@ -1507,6 +1527,29 @@ export function setTaskPublished(taskId: string, published: boolean): void {
     .run(published ? nowIso() : null, taskId);
 }
 
+/**
+ * Network mode (Piece 5): the contract-task visibility lockdown. An
+ * `internal` task is visible to whoever could already see it — unchanged,
+ * zero effect outside network mode. A `contract` task is visible ONLY to
+ * the project's declared owner (`project.owner_agent_id`) or to the task's
+ * own assigned contributor (`task.owner_agent_id`) — everyone else gets
+ * `null`, not a redacted task. This is the single check every
+ * `task_list`/`task_get` caller must pass through; see "Design:
+ * Contract-based contributor isolation", Piece 5.
+ */
+export function taskVisibleTo(task: Task, callerAgentId: string): Task | null {
+  if (task.kind !== "contract") return task;
+  const project = getProject(task.project_id);
+  if (project?.owner_agent_id === callerAgentId) return task;
+  if (task.owner_agent_id === callerAgentId) return task;
+  return null;
+}
+
+/** `listTasks`, filtered through `taskVisibleTo` for the calling agent. */
+export function listTasksVisibleTo(projectId: string, callerAgentId: string, status?: TaskStatus): Task[] {
+  return listTasks(projectId, status).filter((t) => taskVisibleTo(t, callerAgentId) !== null);
+}
+
 /** Live tasks only — the archive is invisible everywhere unless asked for. */
 export function listTasks(projectId: string, status?: TaskStatus): Task[] {
   const rows = (
@@ -1523,6 +1566,11 @@ export function listTasks(projectId: string, status?: TaskStatus): Task[] {
           .all(projectId)
   ) as Record<string, unknown>[];
   return rows.map(loadTask);
+}
+
+/** `listArchivedTasks`, filtered through `taskVisibleTo` for the calling agent. */
+export function listArchivedTasksVisibleTo(projectId: string, callerAgentId: string): Task[] {
+  return listArchivedTasks(projectId).filter((t) => taskVisibleTo(t, callerAgentId) !== null);
 }
 
 /** The archive: findable on demand, newest first, never on the board. */

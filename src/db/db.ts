@@ -90,6 +90,7 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "task", "contract_spec", "TEXT");
   addColumn(db, "task", "contract_tests", "TEXT");
   addColumn(db, "task", "contract_deps", "TEXT");
+  addColumn(db, "project", "owner_agent_id", "TEXT REFERENCES agent(id)");
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }
