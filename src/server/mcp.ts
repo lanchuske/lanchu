@@ -432,14 +432,16 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         prUrl: z.string().optional().describe("URL of the pull/merge request for this task."),
         note: z.string().optional(),
         tokens: z.number().optional(),
+        weight: z.number().optional()
+          .describe("Network mode: contribution weight (1/2/3/5/8) — meaningful only when completing a 'QA: verify …' task on a network-mode project. Defaults to 1."),
       },
     },
-    async ({ taskId, status, title, stage, prUrl, note, tokens }) => {
+    async ({ taskId, status, title, stage, prUrl, note, tokens, weight }) => {
       try {
         if (!status && !title) return fail(new Error("pass a status, a title, or both"));
         if (title) store.redefineTask({ taskId, title, byAgentId: ctx.agentId });
         if (!status) return text({ task: store.getTask(taskId) });
-        const task = store.updateTaskStatus({ agentId: ctx.agentId, taskId, status, stage, prUrl, note, tokens });
+        const task = store.updateTaskStatus({ agentId: ctx.agentId, taskId, status, stage, prUrl, note, tokens, weight });
         // SDLC gate feedback: a 'done' that landed in the qa lane is awaiting
         // (or held for, in strict mode) independent verification.
         const verification =

@@ -568,6 +568,13 @@ export function listProjects(orgId: string): ProjectRow[] {
   return rows.map(loadProject);
 }
 
+export function getProject(projectId: string): ProjectRow | null {
+  const row = db().prepare(`SELECT ${PROJECT_COLS} FROM project WHERE id = ?`).get(projectId) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? loadProject(row) : null;
+}
+
 /** Fill in a project's repo/path once (won't overwrite values already set). */
 export function setProjectRepo(
   projectId: string,
@@ -1052,6 +1059,14 @@ export function getContributionEvent(id: string): ContributionEvent | null {
     | Record<string, unknown>
     | undefined;
   return row ? loadContributionEvent(row) : null;
+}
+
+/** Every contribution_event a task has earned (normally zero or one, per QA-pass). */
+export function listContributionEventsForTask(taskId: string): ContributionEvent[] {
+  const rows = db()
+    .prepare(`SELECT ${CONTRIBUTION_EVENT_COLS} FROM contribution_event WHERE task_id = ? ORDER BY created_at`)
+    .all(taskId) as Record<string, unknown>[];
+  return rows.map(loadContributionEvent);
 }
 
 // Aggregate SUM(weight) queries for the Person profile and directory/detail
@@ -1783,6 +1798,8 @@ export function updateTaskStatus(input: {
   prUrl?: string;
   note?: string;
   tokens?: number;
+  /** Network mode (Piece 4): contribution weight (1/2/3/5/8), meaningful only when completing a "QA: verify" task. Defaults to 1. */
+  weight?: number;
 }): Task {
   const task = getTask(input.taskId);
   const agent = getAgent(input.agentId);
@@ -1867,11 +1884,11 @@ export function updateTaskStatus(input: {
 
   // A completed verification resolves its parent: pass → done; FAIL… → bounce.
   if (effectiveStatus === "done" && isVerificationTask(task) && task.parent_task_id) {
-    resolveVerification(getTask(input.taskId)!, input.agentId, input.note);
+    resolveVerification(getTask(input.taskId)!, input.agentId, input.note, input.weight);
   }
   // A completed BATCH verification resolves every original its title covers.
   if (effectiveStatus === "done" && isBatchVerificationTask(task)) {
-    resolveBatchVerification(getTask(input.taskId)!, input.agentId, input.note);
+    resolveBatchVerification(getTask(input.taskId)!, input.agentId, input.note, input.weight);
   }
   return getTask(input.taskId)!;
 }
@@ -2187,7 +2204,7 @@ function createVerificationTask(orig: Task, orgId: string): Task {
  * the original to done. In strict mode, orgs WITH a qa role only accept the
  * resolution from a qa-role agent.
  */
-function resolveVerification(verification: Task, qaAgentId: string, note?: string): void {
+function resolveVerification(verification: Task, qaAgentId: string, note?: string, weight?: number): void {
   const parent = verification.parent_task_id ? getTask(verification.parent_task_id) : null;
   if (!parent || parent.stage === "done" || parent.stage === "rc" || parent.stage === "released") return;
   const qaAgent = getAgent(qaAgentId);
@@ -2207,7 +2224,7 @@ function resolveVerification(verification: Task, qaAgentId: string, note?: strin
     return;
   }
 
-  flipVerifiedOriginal(parent, verification.id, orgId, qaAgentId, note);
+  flipVerifiedOriginal(parent, verification.id, orgId, qaAgentId, note, { weight });
 }
 
 /** Strict mode: orgs WITH a qa role only accept a resolution from a qa-role agent. */
@@ -2242,7 +2259,7 @@ function flipVerifiedOriginal(
   orgId: string,
   qaAgentId: string | null,
   note?: string,
-  opts?: { notifyOwner?: boolean },
+  opts?: { notifyOwner?: boolean; weight?: number },
 ): void {
   const now = nowIso();
   // QA pass parks the work in Release Candidate — the accumulating, visible
@@ -2264,6 +2281,7 @@ function flipVerifiedOriginal(
   });
   unblockDependents(parent.project_id);
   queueCommsTask(parent, orgId); // user-facing work that just became REAL done
+  recordNetworkContribution(parent, qaAgentId, opts?.weight);
   if ((opts?.notifyOwner ?? true) && parent.owner_agent_id && parent.owner_agent_id !== qaAgentId) {
     insertNotice({
       orgId,
@@ -2277,12 +2295,35 @@ function flipVerifiedOriginal(
 }
 
 /**
+ * Network mode (Piece 4): writes the contribution_event this QA-pass earns,
+ * only for network-mode projects with a real Person contributor. Silent
+ * no-op everywhere else — every local-mode `flipVerifiedOriginal` call
+ * behaves exactly as it did before this existed. Self-dealing (verifier ===
+ * contributor) is intentionally NOT blocked here — that's Task 3
+ * (task-mrl5tz0666), kept as a separate, focused change.
+ */
+function recordNetworkContribution(parent: Task, qaAgentId: string | null, weight?: number): void {
+  const project = getProject(parent.project_id);
+  if (!project?.network_mode) return;
+  const ownerAgent = parent.owner_agent_id ? getAgent(parent.owner_agent_id) : null;
+  if (!ownerAgent?.person_id) return; // no Person to credit — not a network Membership (yet)
+  const qaAgent = qaAgentId ? getAgent(qaAgentId) : null;
+  createContributionEvent({
+    personId: ownerAgent.person_id,
+    projectId: parent.project_id,
+    taskId: parent.id,
+    weight: weight ?? 1,
+    verifiedBy: qaAgent?.person_id ?? null,
+  });
+}
+
+/**
  * A completed BATCH verification resolves every original its title covers
  * (see isBatchVerificationTask for the coverage contract). Refs named in a
  * FAIL sentence of the note stay unverified; a note that STARTS with FAIL
  * flips nothing — QA bounces the failing items individually.
  */
-function resolveBatchVerification(batch: Task, qaAgentId: string, note?: string): void {
+function resolveBatchVerification(batch: Task, qaAgentId: string, note?: string, weight?: number): void {
   const qaAgent = getAgent(qaAgentId);
   if (!qaAgent) return;
   const orgId = qaAgent.org_id;
@@ -2293,7 +2334,7 @@ function resolveBatchVerification(batch: Task, qaAgentId: string, note?: string)
   const excluded = failExclusions(note);
   for (const orig of coveredOriginals(batch, covered, excluded)) {
     closeOpenVerificationChild(orig, batch.id, orgId);
-    flipVerifiedOriginal(orig, batch.id, orgId, qaAgentId, note);
+    flipVerifiedOriginal(orig, batch.id, orgId, qaAgentId, note, { weight });
   }
   // qa duty: the batch is closed — its probe fixtures go to the archive.
   archiveQaProbesOf(qaAgentId, "batch closed");
