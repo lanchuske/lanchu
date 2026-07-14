@@ -242,6 +242,8 @@ export interface Task {
   /** The release that shipped this task (e.g. "v0.5.13"); stamped by the
    *  release sweep when a tag covering the work appears on origin/main. */
   release_version: string | null;
+  /** Network mode (Piece 6): null until the project owner explicitly publishes this task to the public directory. */
+  published_at: string | null;
 }
 
 export interface LanchuEvent {

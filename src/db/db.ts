@@ -83,6 +83,9 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "task", "release_version", "TEXT");
   addColumn(db, "agent", "person_id", "TEXT REFERENCES person(id)");
   addColumn(db, "agent", "kind", "TEXT NOT NULL DEFAULT 'ai'");
+  addColumn(db, "project", "network_mode", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "project", "compensation_terms", "TEXT");
+  addColumn(db, "task", "published_at", "TEXT");
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }

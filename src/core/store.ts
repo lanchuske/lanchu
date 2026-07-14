@@ -470,9 +470,13 @@ export interface ProjectRow {
   name: string;
   repo_url: string | null;
   local_path: string | null;
+  /** Network mode (Piece 6): opts this project into the public directory. False for every local-mode project. */
+  network_mode: boolean;
+  /** Network mode (Piece 6): free text, stored/displayed only — Lanchu never parses, escrows, or enforces it. */
+  compensation_terms: string | null;
 }
 
-const PROJECT_COLS = "id, name, repo_url, local_path";
+const PROJECT_COLS = "id, name, repo_url, local_path, network_mode, compensation_terms";
 
 function loadProject(row: Record<string, unknown>): ProjectRow {
   return {
@@ -480,6 +484,8 @@ function loadProject(row: Record<string, unknown>): ProjectRow {
     name: row.name as string,
     repo_url: (row.repo_url as string) ?? null,
     local_path: (row.local_path as string) ?? null,
+    network_mode: Boolean(row.network_mode),
+    compensation_terms: (row.compensation_terms as string) ?? null,
   };
 }
 
@@ -539,7 +545,20 @@ export function getOrCreateProject(orgId: string, name: string): ProjectRow {
   db()
     .prepare("INSERT INTO project(id, org_id, name, created_at) VALUES (?,?,?,?)")
     .run(id, orgId, name, nowIso());
-  return { id, name, repo_url: null, local_path: null };
+  return { id, name, repo_url: null, local_path: null, network_mode: false, compensation_terms: null };
+}
+
+/** Toggle a project's network-mode opt-in and/or set its compensation declaration (Piece 6). */
+export function setProjectNetworkMode(
+  projectId: string,
+  input: { networkMode?: boolean; compensationTerms?: string | null },
+): void {
+  if (input.networkMode !== undefined) {
+    db().prepare("UPDATE project SET network_mode = ? WHERE id = ?").run(input.networkMode ? 1 : 0, projectId);
+  }
+  if (input.compensationTerms !== undefined) {
+    db().prepare("UPDATE project SET compensation_terms = ? WHERE id = ?").run(input.compensationTerms, projectId);
+  }
 }
 
 export function listProjects(orgId: string): ProjectRow[] {
@@ -1448,17 +1467,25 @@ function loadTask(row: Record<string, unknown>): Task {
     archived_reason: (row.archived_reason as string) ?? null,
     superseded_by_task_id: (row.superseded_by_task_id as string) ?? null,
     release_version: (row.release_version as string) ?? null,
+    published_at: (row.published_at as string) ?? null,
   };
 }
 
 const TASK_COLS =
-  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce, archived_at, archived_reason, superseded_by_task_id, release_version";
+  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce, archived_at, archived_reason, superseded_by_task_id, release_version, published_at";
 
 export function getTask(taskId: string): Task | null {
   const row = db().prepare(`SELECT ${TASK_COLS} FROM task WHERE id = ?`).get(taskId) as
     | Record<string, unknown>
     | undefined;
   return row ? loadTask(row) : null;
+}
+
+/** Publish (or unpublish) a task to the network-mode directory (Piece 6). Idempotent. */
+export function setTaskPublished(taskId: string, published: boolean): void {
+  db()
+    .prepare("UPDATE task SET published_at = ? WHERE id = ?")
+    .run(published ? nowIso() : null, taskId);
 }
 
 /** Live tasks only — the archive is invisible everywhere unless asked for. */
