@@ -25,6 +25,7 @@ import {
   type Agent,
   type AgentKind,
   type AgentState,
+  type ContributionEvent,
   type EventOutcome,
   type EventType,
   type LanchuEvent,
@@ -989,6 +990,54 @@ export function getPerson(personId: string): Person | null {
     | undefined;
   return row ? loadPerson(row) : null;
 }
+
+// ─────────────── contribution ledger (network mode) ───────────────
+// The transparent, non-monetary credit record — see "Design: Contribution
+// ledger (network mode — Piece 4)". Written once per task at QA-pass time
+// (Task 2, hooks flipVerifiedOriginal — not yet built); these are the raw
+// CRUD + aggregate primitives that hook will call.
+
+const CONTRIBUTION_EVENT_COLS = "id, person_id, project_id, task_id, weight, verified_by, created_at";
+
+function loadContributionEvent(row: Record<string, unknown>): ContributionEvent {
+  return {
+    id: row.id as string,
+    person_id: row.person_id as string,
+    project_id: row.project_id as string,
+    task_id: row.task_id as string,
+    weight: row.weight as number,
+    verified_by: (row.verified_by as string) ?? null,
+    created_at: row.created_at as string,
+  };
+}
+
+export function createContributionEvent(input: {
+  personId: string;
+  projectId: string;
+  taskId: string;
+  weight: number;
+  verifiedBy?: string | null;
+}): ContributionEvent {
+  const id = uuid();
+  db()
+    .prepare(
+      `INSERT INTO contribution_event(id, person_id, project_id, task_id, weight, verified_by, created_at)
+       VALUES (?,?,?,?,?,?,?)`,
+    )
+    .run(id, input.personId, input.projectId, input.taskId, input.weight, input.verifiedBy ?? null, nowIso());
+  return getContributionEvent(id)!;
+}
+
+export function getContributionEvent(id: string): ContributionEvent | null {
+  const row = db().prepare(`SELECT ${CONTRIBUTION_EVENT_COLS} FROM contribution_event WHERE id = ?`).get(id) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? loadContributionEvent(row) : null;
+}
+
+// Aggregate SUM(weight) queries for the Person profile and directory/detail
+// pages are Task 4's scope (task-mrl5u2dy67), not this schema task's — see
+// "Design: Contribution ledger", Piece 4.
 
 export function listAgents(orgId: string): Agent[] {
   const rows = db()
