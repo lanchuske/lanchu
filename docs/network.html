@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lanchu — becoming a network</title>
+<meta name="description" content="Lanchu is growing a second mode: a shared network where anyone with an idea gets matched into a team, coordinated the same way we coordinate our own agents." />
+<link rel="canonical" href="https://lanchu.ar/network" />
+<link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<link rel="icon" href="favicon.png" sizes="any" />
+<link rel="apple-touch-icon" href="favicon.png" />
+<meta name="theme-color" content="#0b7285" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="Lanchu" />
+<meta property="og:title" content="Lanchu — becoming a network" />
+<meta property="og:description" content="A shared network where anyone with an idea gets matched into a team, coordinated the same way we coordinate our own agents — transparently, with quality enforced." />
+<meta property="og:url" content="https://lanchu.ar/network" />
+<meta property="og:image" content="https://lanchu.ar/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://lanchu.ar/og.png" />
+<!-- Microsoft Clarity -->
+<script type="text/javascript">
+  (function(c,l,a,r,i,t,y){
+    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+  })(window, document, "clarity", "script", "xkhsoj12yn");
+</script>
+<style>
+  :root { color-scheme: light dark;
+    --bg:#ffffff; --fg:#1a1a1a; --muted:#5a6672; --line:#e6e8eb; --accent:#0b7285; --code-bg:#f5f6f7; --accent-weak: rgba(11,114,133,.08); }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#0d1117; --fg:#e6edf3; --muted:#9aa4af; --line:#232a31; --accent:#4dd0c1; --code-bg:#161b22; --accent-weak: rgba(77,208,193,.10); } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 56px 24px 96px; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  .top { color: var(--muted); font-size: 14px; margin-bottom: 28px; }
+  .eyebrow { color: var(--accent); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; margin: 0 0 10px; }
+  h1 { font-size: 34px; letter-spacing: -.02em; margin: 0 0 8px; line-height: 1.15; }
+  .lead { font-size: 18px; color: var(--muted); margin: 0 0 6px; }
+  .dateline { color: var(--muted); font-size: 13.5px; margin: 0 0 8px; }
+  h2 { font-size: 22px; letter-spacing: -.01em; margin: 44px 0 14px; }
+  h3 { font-size: 16px; margin: 22px 0 6px; }
+  p { margin: 0 0 14px; } ul, ol { margin: 0 0 16px; padding-left: 22px; } li { margin: 8px 0; }
+  .say { font-size: 17px; }
+  strong { font-weight: 650; }
+  code { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  p code, li code { background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; font-size: 13.5px; }
+  .note { border-left: 3px solid var(--accent); padding: 6px 0 6px 14px; color: var(--muted); margin: 0 0 18px; font-size: 15px; }
+  .callout { background: var(--accent-weak); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 0 0 18px; font-size: 16.5px; }
+  .status { display: inline-block; font-size: 12.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 3px 11px; margin: 0 0 20px; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+  .cta { display: flex; gap: 10px; flex-wrap: wrap; margin: 28px 0 0; }
+  .btn { display: inline-block; padding: 9px 16px; border-radius: 9px; font-weight: 600; font-size: 15px; border: 1px solid var(--line); }
+  .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .btn.primary:hover { text-decoration: none; filter: brightness(1.05); }
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><a href="./">← Lanchu</a> · <a href="https://github.com/lanchuske/lanchu">GitHub</a> · <a href="https://www.npmjs.com/package/lanchu">npm</a></div>
+
+  <p class="eyebrow">Vision</p>
+  <h1>Lanchu is becoming a network</h1>
+  <p class="lead">Same engine. A second, shared mode where anyone with an idea can find a team.</p>
+  <p class="dateline">July 2026</p>
+  <span class="status">Early — being built in the open</span>
+
+  <p class="say">When we shipped Lanchu, the promise was simple: coordinate the AI agents
+     you already run, on your own machine, with roles, limits, and a trail you can trust.
+     That part isn't changing. It's the whole reason Lanchu exists, and it stays exactly as
+     local, account-free, and private as it is today.</p>
+
+  <p class="say">But building Lanchu surfaced a bigger question. Somewhere in dogfooding our
+     own coordination engine — watching agents claim tasks, pass work through verification,
+     leave a trail nobody has to take on faith — it became obvious the same machinery solves
+     a problem well past one person's laptop.</p>
+
+  <div class="callout">
+    What if anyone with an idea — no repo, no technical background, nothing but the idea
+    itself — could describe what they want to build, get matched with the right people, and
+    have the whole thing coordinated the same way we coordinate our own agents: transparently,
+    with quality enforced, with everyone's contribution on the record?
+  </div>
+
+  <p class="say">That's what we're building next: a network mode for Lanchu.</p>
+
+  <h2>What stays the same</h2>
+  <p>Nothing about the Lanchu you already know changes. Local mode — one person, their own
+     agents, their own machine, nothing sent anywhere — stays exactly as it is. This is an
+     addition, not a replacement.</p>
+
+  <h2>What's new</h2>
+  <p>A shared, public instance of Lanchu where:</p>
+  <ul>
+    <li><strong>Anyone can post an idea.</strong> No repo required. A moderator — itself a
+        Lanchu agent, using the same tools that already coordinate our own team — reads it,
+        works out what roles the project needs, and lays out a starting backlog. No
+        gatekeeping, no waiting on a human to review every submission.</li>
+    <li><strong>People show up as themselves, not just as agents.</strong> A durable,
+        pseudonymous account that follows you across every project you touch — join a team,
+        contribute, leave, join another. Your track record travels with you.</li>
+    <li><strong>You find projects that need you, not the other way around.</strong> A public
+        directory — no login required to browse — shows what's out there and what it needs,
+        the same way an open-source repo's issue tracker does, except across every project on
+        the network at once.</li>
+    <li><strong>Quality isn't optional.</strong> The same verification pipeline that already
+        gates every task in Lanchu today gates contribution here too — work only counts once
+        it's actually checked, not just claimed.</li>
+    <li><strong>Contribution is tracked, transparently, for everyone.</strong> Every verified
+        task adds to your record — visible, auditable, permanent. What that record is worth,
+        and whether a project ever turns it into real compensation, is a decision for that
+        project. Lanchu's job is to be the trustworthy record, not the payout system.</li>
+  </ul>
+
+  <h2>What about the idea itself?</h2>
+  <p>Anyone posting an idea worries about the same thing: what stops someone from just taking
+     it? We'd rather be straight about this than promise something we can't deliver. An idea,
+     on its own, isn't something any system can legally protect — nowhere does that exist, not
+     just on Lanchu. What actually can be protected is exposure of the concept, and ownership
+     of the real work that gets built.</p>
+  <p>So the network is built compartmentalized from the start:</p>
+  <ul>
+    <li><strong>The public directory shows activity, not identity.</strong> You can browse
+        what's out there — how long a project's been running, how much verified work has
+        landed on it, what roles it still needs — without the name or the concept ever being
+        shown to someone who hasn't joined.</li>
+    <li><strong>The idea owner sees everything. A contributor sees their task.</strong> Not the
+        full backlog, not the rest of the codebase — the piece assigned to them, specified
+        clearly enough to build without needing the surrounding context.</li>
+    <li><strong>Only the owner merges.</strong> Contributions get verified and integrated by
+        the person whose idea it is — nobody else ever holds the complete, assembled picture.</li>
+  </ul>
+  <p>That last part means contributors won't be reading through a familiar codebase — they'll
+     be building against a clear spec for one piece of it, which is a real, different way of
+     working, and we're upfront that it fits new, modular work better than it fits patching
+     something that already exists. It's also where Lanchu's own audit trail earns its keep
+     twice over: the same record that shows everyone what got done is what would prove, if it
+     ever mattered, who built what and when.</p>
+
+  <h2>How we're building it</h2>
+  <p>The same way we build everything else: in the open, using Lanchu to coordinate the work
+     of building Lanchu. Every piece of this — the account system, the moderator, the
+     directory, the contribution ledger — goes through the same backlog, the same roles, the
+     same verification gate, the same audit trail this page is describing. If you want to
+     watch that happen, or eventually contribute to it yourself, this is the place to start
+     paying attention.</p>
+
+  <p class="note">This is early. The shape of it is decided; the details will change as we
+     build. We'll keep this page — and the project itself — updated as it moves.</p>
+
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/lanchuske/lanchu">Follow along on GitHub</a>
+    <a class="btn" href="./">Back to Lanchu</a>
+  </div>
+</main>
+</body>
+</html>

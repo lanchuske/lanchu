@@ -6,6 +6,7 @@ Lanchu does not run or orchestrate your agents; it coordinates and bounds their 
 
 ## Documentation
 - [How it works](https://lanchu.ar/how-it-works): what it solves, what you do as a user, and how to see, update and uninstall it.
+- [Lanchu is becoming a network](https://lanchu.ar/network): early vision for a second, shared mode — post an idea, get matched into a team, contribute and earn tracked credit. Not yet built.
 - [Architecture](https://github.com/lanchuske/lanchu/blob/main/ARCHITECTURE.md): tools, resources and events.
 - [Definition](https://github.com/lanchuske/lanchu/blob/main/DEFINITION.md): what Lanchu is and is not.
 - [CLI reference](https://github.com/lanchuske/lanchu/blob/main/CLI.md): the full command reference.
