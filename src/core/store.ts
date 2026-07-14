@@ -23,6 +23,7 @@ import {
   QuotaError,
   ScopeError,
   type Agent,
+  type AgentKind,
   type AgentState,
   type EventOutcome,
   type EventType,
@@ -30,6 +31,7 @@ import {
   type MemoryEntry,
   type MemoryScope,
   type MemorySource,
+  type Person,
   type PresenceState,
   type RejectReason,
   type Role,
@@ -784,13 +786,15 @@ function loadAgent(row: Record<string, unknown>): Agent {
     gh_login: (row.gh_login as string) ?? null,
     claude_session_id: (row.claude_session_id as string) ?? null,
     parked_at: (row.parked_at as string) ?? null,
+    person_id: (row.person_id as string) ?? null,
+    kind: (row.kind as AgentKind) ?? "ai",
     created_at: row.created_at as string,
     retired_at: (row.retired_at as string) ?? null,
   };
 }
 
 const AGENT_COLS =
-  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, model, git_author_name, git_author_email, gh_login, claude_session_id, parked_at, created_at, retired_at";
+  "id, org_id, role_id, name, objective, state, last_activity_at, last_activity, cwd, branch, worktree, color_slot, model, git_author_name, git_author_email, gh_login, claude_session_id, parked_at, person_id, kind, created_at, retired_at";
 
 /**
  * Per-org color de-collision (bug from #22: 'qa-gate' and 'product' hashed to
@@ -896,6 +900,10 @@ export function createAgent(input: {
   roleId: string;
   objective?: string;
   name?: string;
+  /** Network mode: the Person this Membership belongs to (see Piece 1). Omit for every local-mode agent. */
+  personId?: string;
+  /** Network mode: 'human' when the Person acts directly, no MCP session. Defaults 'ai'. */
+  kind?: AgentKind;
 }): Agent {
   const id = uuid();
   // Slugify whatever base we were given (explicit name or objective) so an
@@ -913,10 +921,20 @@ export function createAgent(input: {
 
   db()
     .prepare(
-      `INSERT INTO agent(id, org_id, role_id, name, objective, state, color_slot, created_at)
-       VALUES (?,?,?,?,?, 'active', ?, ?)`,
+      `INSERT INTO agent(id, org_id, role_id, name, objective, state, color_slot, person_id, kind, created_at)
+       VALUES (?,?,?,?,?, 'active', ?, ?, ?, ?)`,
     )
-    .run(id, input.orgId, input.roleId, name, input.objective ?? null, pickColorSlot(input.orgId, name), nowIso());
+    .run(
+      id,
+      input.orgId,
+      input.roleId,
+      name,
+      input.objective ?? null,
+      pickColorSlot(input.orgId, name),
+      input.personId ?? null,
+      input.kind ?? "ai",
+      nowIso(),
+    );
 
   recordEvent({
     org_id: input.orgId,
@@ -934,6 +952,42 @@ export function getAgent(agentId: string): Agent | null {
     | Record<string, unknown>
     | undefined;
   return row ? loadAgent(row) : null;
+}
+
+// ───────────────────────── person (network mode) ─────────────────────────
+// A durable identity that outlives any single org membership — see "Design:
+// Person identity & Membership (network mode — Piece 1)". Global, not
+// org-scoped, unlike everything else in this file. A Person's Membership in
+// a project is just an `agent` row with `person_id` set (createAgent above).
+
+const PERSON_COLS = "id, email, handle, bio, github_login, created_at";
+
+function loadPerson(row: Record<string, unknown>): Person {
+  return {
+    id: row.id as string,
+    email: row.email as string,
+    handle: row.handle as string,
+    bio: (row.bio as string) ?? null,
+    github_login: (row.github_login as string) ?? null,
+    created_at: row.created_at as string,
+  };
+}
+
+export function createPerson(input: { email: string; handle: string; bio?: string; githubLogin?: string }): Person {
+  const id = uuid();
+  db()
+    .prepare(
+      `INSERT INTO person(id, email, handle, bio, github_login, created_at) VALUES (?,?,?,?,?,?)`,
+    )
+    .run(id, input.email, input.handle, input.bio ?? null, input.githubLogin ?? null, nowIso());
+  return getPerson(id)!;
+}
+
+export function getPerson(personId: string): Person | null {
+  const row = db().prepare(`SELECT ${PERSON_COLS} FROM person WHERE id = ?`).get(personId) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? loadPerson(row) : null;
 }
 
 export function listAgents(orgId: string): Agent[] {
