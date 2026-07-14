@@ -9,8 +9,11 @@
 // 19 = network mode Piece 4 (contribution_event table — see
 // "Design: Contribution ledger (network mode — Piece 4)");
 // 20 = network mode Piece 6 (project.network_mode/compensation_terms,
-// task.published_at — see "Design: Cross-org task marketplace (Piece 6)").
-export const SCHEMA_VERSION = 20;
+// task.published_at — see "Design: Cross-org task marketplace (Piece 6)");
+// 21 = network mode Piece 5 (task.kind='contract' + contract_spec/
+// contract_tests/contract_deps — see "Design: Contract-based contributor
+// isolation (network mode — Piece 5)").
+export const SCHEMA_VERSION = 21;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -134,7 +137,22 @@ CREATE TABLE IF NOT EXISTS task (
   -- Network mode (Piece 6): NULL until the project owner explicitly
   -- publishes this task to the public directory. Existing solely because a
   -- task can exist without being discoverable network-wide.
-  published_at        TEXT
+  published_at        TEXT,
+  -- Network mode (Piece 5): 'internal' (default, every task today) vs
+  -- 'contract' — a task a network contributor works entirely isolated from
+  -- the real repo, seeded only from the fields below. See "Design:
+  -- Contract-based contributor isolation", Piece 5.
+  kind                TEXT NOT NULL DEFAULT 'internal',
+  -- Signature/shape, inputs/outputs, behavioral constraints. Markdown +
+  -- code fences is enough for v1 — no bespoke DSL. Meaningful only when
+  -- kind='contract'.
+  contract_spec       TEXT,
+  -- An automated test suite the deliverable must satisfy, run inside the
+  -- contributor's sandbox before any human check (feeds Piece 4's weight).
+  contract_tests      TEXT,
+  -- JSON array of other *published* contract task ids this task may call —
+  -- their interface only, never their implementation.
+  contract_deps       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_tag (
@@ -321,4 +339,5 @@ CREATE INDEX IF NOT EXISTS idx_contribution_person  ON contribution_event(person
 CREATE INDEX IF NOT EXISTS idx_contribution_project ON contribution_event(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_network_mode ON project(network_mode);
 CREATE INDEX IF NOT EXISTS idx_task_published        ON task(published_at);
+CREATE INDEX IF NOT EXISTS idx_task_kind              ON task(kind);
 `;

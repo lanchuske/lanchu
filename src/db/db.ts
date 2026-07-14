@@ -86,6 +86,10 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "project", "network_mode", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "project", "compensation_terms", "TEXT");
   addColumn(db, "task", "published_at", "TEXT");
+  addColumn(db, "task", "kind", "TEXT NOT NULL DEFAULT 'internal'");
+  addColumn(db, "task", "contract_spec", "TEXT");
+  addColumn(db, "task", "contract_tests", "TEXT");
+  addColumn(db, "task", "contract_deps", "TEXT");
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }

@@ -3,6 +3,9 @@ export type AgentState = "active" | "idle" | "retired";
 /** 'human' = a Person acting directly (network mode); 'ai' = every agent today. */
 export type AgentKind = "ai" | "human";
 
+/** 'contract' = a network-mode task worked entirely isolated from the real repo (Piece 5); 'internal' = every task today. */
+export type TaskKind = "internal" | "contract";
+
 /**
  * Display presence: "working" = online with a fresh MCP call
  * (workingWindowMs), "idle" = reachable (live transport or alive terminal)
@@ -244,6 +247,14 @@ export interface Task {
   release_version: string | null;
   /** Network mode (Piece 6): null until the project owner explicitly publishes this task to the public directory. */
   published_at: string | null;
+  /** Network mode (Piece 5): 'contract' tasks are worked entirely isolated from the real repo. Defaults 'internal'. */
+  kind: TaskKind;
+  /** Signature/shape, inputs/outputs, behavioral constraints. Meaningful only when kind='contract'. */
+  contract_spec: string | null;
+  /** An automated test suite the deliverable must satisfy, run in the contributor's sandbox. */
+  contract_tests: string | null;
+  /** JSON array of other published contract task ids this task may call (interface only). */
+  contract_deps: string | null;
 }
 
 export interface LanchuEvent {
