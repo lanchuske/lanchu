@@ -3,12 +3,27 @@
  * Full documentation is in SCHEMA.md.
  */
 // 14 = task archive; 15 = doc lifecycle; 16 = wake v5 park & refire (agent session id + parked_at);
-// 17 = release pipeline (task.release_version; rc/released stages stamped by the release sweep).
-export const SCHEMA_VERSION = 17;
+// 17 = release pipeline (task.release_version; rc/released stages stamped by the release sweep);
+// 18 = network mode Piece 1 (person table; agent.person_id/agent.kind — see
+// "Design: Person identity & Membership (network mode — Piece 1)").
+export const SCHEMA_VERSION = 18;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
   version INTEGER NOT NULL
+);
+
+-- Network mode: a durable identity that outlives any single org membership.
+-- Global, not org-scoped — unlike everything else in this schema. An agent
+-- row references one via agent.person_id when it's a network-mode
+-- Membership (see "Design: Person identity & Membership", Piece 1).
+CREATE TABLE IF NOT EXISTS person (
+  id           TEXT PRIMARY KEY,
+  email        TEXT NOT NULL UNIQUE,
+  handle       TEXT NOT NULL UNIQUE,
+  bio          TEXT,
+  github_login TEXT,
+  created_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS org (
@@ -65,6 +80,8 @@ CREATE TABLE IF NOT EXISTS agent (
   gh_login         TEXT,
   claude_session_id TEXT,
   parked_at        TEXT,
+  person_id        TEXT REFERENCES person(id),
+  kind             TEXT NOT NULL DEFAULT 'ai',
   created_at       TEXT NOT NULL,
   retired_at       TEXT,
   UNIQUE (org_id, name)
@@ -262,6 +279,7 @@ CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
 CREATE INDEX IF NOT EXISTS idx_role_tag_tag        ON role_tag(tag);
 CREATE INDEX IF NOT EXISTS idx_agent_org_state     ON agent(org_id, state);
+CREATE INDEX IF NOT EXISTS idx_agent_person        ON agent(person_id);
 CREATE INDEX IF NOT EXISTS idx_session_agent_live  ON session(agent_id, ended_at);
 CREATE INDEX IF NOT EXISTS idx_event_org_id        ON event(org_id, id);
 CREATE INDEX IF NOT EXISTS idx_event_actor         ON event(actor_agent_id, id);

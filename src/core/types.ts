@@ -1,5 +1,8 @@
 export type AgentState = "active" | "idle" | "retired";
 
+/** 'human' = a Person acting directly (network mode); 'ai' = every agent today. */
+export type AgentKind = "ai" | "human";
+
 /**
  * Display presence: "working" = online with a fresh MCP call
  * (workingWindowMs), "idle" = reachable (live transport or alive terminal)
@@ -144,8 +147,25 @@ export interface Agent {
   claude_session_id: string | null;
   /** Set by the SessionEnd hook when the Claude session exits: parked, refire-able. */
   parked_at: string | null;
+  /** Network mode: the Person this Membership belongs to; null for every local-mode agent. */
+  person_id: string | null;
+  /** Network mode: 'human' when a Person acts directly (no MCP session — see Piece 1). Defaults 'ai'. */
+  kind: AgentKind;
   created_at: string;
   retired_at: string | null;
+}
+
+/**
+ * Network mode: a durable identity that outlives any single org membership.
+ * Global, not org-scoped. See "Design: Person identity & Membership".
+ */
+export interface Person {
+  id: string;
+  email: string;
+  handle: string;
+  bio: string | null;
+  github_login: string | null;
+  created_at: string;
 }
 
 /** Why an agent bounced a task back to definition instead of guessing. */
