@@ -9,6 +9,7 @@ import { detectRuntimes } from "../core/runtimes.js";
 import { sameModelTier, suggestModel } from "../core/routing.js";
 import { QuotaError, ScopeError } from "../core/types.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn } from "../core/worktree.js";
+import { ensureContractSandbox } from "../core/contract-sandbox.js";
 import { spawnTerminal, terminalTitle, tileTerminals } from "./cockpit.js";
 import { putContext, type SessionContext } from "./context.js";
 
@@ -377,9 +378,24 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
             ),
           );
         }
-        // Default the task's workspace to the agent's isolated worktree so the
-        // board shows where each task is being worked on.
-        const ws = workspace ?? store.getAgent(ctx.agentId)?.worktree ?? undefined;
+        // Network mode (Piece 5): a contract task's workspace is ALWAYS its
+        // isolated sandbox — never the agent's real worktree, and never a
+        // caller-supplied override. This is the boundary the whole
+        // contributor-isolation promise rests on, so it isn't negotiable via
+        // the `workspace` param the way a normal task's is.
+        let ws: string | undefined;
+        if (target?.kind === "contract") {
+          const sandbox = ensureContractSandbox(taskId, {
+            contractSpec: target.contract_spec,
+            contractTests: target.contract_tests,
+            contractDeps: target.contract_deps,
+          });
+          ws = sandbox.path;
+        } else {
+          // Default the task's workspace to the agent's isolated worktree so
+          // the board shows where each task is being worked on.
+          ws = workspace ?? store.getAgent(ctx.agentId)?.worktree ?? undefined;
+        }
         const task = store.claimTask({ agentId: ctx.agentId, taskId, workspace: ws });
         const conflicts = store.warnWorkConflicts({
           orgId: ctx.orgId,
