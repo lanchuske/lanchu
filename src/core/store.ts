@@ -1483,11 +1483,15 @@ function loadTask(row: Record<string, unknown>): Task {
     superseded_by_task_id: (row.superseded_by_task_id as string) ?? null,
     release_version: (row.release_version as string) ?? null,
     published_at: (row.published_at as string) ?? null,
+    kind: (row.kind as Task["kind"]) ?? "internal",
+    contract_spec: (row.contract_spec as string) ?? null,
+    contract_tests: (row.contract_tests as string) ?? null,
+    contract_deps: (row.contract_deps as string) ?? null,
   };
 }
 
 const TASK_COLS =
-  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce, archived_at, archived_reason, superseded_by_task_id, release_version, published_at";
+  "id, project_id, parent_task_id, title, status, stage, pr_url, owner_agent_id, workspace, created_by_agent_id, created_at, claimed_at, updated_at, done_at, rejection_count, last_rejection, bounce_count, last_bounce, archived_at, archived_reason, superseded_by_task_id, release_version, published_at, kind, contract_spec, contract_tests, contract_deps";
 
 export function getTask(taskId: string): Task | null {
   const row = db().prepare(`SELECT ${TASK_COLS} FROM task WHERE id = ?`).get(taskId) as
@@ -1548,6 +1552,12 @@ export function createTask(input: {
   stage?: TaskStage;
   parentTaskId?: string | null;
   deps?: string[];
+  /** Network mode (Piece 5): 'contract' for a task worked entirely isolated from the real repo. Defaults 'internal'. */
+  kind?: Task["kind"];
+  contractSpec?: string;
+  contractTests?: string;
+  /** JSON-encoded array of other published contract task ids this task may call. */
+  contractDeps?: string;
 }): Task {
   const agent = getAgent(input.agentId);
   if (!agent) throw new Error("unknown agent");
@@ -1579,10 +1589,23 @@ export function createTask(input: {
   const now = nowIso();
   db()
     .prepare(
-      `INSERT INTO task(id, project_id, parent_task_id, title, status, stage, created_by_agent_id, created_at, updated_at)
-       VALUES (?,?,?,?, 'available', ?, ?, ?, ?)`,
+      `INSERT INTO task(id, project_id, parent_task_id, title, status, stage, created_by_agent_id, created_at, updated_at, kind, contract_spec, contract_tests, contract_deps)
+       VALUES (?,?,?,?, 'available', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(id, input.projectId, input.parentTaskId ?? null, input.title, input.stage ?? null, input.agentId, now, now);
+    .run(
+      id,
+      input.projectId,
+      input.parentTaskId ?? null,
+      input.title,
+      input.stage ?? null,
+      input.agentId,
+      now,
+      now,
+      input.kind ?? "internal",
+      input.contractSpec ?? null,
+      input.contractTests ?? null,
+      input.contractDeps ?? null,
+    );
   for (const tag of tags) {
     db().prepare("INSERT OR IGNORE INTO task_tag(task_id, tag) VALUES (?,?)").run(id, tag);
   }

@@ -285,9 +285,17 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         deps: z.array(z.string()).default([]),
         stage: z.enum(["backlog", "definition", "build", "review", "qa", "done"]).optional()
           .describe("SDLC lane for the board: definition | build | review | qa | done."),
+        kind: z.enum(["internal", "contract"]).optional()
+          .describe("Network mode: 'contract' for a task worked entirely isolated from the real repo (see contractSpec/contractTests/contractDeps). Defaults 'internal'."),
+        contractSpec: z.string().optional()
+          .describe("Network mode: signature/shape, inputs/outputs, behavioral constraints — meaningful only when kind='contract'."),
+        contractTests: z.string().optional()
+          .describe("Network mode: an automated test suite the deliverable must satisfy, run in the contributor's sandbox."),
+        contractDeps: z.string().optional()
+          .describe("Network mode: JSON array of other published contract task ids this task may call (interface only)."),
       },
     },
-    async ({ title, tags, deps, stage }) => {
+    async ({ title, tags, deps, stage, kind, contractSpec, contractTests, contractDeps }) => {
       try {
         const task = store.createTask({
           projectId: ctx.projectId,
@@ -297,6 +305,10 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
           tags,
           deps,
           stage,
+          kind,
+          contractSpec,
+          contractTests,
+          contractDeps,
         });
         // Creating a task is not starting work: report overlap with a PRESENT
         // teammate as informational only (no STOP block, no notice, no audit
