@@ -2212,6 +2212,7 @@ function resolveVerification(verification: Task, qaAgentId: string, note?: strin
   const orgId = qaAgent.org_id;
 
   if (strictModeRejectsResolver(orgId, qaAgent, verification.id, parent.id)) return;
+  if (selfDealingRejectsResolver(parent, verification.id, qaAgentId)) return;
 
   if (/^\s*fail/i.test(note ?? "")) {
     advanceStage({
@@ -2244,6 +2245,46 @@ function strictModeRejectsResolver(
     fromAgentId: null,
     toAgentId: resolver.id,
     body: `${verificationId} must be completed by the qa role in strict mode — ${parentId} stays unverified.`,
+    ref: verificationId,
+  });
+  return true;
+}
+
+/**
+ * Network mode (Piece 4, Task 3): a Person cannot verify their own
+ * contribution. Only checked for network-mode projects with a real Person on
+ * BOTH sides — local-mode work and plain-AI-agent ownership (no person_id)
+ * can never trigger this, same guard as `recordNetworkContribution`. Mirrors
+ * `strictModeRejectsResolver`'s shape: the verification task's own
+ * completion still records (it happened), but the parent is NOT flipped —
+ * audited as a scope.violation event (not just a notice, since this is a
+ * governance rejection, not routine SDLC routing) and the resolver is told
+ * why.
+ */
+function selfDealingRejectsResolver(parent: Task, verificationId: string, qaAgentId: string): boolean {
+  const project = getProject(parent.project_id);
+  if (!project?.network_mode) return false;
+  const ownerAgent = parent.owner_agent_id ? getAgent(parent.owner_agent_id) : null;
+  const qaAgent = getAgent(qaAgentId);
+  if (!ownerAgent?.person_id || !qaAgent?.person_id) return false;
+  if (ownerAgent.person_id !== qaAgent.person_id) return false;
+
+  recordEvent({
+    org_id: qaAgent.org_id,
+    project_id: parent.project_id,
+    type: "scope.violation",
+    actor_agent_id: qaAgentId,
+    subject_kind: "task",
+    subject_id: verificationId,
+    outcome: "rejected",
+    data: { action: "verify", reason: "self-dealing", parent_task_id: parent.id, person_id: ownerAgent.person_id },
+  });
+  insertNotice({
+    orgId: qaAgent.org_id,
+    kind: "system",
+    fromAgentId: null,
+    toAgentId: qaAgent.id,
+    body: `${verificationId} can't verify your own contribution — ${parent.id} stays unverified. Self-dealing on network-mode work is blocked.`,
     ref: verificationId,
   });
   return true;
@@ -2333,6 +2374,9 @@ function resolveBatchVerification(batch: Task, qaAgentId: string, note?: string,
   const covered = extractVerificationRefs(batch.title);
   const excluded = failExclusions(note);
   for (const orig of coveredOriginals(batch, covered, excluded)) {
+    // Self-dealing is per-original, not per-batch: one covered task being a
+    // self-deal doesn't block the rest of the batch from resolving normally.
+    if (selfDealingRejectsResolver(orig, batch.id, qaAgentId)) continue;
     closeOpenVerificationChild(orig, batch.id, orgId);
     flipVerifiedOriginal(orig, batch.id, orgId, qaAgentId, note, { weight });
   }
