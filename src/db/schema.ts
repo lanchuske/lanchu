@@ -16,8 +16,10 @@
 // 22 = network mode Piece 5 Task 5 (project.owner_agent_id — the exemption
 // for the contract-task visibility lockdown);
 // 23 = network mode Piece 5 Task 3 (contract_deliverable table — see
-// "Design: Contract-based contributor isolation (network mode — Piece 5)").
-export const SCHEMA_VERSION = 23;
+// "Design: Contract-based contributor isolation (network mode — Piece 5)");
+// 24 = network mode Piece 1 Task 2 (person_login_request + person_session
+// — magic-link auth, orthogonal to the MCP session mechanism).
+export const SCHEMA_VERSION = 24;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -35,6 +37,31 @@ CREATE TABLE IF NOT EXISTS person (
   bio          TEXT,
   github_login TEXT,
   created_at   TEXT NOT NULL
+);
+
+-- Network mode (Piece 1, Task 2): a magic-link request — orthogonal to the
+-- MCP \`session\` table, which is how an already-provisioned agent proves
+-- itself. A Person, before signing up, isn't an agent yet and has no MCP
+-- client. Single-use (consumed_at), short-lived (~15 min, enforced in
+-- code, not here). See "Design: Person identity & Membership".
+CREATE TABLE IF NOT EXISTS person_login_request (
+  id          TEXT PRIMARY KEY,
+  email       TEXT NOT NULL,
+  token       TEXT NOT NULL UNIQUE,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  consumed_at TEXT
+);
+
+-- Network mode (Piece 1, Task 2): a signed-in Person's web session — the
+-- cookie-based counterpart to the MCP session table, never used by an MCP
+-- client. Longer-lived than a login request (weeks, not minutes).
+CREATE TABLE IF NOT EXISTS person_session (
+  id         TEXT PRIMARY KEY,
+  person_id  TEXT NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+  token      TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS org (
@@ -366,4 +393,6 @@ CREATE INDEX IF NOT EXISTS idx_project_network_mode ON project(network_mode);
 CREATE INDEX IF NOT EXISTS idx_task_published        ON task(published_at);
 CREATE INDEX IF NOT EXISTS idx_task_kind              ON task(kind);
 CREATE INDEX IF NOT EXISTS idx_contract_deliverable_task ON contract_deliverable(task_id, submitted_at);
+CREATE INDEX IF NOT EXISTS idx_person_login_request_email ON person_login_request(email, created_at);
+CREATE INDEX IF NOT EXISTS idx_person_session_person       ON person_session(person_id);
 `;

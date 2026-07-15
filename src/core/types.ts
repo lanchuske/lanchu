@@ -179,6 +179,32 @@ export interface Person {
 }
 
 /**
+ * Network mode: a magic-link request — orthogonal to the MCP `session`
+ * table. Single-use (`consumed_at`), short-lived. See "Design: Person
+ * identity & Membership".
+ */
+export interface PersonLoginRequest {
+  id: string;
+  email: string;
+  token: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+}
+
+/**
+ * Network mode: a signed-in Person's web session — the cookie-based
+ * counterpart to the MCP session table, never used by an MCP client.
+ */
+export interface PersonSession {
+  id: string;
+  person_id: string;
+  token: string;
+  created_at: string;
+  expires_at: string;
+}
+
+/**
  * Network mode: the transparent, non-monetary contribution ledger. Written
  * once per task at QA-pass time, only for network-mode projects. See
  * "Design: Contribution ledger (network mode — Piece 4)".

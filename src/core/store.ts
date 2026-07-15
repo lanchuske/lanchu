@@ -6,6 +6,9 @@ import {
   nudgeAfterMs,
   nudgeBudget,
   nudgeCooldownMs,
+  personLoginCooldownMs,
+  personLoginRequestTtlMs,
+  personSessionTtlMs,
   releaseMaxAgeHours,
   releaseMaxChanges,
   sdlcMode,
@@ -34,6 +37,8 @@ import {
   type MemoryScope,
   type MemorySource,
   type Person,
+  type PersonLoginRequest,
+  type PersonSession,
   type PresenceState,
   type RejectReason,
   type Role,
@@ -1093,6 +1098,112 @@ export function getPerson(personId: string): Person | null {
     | Record<string, unknown>
     | undefined;
   return row ? loadPerson(row) : null;
+}
+
+export function getPersonByEmail(email: string): Person | null {
+  const row = db().prepare(`SELECT ${PERSON_COLS} FROM person WHERE email = ?`).get(email.trim().toLowerCase()) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? loadPerson(row) : null;
+}
+
+// ───────────────────── magic-link auth (network mode, Piece 1 Task 2) ─────────────────────
+// person_login_request + person_session are orthogonal to the MCP session
+// mechanism — a Person, before signing up, isn't an agent and has no MCP
+// client. See "Design: Person identity & Membership".
+
+const HANDLE_PATTERN = /^[a-z0-9-]{3,24}$/;
+
+/** Handle format from the design doc: lowercase, [a-z0-9-], 3-24 chars. */
+export function isValidHandle(handle: string): boolean {
+  return HANDLE_PATTERN.test(handle);
+}
+
+/**
+ * Start a magic-link login: creates a single-use, short-lived token. Rate
+ * limited per email — a request within the cooldown of the last one for
+ * the same email is rejected rather than silently creating another row (a
+ * flood of unconsumed tokens is its own minor liability).
+ *
+ * Delivering the token is deliberately NOT this function's job — see the
+ * HTTP layer for why (this must never be echoed back over an
+ * unauthenticated response; only whoever controls the inbox may see it).
+ */
+export function requestPersonLogin(email: string): PersonLoginRequest {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized.includes("@") || normalized.length < 3) {
+    throw new Error("a valid email is required.");
+  }
+  const recent = db()
+    .prepare("SELECT created_at FROM person_login_request WHERE email = ? ORDER BY created_at DESC LIMIT 1")
+    .get(normalized) as { created_at: string } | undefined;
+  if (recent && Date.now() - Date.parse(recent.created_at) < personLoginCooldownMs()) {
+    throw new ScopeError(
+      "a login link was already requested for this email — check your inbox, or wait a minute before requesting another.",
+    );
+  }
+
+  const id = uuid();
+  const token = sessionToken();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + personLoginRequestTtlMs());
+  db()
+    .prepare(
+      "INSERT INTO person_login_request(id, email, token, created_at, expires_at) VALUES (?,?,?,?,?)",
+    )
+    .run(id, normalized, token, now.toISOString(), expiresAt.toISOString());
+  return { id, email: normalized, token, created_at: now.toISOString(), expires_at: expiresAt.toISOString(), consumed_at: null };
+}
+
+/**
+ * Complete a magic-link login. Consumes the token immediately — before
+ * anything else — so a token can never be replayed even if a later step
+ * throws. A brand-new email needs `handle` to finish signing up; an
+ * existing Person just needs the token.
+ */
+export function verifyPersonLogin(input: { token: string; handle?: string }): { person: Person; session: PersonSession } {
+  const row = db()
+    .prepare("SELECT id, email, expires_at, consumed_at FROM person_login_request WHERE token = ?")
+    .get(input.token) as { id: string; email: string; expires_at: string; consumed_at: string | null } | undefined;
+  if (!row) throw new ScopeError("invalid or unknown login token.");
+  if (row.consumed_at) throw new ScopeError("this login link has already been used.");
+  if (Date.parse(row.expires_at) < Date.now()) throw new ScopeError("this login link has expired — request a new one.");
+
+  db().prepare("UPDATE person_login_request SET consumed_at = ? WHERE id = ?").run(nowIso(), row.id);
+
+  let person = getPersonByEmail(row.email);
+  if (!person) {
+    if (!input.handle) {
+      throw new ScopeError("no account exists for this email yet — provide a handle to finish signing up.");
+    }
+    if (!isValidHandle(input.handle)) {
+      throw new ScopeError("handle must be 3-24 characters, lowercase letters, digits, and hyphens only.");
+    }
+    person = createPerson({ email: row.email, handle: input.handle });
+  }
+
+  const session = issuePersonSession(person.id);
+  return { person, session };
+}
+
+function issuePersonSession(personId: string): PersonSession {
+  const id = uuid();
+  const token = sessionToken();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + personSessionTtlMs());
+  db()
+    .prepare("INSERT INTO person_session(id, person_id, token, created_at, expires_at) VALUES (?,?,?,?,?)")
+    .run(id, personId, token, now.toISOString(), expiresAt.toISOString());
+  return { id, person_id: personId, token, created_at: now.toISOString(), expires_at: expiresAt.toISOString() };
+}
+
+/** Resolve a Person from a live (unexpired) person_session token — the web-auth equivalent of `agentIdForToken`. */
+export function personForSessionToken(token: string): Person | null {
+  const row = db().prepare("SELECT person_id, expires_at FROM person_session WHERE token = ?").get(token) as
+    | { person_id: string; expires_at: string }
+    | undefined;
+  if (!row || Date.parse(row.expires_at) < Date.now()) return null;
+  return getPerson(row.person_id);
 }
 
 // ─────────────── contribution ledger (network mode) ───────────────
