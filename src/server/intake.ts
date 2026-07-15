@@ -80,6 +80,10 @@ const TEMPLATE = `<!doctype html>
         <textarea id="description" name="description" maxlength="10000" required></textarea>
         <label for="repo">Repository URL <span class="hint">(optional)</span></label>
         <input id="repo" name="repo" type="url" autocomplete="off" placeholder="https://github.com/you/repo" />
+        <div id="clarify" hidden>
+          <label for="clarification" id="clarify-q"></label>
+          <textarea id="clarification"></textarea>
+        </div>
         <button type="submit" id="submit">Submit idea</button>
         <p class="error" id="error"></p>
       </form>
@@ -94,6 +98,8 @@ const TEMPLATE = `<!doctype html>
         ev.preventDefault();
         error.textContent = "";
         submit.disabled = true;
+        var clarify = document.getElementById("clarify");
+        var clarification = document.getElementById("clarification").value.trim();
         fetch("/api/network/idea", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -101,11 +107,22 @@ const TEMPLATE = `<!doctype html>
             title: document.getElementById("title").value,
             description: document.getElementById("description").value,
             repo_url: document.getElementById("repo").value || undefined,
+            clarification: clarification || undefined,
           }),
         })
           .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
           .then(function (res) {
             if (!res.ok) throw new Error(res.data && res.data.error ? res.data.error : "submission failed");
+            if (res.data.clarification_needed) {
+              // One follow-up question, asked in place; the resubmission
+              // (clarification filled in) always proceeds.
+              document.getElementById("clarify-q").textContent = res.data.question;
+              clarify.hidden = false;
+              submit.disabled = false;
+              submit.textContent = "Submit with clarification";
+              document.getElementById("clarification").focus();
+              return;
+            }
             var body = document.getElementById("body");
             body.textContent = "";
             var done = document.createElement("div");

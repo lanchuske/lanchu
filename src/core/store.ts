@@ -665,6 +665,30 @@ function uniqueOrgName(base: string): string {
   }
 }
 
+// Piece 2 Task 4: the vague-idea thresholds. Same spirit as definitionHint
+// (a cheap, soft heuristic that only ever asks, never judges quality) but
+// applied BEFORE any org/project row exists, per the design decision that
+// the moderator has no channel to ask a human anything after spawning.
+const IDEA_MIN_CHARS = 80;
+const IDEA_MIN_WORDS = 15;
+
+/**
+ * Piece 2 Task 4: the one follow-up question the intake form asks when a
+ * description is too short or lacks concrete detail. Returns undefined for
+ * a well-specified idea (passes straight through). A URL counts as
+ * concrete detail — same signal definitionHint accepts.
+ */
+export function ideaClarifyingQuestion(description: string): string | undefined {
+  const text = (description ?? "").trim();
+  const words = text.split(/\s+/).filter(Boolean).length;
+  const hasUrl = /https?:\/\//i.test(text);
+  if (hasUrl || (text.length >= IDEA_MIN_CHARS && words >= IDEA_MIN_WORDS)) return undefined;
+  return (
+    "What should the first working version do, concretely? " +
+    "Name who would use it and the one thing they can do with it."
+  );
+}
+
 export interface IdeaIntake {
   org: { id: string; name: string };
   project: ProjectRow;

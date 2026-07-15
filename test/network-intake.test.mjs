@@ -86,7 +86,11 @@ test("POST /api/network/idea creates the records and returns the org slug + proj
   const res = await fetch(`${base}/api/network/idea`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: "Plant Care Bot", description: "Reminds you to water your plants." }),
+    body: JSON.stringify({
+      title: "Plant Care Bot",
+      description:
+        "A bot that reminds people to water their plants: each user registers their plants with a species and a location, and the bot messages them a watering schedule tuned to each species.",
+    }),
   });
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -95,6 +99,69 @@ test("POST /api/network/idea creates the records and returns the org slug + proj
   const project = store.getProject(body.project_id);
   assert.equal(project.network_mode, true);
   assert.equal(project.local_path, null);
+});
+
+// Piece 2 Task 4 (task-mrl5tg9y61): a vague description is asked ONE
+// follow-up question before any org/project is created; a well-specified
+// one passes straight through; the resubmission always proceeds.
+
+test("ideaClarifyingQuestion asks for short/detail-free text and passes well-specified or linked text", () => {
+  assert.ok(store.ideaClarifyingQuestion("an app for dogs"));
+  assert.ok(store.ideaClarifyingQuestion("something with AI that makes money fast please"));
+  assert.equal(
+    store.ideaClarifyingQuestion(
+      "A marketplace where local bakers list tomorrow's surplus bread and neighbors reserve a loaf for pickup, with a waitlist when a bakery sells out.",
+    ),
+    undefined,
+  );
+  assert.equal(
+    store.ideaClarifyingQuestion("Like the prototype at https://example.com/demo but multiplayer"),
+    undefined,
+    "a URL counts as concrete detail",
+  );
+});
+
+test("a vague POST gets clarification_needed and creates nothing", async () => {
+  const orgsBefore = store.listOrgs().length;
+  const res = await fetch(`${base}/api/network/idea`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title: "Dog App", description: "an app for dogs" }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.clarification_needed, true);
+  assert.ok(body.question);
+  assert.equal("org" in body, false);
+  assert.equal(store.listOrgs().length, orgsBefore, "a clarification round must not create orgs");
+});
+
+test("resubmitting with a clarification proceeds and lands the clarification in the idea doc", async () => {
+  const res = await fetch(`${base}/api/network/idea`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      title: "Dog App",
+      description: "an app for dogs",
+      clarification: "Owners log walks and get a weekly activity report per dog.",
+    }),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.org, "dog-app");
+  const org = store.getOrgByName("dog-app");
+  const doc = store
+    .docsIndexFor(org.id)
+    .map((d) => store.getDoc(d.id))
+    .find((d) => d.title === "Idea: Dog App");
+  assert.match(doc.content, /an app for dogs/);
+  assert.match(doc.content, /Clarification: Owners log walks/);
+});
+
+test("the intake shell carries the clarification step renderer", async () => {
+  const res = await fetch(`${base}/idea`);
+  const html = await res.text();
+  assert.match(html, /clarification_needed/, "form must handle the one-question round client-side");
 });
 
 test("the created project is discoverable in the Piece 6 network directory", async () => {
