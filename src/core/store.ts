@@ -1107,6 +1107,14 @@ export function getPersonByEmail(email: string): Person | null {
   return row ? loadPerson(row) : null;
 }
 
+/** Lookup for the public profile page (Piece 1 Task 3, `/@handle`) — handles are unique, case-sensitive as stored (already lowercased by isValidHandle). */
+export function getPersonByHandle(handle: string): Person | null {
+  const row = db().prepare(`SELECT ${PERSON_COLS} FROM person WHERE handle = ?`).get(handle) as
+    | Record<string, unknown>
+    | undefined;
+  return row ? loadPerson(row) : null;
+}
+
 // ───────────────────── magic-link auth (network mode, Piece 1 Task 2) ─────────────────────
 // person_login_request + person_session are orthogonal to the MCP session
 // mechanism — a Person, before signing up, isn't an agent and has no MCP
