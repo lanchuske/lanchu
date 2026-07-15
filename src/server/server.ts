@@ -639,11 +639,26 @@ export function createServer(): http.Server {
       // in "Design: Panel philosophy" protects). No moderator run yet
       // (Piece 2 Tasks 2/3). See "Design: Idea intake & the moderator".
       if (url.pathname === "/api/network/idea" && req.method === "POST") {
-        const body = (await readJson(req)) as { title?: string; description?: string; repo_url?: string };
+        const body = (await readJson(req)) as {
+          title?: string;
+          description?: string;
+          repo_url?: string;
+          clarification?: string;
+        };
         try {
+          const description = (body?.description ?? "").trim();
+          const clarification = (body?.clarification ?? "").trim();
+          // Piece 2 Task 4: a vague description gets exactly ONE follow-up
+          // question before anything is created. A resubmission carrying a
+          // clarification always proceeds — the gate asks once, it never
+          // loops (the moderator can't ask a human anything after this).
+          if (!clarification && description) {
+            const question = store.ideaClarifyingQuestion(description);
+            if (question) return sendJson(res, 200, { clarification_needed: true, question });
+          }
           const result = store.createIdeaIntake({
             title: body?.title ?? "",
-            description: body?.description ?? "",
+            description: clarification ? `${description}\n\nClarification: ${clarification}` : description,
             repoUrl: body?.repo_url,
           });
           return sendJson(res, 200, { org: result.org.name, project_id: result.project.id });
