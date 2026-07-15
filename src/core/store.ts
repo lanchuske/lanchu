@@ -2066,7 +2066,7 @@ function unblockDependents(projectId: string): void {
 // A2A-notices the next stage's specialist. Rollout via LANCHU_SDLC
 // (off | assist | strict, default assist — route + notice, never block).
 
-const STAGE_ORDER: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "rc", "released", "done"];
+const STAGE_ORDER: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "rc", "released", "done", "integrated"];
 function stageRank(s: TaskStage | null): number {
   const i = STAGE_ORDER.indexOf(s ?? "backlog");
   return i < 0 ? 0 : i;
@@ -2302,6 +2302,44 @@ export function advanceStage(input: {
     );
   }
   return getTask(input.taskId)!;
+}
+
+/**
+ * Network mode (Piece 5, Task 4): the owner applies a verified contract
+ * task's deliverable to the real repository, in their own ordinary
+ * worktree — a plain `git apply` + commit Lanchu never performs itself.
+ * This function only records that it happened: a task reaching `qa-pass`
+ * does not auto-integrate the way a normal task's PR can be merged by
+ * whoever has repo permission — integration is a distinct, owner-only step,
+ * deliberately manual (the vision doc's accepted bottleneck trade-off).
+ * Only `project.owner_agent_id` may call this; a non-owner is rejected and
+ * audited, same posture as every other governance action in Lanchu.
+ */
+export function integrateContractTask(input: { taskId: string; agentId: string }): Task {
+  const task = getTask(input.taskId);
+  const agent = getAgent(input.agentId);
+  if (!task || !agent) throw new Error("unknown task or agent");
+  if (task.kind !== "contract") {
+    throw new ScopeError(`${task.id} is not a contract task — nothing to integrate.`);
+  }
+  if (task.stage !== "rc") {
+    throw new ScopeError(`${task.id} hasn't passed QA yet (stage is '${task.stage ?? "backlog"}', needs 'rc').`);
+  }
+  const project = getProject(task.project_id);
+  if (project?.owner_agent_id !== input.agentId) {
+    recordEvent({
+      org_id: agent.org_id,
+      project_id: task.project_id,
+      type: "scope.violation",
+      actor_agent_id: input.agentId,
+      subject_kind: "task",
+      subject_id: task.id,
+      outcome: "rejected",
+      data: { action: "integrate" },
+    });
+    throw new ScopeError(`${task.id}'s project has a different declared owner — only they can mark it integrated.`);
+  }
+  return advanceStage({ taskId: task.id, to: "integrated", byAgentId: input.agentId });
 }
 
 /** Auto-create the QA verification task for an original (the review→qa transition). */

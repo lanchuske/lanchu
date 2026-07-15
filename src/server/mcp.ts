@@ -589,6 +589,23 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
   );
 
   registerTool(
+    "task_integrate",
+    {
+      title: "Integrate contract deliverable",
+      description:
+        "Network mode: mark a verified kind='contract' task 'integrated' after you've applied its deliverable to the real repository yourself (a plain git apply + commit — Lanchu never does this for you). Only the project's declared owner may call this, and only once the task has passed QA (stage 'rc').",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      try {
+        return text(store.integrateContractTask({ taskId, agentId: ctx.agentId }));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
     "task_handoff",
     {
       title: "Hand off task",
