@@ -25,6 +25,9 @@ Network mode lands its foundations: person identity, the contribution ledger, co
 - Identity: public profile page at `/@handle` (#135).
 - Network: idea intake form — one idea becomes one org + one project, network-mode from birth (#136).
 - Ledger: aggregate queries + contribution display on the Person profile (#137).
+- Network: public network-mode surfaces (`/@handle`, `/idea`, `/api/network/*`, `/api/person/login/*`, `/api/profile/*`) are exempt from the access-key gate — one deliberate list, decided once for all pieces (#139).
+- Network: the intake form asks one clarifying question when an idea is too vague to become a project (#140).
+- Migrations: schema indexes are created only after the additive column migrations — a database upgrading across the network-mode release no longer bricks at boot with "no such column" (#143).
 
 ## 0.5.16 — 2026-07-12
 
