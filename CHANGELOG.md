@@ -23,6 +23,8 @@ Network mode lands its foundations: person identity, the contribution ledger, co
 - Identity: magic-link login — `person_login_request` + `person_session` (#133).
 - Test: sub-millisecond timing race in the person-login test eliminated (#134).
 - Identity: public profile page at `/@handle` (#135).
+- Network: idea intake form — one idea becomes one org + one project, network-mode from birth (#136).
+- Ledger: aggregate queries + contribution display on the Person profile (#137).
 
 ## 0.5.16 — 2026-07-12
 
