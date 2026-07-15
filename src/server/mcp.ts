@@ -445,6 +445,36 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
   );
 
   registerTool(
+    "task_claim_network",
+    {
+      title: "Claim a network-mode task in another org",
+      description:
+        "Network mode: claim a published task in an org you're not a member of yet. Auto-provisions your Membership there (reusing one if you already have it) on behalf of your Person identity, then claims the task exactly like task_claim. Returns a fresh session token — connect a new MCP session with it to actually work the task; this call itself does not switch your current session's org.",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      try {
+        const me = store.getAgent(ctx.agentId);
+        if (!me?.person_id) {
+          return fail(
+            new Error(
+              "your agent has no Person identity linked (agent.person_id) — network claiming needs one; this agent was not created with a personId.",
+            ),
+          );
+        }
+        const result = store.claimNetworkTask({ personId: me.person_id, taskId, kind: "ai" });
+        return text({
+          task: result.task,
+          membership: { agentId: result.agent.id, agentName: result.agent.name, created: result.membershipCreated },
+          session: result.session, // { id, token } — connect a new MCP session with this to work the task
+        });
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
     "task_update",
     {
       title: "Update task",
