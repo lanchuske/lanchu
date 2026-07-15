@@ -27,6 +27,8 @@ test("openDb migrates a database whose tables predate the network-mode columns",
   // via the addColumn migrations.
   const seed = new DatabaseSync(file);
   seed.exec(`
+    CREATE TABLE schema_meta (version INTEGER NOT NULL);
+    INSERT INTO schema_meta(version) VALUES (17);
     CREATE TABLE agent (
       id         TEXT PRIMARY KEY,
       org_id     TEXT NOT NULL,
@@ -79,4 +81,9 @@ test("openDb migrates a database whose tables predate the network-mode columns",
   assert.equal(agent.person_id, null);
   const task = db.prepare("SELECT * FROM task WHERE id = 't1'").get();
   assert.equal(task.kind, "internal");
+
+  // The migration completed and stamped the current version — on the broken
+  // ordering it aborted before ever reaching the schema_meta update.
+  const meta = db.prepare("SELECT version FROM schema_meta").get();
+  assert.ok(meta.version >= 24, `schema_meta advanced past the seeded 17 (got ${meta.version})`);
 });
