@@ -553,6 +553,13 @@ export function createServer(): http.Server {
       if (url.pathname === "/api/orgs" && req.method === "GET") {
         return sendJson(res, 200, store.listOrgs());
       }
+      // Network mode (Piece 6, Task 2): the public, unauthenticated
+      // directory — anonymized activity per opted-in project, no name, no
+      // concept, no task titles. Deliberately open, same posture as every
+      // other GET in this file — see "Design: Cross-org task marketplace".
+      if (url.pathname === "/api/network/projects" && req.method === "GET") {
+        return sendJson(res, 200, { projects: store.listNetworkDirectory() });
+      }
       if (url.pathname === "/org/delete" && req.method === "POST") {
         const body = (await readJson(req)) as { name: string };
         if (!body?.name) return sendJson(res, 400, { error: "name required" });
