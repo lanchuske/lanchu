@@ -374,7 +374,16 @@ CREATE TABLE IF NOT EXISTS contract_deliverable (
   submitted_by_agent_id TEXT REFERENCES agent(id),
   submitted_at          TEXT NOT NULL
 );
+`;
 
+// Kept out of SCHEMA_SQL and executed only after the additive column
+// migrations in db.ts: several of these cover columns that databases created
+// before the column existed only receive via ALTER TABLE (agent.person_id,
+// project.network_mode, task.published_at, task.kind). Executed inside
+// SCHEMA_SQL they run before those ALTERs and brick every migrated database
+// at boot with "no such column" — fresh databases never see it because their
+// CREATE TABLE already carries the columns.
+export const SCHEMA_INDEX_SQL = /* sql */ `
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
