@@ -92,6 +92,14 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "task", "contract_deps", "TEXT");
   addColumn(db, "project", "owner_agent_id", "TEXT REFERENCES agent(id)");
 
+  // These index their columns' host tables (agent, project, task) which predate the
+  // columns themselves — see the comment in schema.ts by SCHEMA_SQL's closing backtick
+  // for why they can't live there. Must run after the addColumn calls above.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_agent_person ON agent(person_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_project_network_mode ON project(network_mode)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_published ON task(published_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_task_kind ON task(kind)");
+
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }
     | undefined;

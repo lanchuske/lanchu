@@ -380,7 +380,6 @@ CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
 CREATE INDEX IF NOT EXISTS idx_role_tag_tag        ON role_tag(tag);
 CREATE INDEX IF NOT EXISTS idx_agent_org_state     ON agent(org_id, state);
-CREATE INDEX IF NOT EXISTS idx_agent_person        ON agent(person_id);
 CREATE INDEX IF NOT EXISTS idx_session_agent_live  ON session(agent_id, ended_at);
 CREATE INDEX IF NOT EXISTS idx_event_org_id        ON event(org_id, id);
 CREATE INDEX IF NOT EXISTS idx_event_actor         ON event(actor_agent_id, id);
@@ -389,10 +388,17 @@ CREATE INDEX IF NOT EXISTS idx_memory_subject      ON memory(org_id, scope, subj
 CREATE INDEX IF NOT EXISTS idx_test_run_case       ON test_run(case_id, id);
 CREATE INDEX IF NOT EXISTS idx_contribution_person  ON contribution_event(person_id);
 CREATE INDEX IF NOT EXISTS idx_contribution_project ON contribution_event(project_id);
-CREATE INDEX IF NOT EXISTS idx_project_network_mode ON project(network_mode);
-CREATE INDEX IF NOT EXISTS idx_task_published        ON task(published_at);
-CREATE INDEX IF NOT EXISTS idx_task_kind              ON task(kind);
 CREATE INDEX IF NOT EXISTS idx_contract_deliverable_task ON contract_deliverable(task_id, submitted_at);
 CREATE INDEX IF NOT EXISTS idx_person_login_request_email ON person_login_request(email, created_at);
 CREATE INDEX IF NOT EXISTS idx_person_session_person       ON person_session(person_id);
 `;
+// idx_agent_person, idx_project_network_mode, idx_task_published and idx_task_kind
+// are deliberately NOT here: they index columns (agent.person_id, project.network_mode,
+// task.published_at, task.kind) that are additive migrations (see addColumn calls in
+// db.ts), not part of these tables' original CREATE TABLE. On a database that predates
+// those columns, CREATE TABLE IF NOT EXISTS is a no-op (the table already exists), so an
+// index on the new column here would fail with "no such column" BEFORE the addColumn
+// step ever runs — aborting the whole SCHEMA_SQL exec and permanently wedging the
+// database on every subsequent boot (found live, 2026-07-15, org-wide MCP outage:
+// schema_meta stuck at v17, every request threw "no such column: person_id"). These four
+// indexes are created in db.ts's migrate(), after the addColumn calls that add their columns.
