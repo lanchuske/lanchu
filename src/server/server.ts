@@ -167,6 +167,15 @@ function bearer(header: string | undefined): string | null {
   return m?.[1] ?? null;
 }
 
+/** Resolve the signed-in Person from the `person_session` cookie (network mode) — the web-auth counterpart to `bearer` above. */
+function personFromCookie(req: http.IncomingMessage): ReturnType<typeof store.personForSessionToken> {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  const found = header.split(";").map((c) => c.trim()).find((c) => c.startsWith("person_session="));
+  if (!found) return null;
+  return store.personForSessionToken(found.slice("person_session=".length));
+}
+
 /** Constant-time string compare that tolerates unequal lengths. */
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -193,6 +202,7 @@ const PUBLIC_NETWORK_SURFACES: Array<{ method: string; matches: (pathname: strin
   { method: "POST", matches: (p) => p === "/api/person/login/verify" }, // magic-link verify (Piece 1 Task 2)
   { method: "GET", matches: (p) => p === "/idea" }, // idea intake page (Piece 2 Task 1)
   { method: "POST", matches: (p) => p === "/api/network/idea" }, // idea intake submit (Piece 2 Task 1)
+  { method: "POST", matches: (p) => p === "/api/person/github" }, // GitHub badge link (Piece 1 Task 5) — gated by the person_session cookie, not the panel key
 ];
 
 function isPublicNetworkSurface(req: http.IncomingMessage, pathname: string): boolean {
@@ -625,6 +635,23 @@ export function createServer(): http.Server {
             `person_session=${session.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`,
           );
           return sendJson(res, 200, { person });
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
+
+      // Network mode (Piece 1, Task 5): a signed-in Person may self-declare
+      // a GitHub username on their own profile (or pass githubLogin: null to
+      // unlink). Authenticated by the person_session cookie set at login —
+      // NOT the panel key. This is self-declared, not OAuth-verified, same
+      // honest-about-scope posture as the magic-link stopgap above.
+      if (url.pathname === "/api/person/github" && req.method === "POST") {
+        const person = personFromCookie(req);
+        if (!person) return sendJson(res, 401, { error: "not signed in" });
+        const body = (await readJson(req)) as { githubLogin?: string | null };
+        try {
+          const updated = store.setPersonGithubLogin(person.id, body.githubLogin ?? null);
+          return sendJson(res, 200, { person: updated });
         } catch (err) {
           return sendJson(res, 400, { error: (err as Error).message });
         }

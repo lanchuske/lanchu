@@ -1222,6 +1222,32 @@ export function getPersonByHandle(handle: string): Person | null {
   return row ? loadPerson(row) : null;
 }
 
+// ───────────────── GitHub badge (network mode, Piece 1 Task 5) ─────────────────
+// A Person may optionally attach a GitHub username to their profile. This is
+// SELF-DECLARED, not OAuth-verified — same posture as the magic-link email
+// (Task 2's stopgap) and the compensation-terms field (Piece 6): honest about
+// what it does and doesn't prove, not silently implying verification it
+// doesn't have. Real GitHub OAuth is a separate, larger product decision.
+
+// GitHub's own username rules: 1-39 chars, alphanumeric or hyphens, may not
+// start/end with a hyphen, no consecutive hyphens.
+const GITHUB_LOGIN_PATTERN = /^[a-zA-Z\d](?:[a-zA-Z\d]|-(?=[a-zA-Z\d])){0,38}$/;
+
+export function isValidGithubLogin(login: string): boolean {
+  return GITHUB_LOGIN_PATTERN.test(login);
+}
+
+/** Set or clear (pass null) the calling Person's self-declared GitHub username. */
+export function setPersonGithubLogin(personId: string, githubLogin: string | null): Person {
+  if (githubLogin !== null && !isValidGithubLogin(githubLogin)) {
+    throw new ScopeError("not a valid GitHub username.");
+  }
+  const person = getPerson(personId);
+  if (!person) throw new ScopeError("no such Person.");
+  db().prepare("UPDATE person SET github_login = ? WHERE id = ?").run(githubLogin, personId);
+  return getPerson(personId)!;
+}
+
 // ───────────────────── magic-link auth (network mode, Piece 1 Task 2) ─────────────────────
 // person_login_request + person_session are orthogonal to the MCP session
 // mechanism — a Person, before signing up, isn't an agent and has no MCP

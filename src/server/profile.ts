@@ -96,6 +96,7 @@ const TEMPLATE = `<!doctype html>
             a.href = "https://github.com/" + encodeURIComponent(p.github_login);
             a.target = "_blank";
             a.rel = "noopener noreferrer";
+            a.title = "Self-declared by this Person — not verified via GitHub OAuth.";
             a.textContent = "GitHub: " + p.github_login;
             body.appendChild(a);
           }
