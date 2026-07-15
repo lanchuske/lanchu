@@ -59,7 +59,8 @@ const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
  * still unreadable to other users.
  */
 /** dry: task-mrg3xi2x2 — a preview must never touch disk; only the path is needed to render the command string. */
-function writeMcpConfigFile(token: string, agentName?: string, dry?: boolean): string {
+/** Exported for the headless runner (Piece 2 Task 2), which mints the same per-run config file without a terminal. */
+export function writeMcpConfigFile(token: string, agentName?: string, dry?: boolean): string {
   const dir = path.join(stateDir(), "run");
   const slug = (agentName ?? "agent").replace(/[^a-zA-Z0-9._-]/g, "_");
   const file = path.join(dir, `${slug}-${randomBytes(4).toString("hex")}.mcp.json`);
