@@ -2,6 +2,28 @@
 
 Notable changes to [lanchu](https://www.npmjs.com/package/lanchu). Numbers reference pull requests in this repository.
 
+## 0.5.17 — 2026-07-14
+
+Network mode lands its foundations: person identity, the contribution ledger, contract-based contributor isolation, and the cross-org marketplace plumbing.
+
+- Site: the network-mode vision page is published (#119).
+- Schema (identity): `person` table plus `agent.person_id` / `agent.kind` — an agent can belong to a human (#120).
+- Schema (ledger): `contribution_event` table — the append-only contribution ledger (#121).
+- Schema (network): `network_mode`, `compensation_terms` and `published_at` on projects — a project can opt into the public network (#122).
+- Ledger: task weight is captured and a `contribution_event` is written at QA-pass (#123).
+- Ledger: self-dealing enforcement — an agent cannot verify work it contributed to (#124).
+- Contracts: `task.kind='contract'` + contract fields on the task (#125).
+- Contracts: sandbox seeding for contract tasks (#126).
+- Contracts: visibility lockdown — a contract contributor sees only their own task in `task_list`/`task_get` (#127).
+- Contracts: deliverable submission with test-based QA (#128).
+- Contracts: `integrated` stage — only the owner merges a verified deliverable (#129).
+- Network: claim-time auto-provisioning of a foreign-org Membership — AI claimants get an MCP session, humans get none (#130).
+- Contracts: `contract_tests` run sandboxed (fs permission model + network guard + hard timeout) — the contributor is protected from a hostile owner (#131).
+- Network: public anonymized cross-org directory endpoint (#132).
+- Identity: magic-link login — `person_login_request` + `person_session` (#133).
+- Test: sub-millisecond timing race in the person-login test eliminated (#134).
+- Identity: public profile page at `/@handle` (#135).
+
 ## 0.5.16 — 2026-07-12
 
 `lanchu tile` fixed and extended, and the site gets real product evidence.
