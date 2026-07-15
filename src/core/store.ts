@@ -596,6 +596,55 @@ export function getProject(projectId: string): ProjectRow | null {
   return row ? loadProject(row) : null;
 }
 
+/**
+ * Network mode (Piece 6, Task 2): one card's worth of data per opted-in
+ * project — activity only, never name or concept. This is the entire
+ * anonymization boundary Piece 3/5 rely on: nothing else about a project
+ * is ever selected here, so there's nothing to accidentally leak by adding
+ * a field later without thinking about it.
+ *
+ * Deliberately excluded from this task's scope (see the design docs for
+ * why): per-role open-task counts (Piece 3 Task 1 — role matching is
+ * tag-based, not a plain column, and belongs with the page that renders
+ * it) and the compensation-terms disclaimer copy (Piece 6 Task 5).
+ */
+export interface NetworkDirectoryEntry {
+  projectId: string;
+  /** Proxy for "how long has this project been active" — project.created_at; there's no separate publish event to date it by. */
+  publishedAt: string;
+  verifiedContributions: number;
+  ledgerSize: number;
+  /** Total open (published, unclaimed) tasks — not broken down by role; see Piece 3 Task 1. */
+  openTaskCount: number;
+  compensationTerms: string | null;
+}
+
+export function listNetworkDirectory(): NetworkDirectoryEntry[] {
+  const rows = db()
+    .prepare("SELECT id, created_at, compensation_terms FROM project WHERE network_mode = 1 ORDER BY created_at DESC")
+    .all() as { id: string; created_at: string; compensation_terms: string | null }[];
+  return rows.map((r) => {
+    const stats = contributionStatsForProject(r.id);
+    return {
+      projectId: r.id,
+      publishedAt: r.created_at,
+      verifiedContributions: stats.count,
+      ledgerSize: stats.totalWeight,
+      openTaskCount: publishedOpenTaskCount(r.id),
+      compensationTerms: r.compensation_terms,
+    };
+  });
+}
+
+function publishedOpenTaskCount(projectId: string): number {
+  const row = db()
+    .prepare(
+      "SELECT COUNT(*) AS n FROM task WHERE project_id = ? AND published_at IS NOT NULL AND status = 'available' AND archived_at IS NULL",
+    )
+    .get(projectId) as { n: number };
+  return row.n;
+}
+
 /** Fill in a project's repo/path once (won't overwrite values already set). */
 export function setProjectRepo(
   projectId: string,
@@ -1098,9 +1147,21 @@ export function listContributionEventsForTask(taskId: string): ContributionEvent
   return rows.map(loadContributionEvent);
 }
 
-// Aggregate SUM(weight) queries for the Person profile and directory/detail
-// pages are Task 4's scope (task-mrl5u2dy67), not this schema task's — see
-// "Design: Contribution ledger", Piece 4.
+// A Person's own aggregate total (profile page) is still Piece 4 Task 4's
+// scope (task-mrl5u2dy67) — not built here. The project-scoped aggregate
+// below is this task's own need (the network directory, Piece 6 Task 2)
+// and is deliberately narrow: just what one directory card needs, not a
+// general-purpose ledger API.
+
+/** A project's verified-contribution count and ledger size, for its directory card (Piece 6). */
+export function contributionStatsForProject(projectId: string): { count: number; totalWeight: number } {
+  const row = db()
+    .prepare(
+      "SELECT COUNT(*) AS count, COALESCE(SUM(weight), 0) AS totalWeight FROM contribution_event WHERE project_id = ?",
+    )
+    .get(projectId) as { count: number; totalWeight: number };
+  return row;
+}
 
 export function listAgents(orgId: string): Agent[] {
   const rows = db()
