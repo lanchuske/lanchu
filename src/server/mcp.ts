@@ -10,6 +10,7 @@ import { sameModelTier, suggestModel } from "../core/routing.js";
 import { QuotaError, ScopeError } from "../core/types.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn } from "../core/worktree.js";
 import { ensureContractSandbox, writeDeliverableToSandbox } from "../core/contract-sandbox.js";
+import { runContractTestsSafely } from "../core/contract-sandbox-exec.js";
 import { spawnTerminal, terminalTitle, tileTerminals } from "./cockpit.js";
 import { putContext, type SessionContext } from "./context.js";
 
@@ -612,6 +613,27 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
         const task = store.submitContractDeliverable({ taskId, agentId: ctx.agentId, content });
         writeDeliverableToSandbox(taskId, content);
         return text(task);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  registerTool(
+    "task_run_contract_tests",
+    {
+      title: "Run contract tests safely",
+      description:
+        "Network mode: run a kind='contract' task's contract_tests against its sandbox in a locked-down child process — no network, no filesystem access outside the sandbox, no inherited credentials/env, a hard timeout. NEVER run contract_tests directly in your own shell — a project owner's tests are untrusted input arriving in your execution environment. Only the task's owner or its assigned contributor may call this (same visibility rule as task_get).",
+      inputSchema: { taskId: z.string() },
+    },
+    async ({ taskId }) => {
+      try {
+        const raw = store.getTask(taskId);
+        const task = raw ? store.taskVisibleTo(raw, ctx.agentId) : null;
+        if (!task) return fail(new Error("task not found"));
+        if (task.kind !== "contract") return fail(new Error(`${taskId} is not a contract task.`));
+        return text(runContractTestsSafely(taskId));
       } catch (err) {
         return fail(err);
       }

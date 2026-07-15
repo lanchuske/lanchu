@@ -13,6 +13,11 @@ import { stateDir } from "../config.js";
 
 const CONTRACTS_SUBDIR = "contracts";
 
+/** Where a contract task's sandbox lives — shared by every module that needs the path. */
+export function contractSandboxPath(taskId: string): string {
+  return path.join(stateDir(), CONTRACTS_SUBDIR, taskId);
+}
+
 export interface ContractSandbox {
   /** Absolute path of the task's dedicated sandbox directory. */
   path: string;
@@ -33,7 +38,7 @@ export interface ContractFields {
  * since this only ever writes 3 small files, never touches git.
  */
 export function ensureContractSandbox(taskId: string, fields: ContractFields): ContractSandbox {
-  const sandboxPath = path.join(stateDir(), CONTRACTS_SUBDIR, taskId);
+  const sandboxPath = contractSandboxPath(taskId);
   const created = !fs.existsSync(sandboxPath);
   fs.mkdirSync(sandboxPath, { recursive: true });
 
@@ -63,7 +68,7 @@ function writeOrRemove(dir: string, name: string, content: string | null): void 
  * safely recorded in the DB regardless.
  */
 export function writeDeliverableToSandbox(taskId: string, content: string): void {
-  const sandboxPath = path.join(stateDir(), CONTRACTS_SUBDIR, taskId);
+  const sandboxPath = contractSandboxPath(taskId);
   if (!fs.existsSync(sandboxPath)) return;
   writeOrRemove(sandboxPath, "DELIVERABLE", content);
 }
