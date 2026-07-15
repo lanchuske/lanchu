@@ -27,7 +27,11 @@ export type TaskStatus =
  * After qa: `rc` = QA passed, accumulating toward the next release (the
  * visible form of release pressure); `released` = shipped, stamped with
  * release_version. `done` remains the terminal lane for work outside the
- * release pipeline (verification instruments, off-mode orgs).
+ * release pipeline (verification instruments, off-mode orgs). `integrated`
+ * (network mode, Piece 5): a verified `kind='contract'` task whose
+ * deliverable the project owner has applied to the real repository —
+ * the contract-task equivalent of `released`, reached only via
+ * `integrateContractTask`, never through the general stage-setting path.
  */
 export type TaskStage =
   | "backlog"
@@ -37,9 +41,12 @@ export type TaskStage =
   | "qa"
   | "rc"
   | "released"
-  | "done";
+  | "done"
+  | "integrated";
 
-export const TASK_STAGES: TaskStage[] = ["backlog", "definition", "build", "review", "qa", "rc", "released", "done"];
+export const TASK_STAGES: TaskStage[] = [
+  "backlog", "definition", "build", "review", "qa", "rc", "released", "done", "integrated",
+];
 
 export type EventOutcome = "applied" | "rejected";
 
