@@ -87,6 +87,21 @@ test("with an access key: public network-mode surfaces stay open, everything els
     });
     assert.equal(loginVerify.status, 400, "reaches real login logic (invalid token), not a 401 from the gate");
 
+    // Piece 1 Task 5: the GitHub-link endpoint is also exempt from the panel
+    // key — but it's gated by its OWN auth (the person_session cookie), so a
+    // request with no session still 401s, just for a different reason.
+    const githubLink = await req("/api/person/github", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ githubLogin: "octocat" }),
+    });
+    assert.equal(githubLink.status, 401);
+    assert.equal(
+      (await githubLink.json()).error,
+      "not signed in",
+      "reaches real cookie-auth logic, not a 401 from the panel-key gate",
+    );
+
     // A sibling API surface with no public exemption is still properly gated.
     assert.equal((await req("/api/orgs")).status, 401);
   } finally {
