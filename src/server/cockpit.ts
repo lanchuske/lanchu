@@ -313,6 +313,9 @@ export function spawnTerminal(input: {
     let paneId = "";
     if (!has0) {
       spawnSync("tmux", ["new-session", "-d", "-s", TMUX_SESSION, "-c", input.cwd, command]);
+      // Session-scoped (not -g): click-to-select-pane works out of the box for the
+      // lanchu session without touching the user's own tmux config or other sessions.
+      spawnSync("tmux", ["set-option", "-t", TMUX_SESSION, "mouse", "on"]);
       paneId = (spawnSync("tmux", ["display-message", "-p", "-t", TMUX_SESSION, "#{pane_id}"], { encoding: "utf8" }).stdout ?? "").trim();
     } else {
       paneId = (spawnSync("tmux", ["split-window", "-P", "-F", "#{pane_id}", "-t", TMUX_SESSION, "-c", input.cwd, command], { encoding: "utf8" }).stdout ?? "").trim();
