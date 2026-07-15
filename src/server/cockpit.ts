@@ -257,6 +257,50 @@ export interface SpawnResult {
   ref?: TerminalRef;
 }
 
+/**
+ * Cockpit mosaic look, window/session scope — applied idempotently on every
+ * spawn and re-tile so long-lived sessions pick the theme up too. Claude Code
+ * rewrites each pane's TITLE with its own status the moment it starts, so the
+ * stable "who is this pane" identity lives in the `@lanchu_agent` pane user
+ * option instead (set in tmuxPaneIdentityArgs): the border always leads with
+ * the agent name, and Claude's dynamic title stays visible as a truncated
+ * suffix. Each option is its own tmux call so an older tmux that lacks one
+ * (pane-border-lines needs 3.2, pane-border-indicators 3.4) skips just that
+ * refinement — same best-effort posture as the per-pane color tint.
+ */
+export function tmuxCockpitThemeArgs(): string[][] {
+  const w = (option: string, value: string) => ["set-option", "-w", "-t", TMUX_SESSION, option, value];
+  const s = (option: string, value: string) => ["set-option", "-t", TMUX_SESSION, option, value];
+  return [
+    w("pane-border-status", "top"),
+    w("pane-border-lines", "heavy"),
+    w("pane-border-indicators", "both"),
+    w(
+      "pane-border-format",
+      " #{?pane_active,#[bold reverse],}#{?#{!=:#{@lanchu_agent},}, #{@lanchu_agent} ,}#[default]#[dim] #{=|28|…:pane_title} #[default]",
+    ),
+    s("status-style", "bg=colour236,fg=colour250"),
+    s("status-left", " lanchu "),
+    s("status-left-style", "bold"),
+    s("status-right", " #{window_panes} pane#{?#{==:#{window_panes},1},,s} · %H:%M "),
+  ];
+}
+
+/**
+ * Per-pane identity: the stable agent name for the border format above, the
+ * agent's panel-chip hue on the border, and the same hue (bold) when the pane
+ * is active — the active pane is then marked three ways at once (bold border,
+ * indicator arrows, reverse-video name chip) instead of not at all.
+ */
+export function tmuxPaneIdentityArgs(paneId: string, agentName: string, colorHex: string): string[][] {
+  const p = (option: string, value: string) => ["set-option", "-p", "-t", paneId, option, value];
+  return [
+    p("@lanchu_agent", agentName),
+    p("pane-border-style", `fg=${colorHex}`),
+    p("pane-active-border-style", `fg=${colorHex},bold`),
+  ];
+}
+
 /** Open a terminal for a new agent. With dry=true, returns the plan without executing. */
 export function spawnTerminal(input: {
   title: string;
@@ -318,14 +362,11 @@ export function spawnTerminal(input: {
       paneId = (spawnSync("tmux", ["split-window", "-P", "-F", "#{pane_id}", "-t", TMUX_SESSION, "-c", input.cwd, command], { encoding: "utf8" }).stdout ?? "").trim();
     }
     spawnSync("tmux", ["select-layout", "-t", TMUX_SESSION, "tiled"]);
-    spawnSync("tmux", ["set-option", "-p", "-t", TMUX_SESSION, "pane-border-status", "top"]);
+    for (const args of tmuxCockpitThemeArgs()) spawnSync("tmux", args);
     if (paneId) spawnSync("tmux", ["select-pane", "-t", paneId, "-T", input.title]);
-    if (paneId && input.agentName) {
-      // Stable per-agent identity: tint this pane's border with the agent's
-      // color (same hue as the panel chip). Best-effort — per-pane style
-      // options need tmux >= 3.2; older tmux just ignores the call.
-      const hex = input.colorHex ?? agentColor(input.agentName).hex;
-      spawnSync("tmux", ["set-option", "-p", "-t", paneId, "pane-border-style", `fg=${hex}`]);
+    if (paneId) {
+      const hex = input.colorHex ?? agentColor(input.agentName ?? input.title).hex;
+      for (const args of tmuxPaneIdentityArgs(paneId, input.agentName ?? input.title, hex)) spawnSync("tmux", args);
     }
     if (paneId) plan.ref = { method: "tmux", id: paneId };
     return plan;
@@ -557,7 +598,12 @@ export function tileTerminals(
   const mac = effects.isMac ?? isMac;
   const run = effects.run ?? ((osa: string) => (spawnSync("osascript", ["-e", osa], { encoding: "utf8" }).stdout ?? "").trim());
   if (tmuxAvailable()) {
-    if (!dry) spawnSync("tmux", ["select-layout", "-t", TMUX_SESSION, "tiled"]);
+    if (!dry) {
+      spawnSync("tmux", ["select-layout", "-t", TMUX_SESSION, "tiled"]);
+      // Re-tiling is also how a session that predates the cockpit theme
+      // (or a tmux upgrade) picks it up without respawning any agent.
+      for (const args of tmuxCockpitThemeArgs()) spawnSync("tmux", args);
+    }
     const out = spawnSync("tmux", ["list-panes", "-t", TMUX_SESSION], { encoding: "utf8" });
     const count = (out.stdout ?? "").split("\n").filter(Boolean).length;
     return { method: "tmux", count, note: `Tiled ${count} panes in tmux session '${TMUX_SESSION}'.` };
