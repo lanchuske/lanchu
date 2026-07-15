@@ -20,6 +20,7 @@ import { buildProvenance, packageRoot } from "../core/provenance.js";
 import { probeServers, readProjectMcpServers } from "../core/mcps.js";
 import { buildMcpServer } from "./mcp.js";
 import { PANEL_BUILD_ID, panelHtml } from "./panel.js";
+import { profileHtml } from "./profile.js";
 import { startWebhookDelivery } from "./webhooks.js";
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -601,6 +602,31 @@ export function createServer(): http.Server {
           return sendJson(res, 400, { error: (err as Error).message });
         }
       }
+
+      // Network mode (Piece 1, Task 3): public profile page — a new web
+      // surface, not the panel SPA. Only public fields (no email). The
+      // handle is never interpolated into server-rendered HTML — the shell
+      // is a static template that fetches this endpoint client-side and
+      // sets fields via textContent. See "Design: Person identity &
+      // Membership".
+      if (url.pathname.startsWith("/api/profile/") && req.method === "GET") {
+        const handle = url.pathname.slice("/api/profile/".length);
+        const person = handle && !handle.includes("/") ? store.getPersonByHandle(handle) : null;
+        if (!person) return sendJson(res, 404, { error: "no profile found for this handle" });
+        return sendJson(res, 200, {
+          handle: person.handle,
+          bio: person.bio,
+          github_login: person.github_login,
+          created_at: person.created_at,
+        });
+      }
+      if (url.pathname.startsWith("/@") && req.method === "GET") {
+        const handle = url.pathname.slice(2);
+        res.writeHead(handle && !handle.includes("/") ? 200 : 404, { "content-type": "text/html; charset=utf-8" });
+        res.end(profileHtml());
+        return;
+      }
+
       if (url.pathname === "/org/delete" && req.method === "POST") {
         const body = (await readJson(req)) as { name: string };
         if (!body?.name) return sendJson(res, 400, { error: "name required" });
