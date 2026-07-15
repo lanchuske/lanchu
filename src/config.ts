@@ -172,6 +172,32 @@ export function nudgeCooldownMs(): number {
 }
 
 /**
+ * Network mode (Piece 1): how long a magic-link login token stays valid.
+ * Fractional minutes are intentional (not just whole ones like most other
+ * knobs here) — tests need sub-second TTLs to verify expiry without
+ * sleeping through a real 15 minutes.
+ */
+export function personLoginRequestTtlMs(): number {
+  const s = process.env.LANCHU_PERSON_LOGIN_TTL_MINUTES;
+  const n = s ? Number.parseFloat(s) : 15;
+  return (Number.isFinite(n) && n > 0 ? n : 15) * 60_000;
+}
+
+/** Network mode (Piece 1): minimum spacing between login requests for the same email. Fractional seconds, same reason as above. */
+export function personLoginCooldownMs(): number {
+  const s = process.env.LANCHU_PERSON_LOGIN_COOLDOWN_SECONDS;
+  const n = s ? Number.parseFloat(s) : 60;
+  return (Number.isFinite(n) && n > 0 ? n : 60) * 1000;
+}
+
+/** Network mode (Piece 1): how long a signed-in Person's web session stays valid. */
+export function personSessionTtlMs(): number {
+  const s = process.env.LANCHU_PERSON_SESSION_TTL_DAYS;
+  const n = s ? Number.parseInt(s, 10) : 30;
+  return (Number.isFinite(n) && n > 0 ? n : 30) * 24 * 60 * 60_000;
+}
+
+/**
  * Max nudges per agent per undelivered set (nudges since its oldest undelivered
  * notice). Past the budget the sweep stops typing and the panel flags the agent
  * "unreachable" — the supervisor decides, the server never nags forever.

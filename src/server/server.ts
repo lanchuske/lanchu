@@ -5,7 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { accessKey, host, port, publicUrl, reconnectGraceMs, shutdownDelayMs, VERSION } from "../config.js";
+import { accessKey, baseUrl, host, port, publicUrl, reconnectGraceMs, shutdownDelayMs, VERSION } from "../config.js";
 import { bus } from "../core/events.js";
 import { cancelGreenzone, greenzoneStatus, isGreenzoneActive, requestGreenzone } from "../core/greenzone.js";
 import { uuid } from "../core/ids.js";
@@ -559,6 +559,47 @@ export function createServer(): http.Server {
       // other GET in this file — see "Design: Cross-org task marketplace".
       if (url.pathname === "/api/network/projects" && req.method === "GET") {
         return sendJson(res, 200, { projects: store.listNetworkDirectory() });
+      }
+
+      // Network mode (Piece 1, Task 2): magic-link auth — the web-facing
+      // counterpart to the MCP session mechanism, for a Person acting
+      // directly with no MCP client of their own. See "Design: Person
+      // identity & Membership".
+      if (url.pathname === "/api/person/login/request" && req.method === "POST") {
+        const body = (await readJson(req)) as { email?: string };
+        if (!body?.email) return sendJson(res, 400, { error: "email required" });
+        try {
+          const request = store.requestPersonLogin(body.email);
+          // Deliberately NEVER echoed back in this (unauthenticated, by
+          // anyone-with-an-email-string-callable) response — doing so
+          // would let a caller complete login as any email without ever
+          // proving they control that inbox, defeating the entire point
+          // of a magic link. No real email provider is wired in yet
+          // (which one, sender domain, etc. is a product decision, not
+          // made here) — until then this logs the link server-side only,
+          // visible solely to whoever operates this Lanchu instance.
+          console.log(
+            `[lanchu] magic link for ${request.email}: ${(publicUrl() ?? baseUrl())}/login/verify?token=${request.token}`,
+          );
+          return sendJson(res, 200, { ok: true });
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
+      if (url.pathname === "/api/person/login/verify" && req.method === "POST") {
+        const body = (await readJson(req)) as { token?: string; handle?: string };
+        if (!body?.token) return sendJson(res, 400, { error: "token required" });
+        try {
+          const { person, session } = store.verifyPersonLogin({ token: body.token, handle: body.handle });
+          const maxAgeSeconds = Math.max(0, Math.floor((Date.parse(session.expires_at) - Date.now()) / 1000));
+          res.setHeader(
+            "Set-Cookie",
+            `person_session=${session.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`,
+          );
+          return sendJson(res, 200, { person });
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
       }
       if (url.pathname === "/org/delete" && req.method === "POST") {
         const body = (await readJson(req)) as { name: string };
