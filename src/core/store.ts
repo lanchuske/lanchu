@@ -1002,6 +1002,14 @@ export function getAgent(agentId: string): Agent | null {
   return row ? loadAgent(row) : null;
 }
 
+/** A Person's existing Membership in a given org, if they have one (network mode, Piece 6). */
+export function findAgentByPersonInOrg(orgId: string, personId: string): Agent | null {
+  const row = db()
+    .prepare(`SELECT ${AGENT_COLS} FROM agent WHERE org_id = ? AND person_id = ? LIMIT 1`)
+    .get(orgId, personId) as Record<string, unknown> | undefined;
+  return row ? loadAgent(row) : null;
+}
+
 // ───────────────────────── person (network mode) ─────────────────────────
 // A durable identity that outlives any single org membership — see "Design:
 // Person identity & Membership (network mode — Piece 1)". Global, not
@@ -1838,6 +1846,62 @@ export function claimTask(input: {
   });
   touchActivity(input.agentId, `claimed ${task.id}`);
   return getTask(input.taskId)!;
+}
+
+/**
+ * Network mode (Piece 6 Task 3 + Piece 1 Task 4, built jointly per both
+ * design docs): a Person claims a published task in an org where they may
+ * hold no Membership yet. Auto-provisions the agent row (role
+ * 'network-contributor', wildcard — the task is already chosen, there's no
+ * role-scoped browsing step to satisfy first) if needed, reusing one that
+ * already exists otherwise, then calls the existing `claimTask` completely
+ * unmodified — this finding from the Piece 6 design doc is why this
+ * function is short.
+ *
+ * `kind` decides what happens next, per Piece 1's correction to the
+ * original Piece 6 design: `'ai'` mints a normal MCP session (the Person's
+ * own agent will reconnect with it to actually work the task in this
+ * org); `'human'` mints none — a human Membership is authorized purely via
+ * `person_session` elsewhere (not yet built; this function accepts the
+ * kind today so that surface has nothing to change here once it exists).
+ */
+export function claimNetworkTask(input: {
+  personId: string;
+  taskId: string;
+  kind: AgentKind;
+}): { task: Task; agent: Agent; membershipCreated: boolean; session: { id: string; token: string } | null } {
+  const task = getTask(input.taskId);
+  if (!task) throw new Error("unknown task");
+  const project = getProject(task.project_id);
+  if (!project?.network_mode) {
+    throw new ScopeError(`${task.id}'s project isn't opted into network mode — nothing to claim across orgs.`);
+  }
+  if (!task.published_at) {
+    throw new ScopeError(`${task.id} hasn't been published to the network directory yet.`);
+  }
+  const person = getPerson(input.personId);
+  if (!person) throw new Error("unknown person");
+  const orgId = orgIdForProject(task.project_id);
+
+  let agent = findAgentByPersonInOrg(orgId, input.personId);
+  let membershipCreated = false;
+  if (!agent) {
+    const role = getOrCreateRole(orgId, "network-contributor", { wildcard: true });
+    agent = createAgent({
+      orgId,
+      roleId: role.id,
+      name: person.handle,
+      objective: `Network contributor (${person.handle})`,
+      personId: person.id,
+      kind: input.kind,
+    });
+    membershipCreated = true;
+  }
+
+  const claimed = claimTask({ agentId: agent.id, taskId: task.id });
+  const session = input.kind === "ai" ? openSession(agent.id, "network-claim") : null;
+
+  return { task: claimed, agent, membershipCreated, session };
 }
 
 /**
