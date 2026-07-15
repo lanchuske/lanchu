@@ -105,7 +105,8 @@ export type EventType =
   | "notice.expired"
   | "agent.terminal_closed"
   | "org.shutdown"
-  | "network.idea_submitted";
+  | "network.idea_submitted"
+  | "agent.headless_run";
 
 export interface Org {
   id: string;

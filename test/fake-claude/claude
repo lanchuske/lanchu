@@ -31,5 +31,51 @@ if (args[0] === "mcp" && args[1] === "add") {
   log("add", args);
   process.exit(0);
 }
-process.stderr.write("fake claude: unhandled args " + JSON.stringify(args) + "\n");
-process.exit(1);
+// Headless print mode (Piece 2 Task 2, the hosted runner): behaves per
+// FAKE_CLAUDE_P_MODE. The default ("mcp-task") proves the runner's whole
+// chain by making a REAL MCP tools/call against the server named in the
+// minted --mcp-config file, with the minted Bearer token — then printing a
+// claude-shaped JSON result. "hang" never exits (exercises the SIGKILL
+// backstop); "fail" exits 1.
+if (args[0] === "-p") {
+  const mode = process.env.FAKE_CLAUDE_P_MODE ?? "mcp-task";
+  if (mode === "hang") {
+    setInterval(() => {}, 1000);
+  } else if (mode === "fail") {
+    process.stderr.write("fake claude: simulated run failure\n");
+    process.exit(1);
+  } else {
+    const cfgFile = args[args.indexOf("--mcp-config") + 1];
+    const cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+    const { url, headers } = cfg.mcpServers.lanchu;
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StreamableHTTPClientTransport } = await import(
+      "@modelcontextprotocol/sdk/client/streamableHttp.js"
+    );
+    const client = new Client({ name: "fake-claude", version: "0.0.0" });
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: { headers },
+    });
+    await client.connect(transport);
+    const res = await client.callTool({
+      name: "task_create",
+      arguments: { title: process.env.FAKE_CLAUDE_TASK_TITLE ?? "headless probe task" },
+    });
+    await client.close();
+    process.stdout.write(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "fake-session-1234",
+        num_turns: 2,
+        total_cost_usd: 0.01,
+        result: "created: " + JSON.stringify(res.content?.[0]?.text ?? null).slice(0, 200),
+      }) + "\n",
+    );
+    process.exit(0);
+  }
+} else {
+  process.stderr.write("fake claude: unhandled args " + JSON.stringify(args) + "\n");
+  process.exit(1);
+}
