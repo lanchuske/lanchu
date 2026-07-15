@@ -52,3 +52,18 @@ function writeOrRemove(dir: string, name: string, content: string | null): void 
   }
   fs.writeFileSync(target, content, "utf8");
 }
+
+/**
+ * Materialize a submitted deliverable alongside the contract fields already
+ * in the sandbox — convenience for a human/agent verifier reading or
+ * running `contract_tests` against it locally, not the canonical copy (the
+ * DB row from `submitContractDeliverable` is). Assumes the sandbox already
+ * exists (`ensureContractSandbox` ran at claim time); if it somehow
+ * doesn't, this is a no-op rather than an error — the deliverable is still
+ * safely recorded in the DB regardless.
+ */
+export function writeDeliverableToSandbox(taskId: string, content: string): void {
+  const sandboxPath = path.join(stateDir(), CONTRACTS_SUBDIR, taskId);
+  if (!fs.existsSync(sandboxPath)) return;
+  writeOrRemove(sandboxPath, "DELIVERABLE", content);
+}

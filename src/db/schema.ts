@@ -14,8 +14,10 @@
 // contract_tests/contract_deps — see "Design: Contract-based contributor
 // isolation (network mode — Piece 5)");
 // 22 = network mode Piece 5 Task 5 (project.owner_agent_id — the exemption
-// for the contract-task visibility lockdown).
-export const SCHEMA_VERSION = 22;
+// for the contract-task visibility lockdown);
+// 23 = network mode Piece 5 Task 3 (contract_deliverable table — see
+// "Design: Contract-based contributor isolation (network mode — Piece 5)").
+export const SCHEMA_VERSION = 23;
 
 export const SCHEMA_SQL = /* sql */ `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -331,6 +333,21 @@ CREATE TABLE IF NOT EXISTS contribution_event (
   created_at  TEXT NOT NULL
 );
 
+-- Network mode (Piece 5, Task 3): a contract task's submitted work — the
+-- isolated-contributor equivalent of a normal task's pr_url. A unified
+-- diff or small file set (base64 if needed), never executed automatically
+-- here — see "Design: Contract-based contributor isolation", Piece 5, and
+-- Piece 6's Task 4 (contract-sandbox execution safety, not yet built) for
+-- why. Multiple rows per task are expected (resubmission after a FAIL
+-- bounce); the most recent by submitted_at is canonical.
+CREATE TABLE IF NOT EXISTS contract_deliverable (
+  id                    TEXT PRIMARY KEY,
+  task_id               TEXT NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+  content               TEXT NOT NULL,
+  submitted_by_agent_id TEXT REFERENCES agent(id),
+  submitted_at          TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
@@ -348,4 +365,5 @@ CREATE INDEX IF NOT EXISTS idx_contribution_project ON contribution_event(projec
 CREATE INDEX IF NOT EXISTS idx_project_network_mode ON project(network_mode);
 CREATE INDEX IF NOT EXISTS idx_task_published        ON task(published_at);
 CREATE INDEX IF NOT EXISTS idx_task_kind              ON task(kind);
+CREATE INDEX IF NOT EXISTS idx_contract_deliverable_task ON contract_deliverable(task_id, submitted_at);
 `;
