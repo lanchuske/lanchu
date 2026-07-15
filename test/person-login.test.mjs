@@ -54,12 +54,19 @@ test("an invalid handle format is rejected at signup", () => {
   );
 });
 
-test("an EXISTING Person doesn't need a handle to log back in", () => {
-  process.env.LANCHU_PERSON_LOGIN_COOLDOWN_SECONDS = "0.001"; // effectively none — irrelevant to what this test checks
+test("an EXISTING Person doesn't need a handle to log back in", async () => {
+  // A tiny but non-zero cooldown, PLUS a real sleep longer than it — a
+  // fixed "0.001s" cooldown with two synchronous back-to-back calls was
+  // flaky (task-mrlexm3n83's FAIL): both requestPersonLogin calls can
+  // land in the same millisecond on a fast run, so `elapsed < cooldownMs`
+  // was sometimes still true. The sleep guarantees real wall-clock
+  // separation regardless of how fast the synchronous code executes.
+  process.env.LANCHU_PERSON_LOGIN_COOLDOWN_SECONDS = "0.001"; // irrelevant to what this test checks
   try {
     const first = store.requestPersonLogin("returning@example.com");
     store.verifyPersonLogin({ token: first.token, handle: "returning" });
 
+    await sleep(20);
     const second = store.requestPersonLogin("returning@example.com");
     const { person } = store.verifyPersonLogin({ token: second.token }); // no handle needed
     assert.equal(person.handle, "returning");
