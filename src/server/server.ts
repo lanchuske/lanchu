@@ -618,6 +618,10 @@ export function createServer(): http.Server {
           bio: person.bio,
           github_login: person.github_login,
           created_at: person.created_at,
+          // Piece 4 Task 4: the Person's real ledger — cross-project total
+          // plus per-project breakdown (ids and numbers only, same
+          // anonymization boundary as the network directory).
+          contributions: store.contributionStatsForPerson(person.id),
         });
       }
       if (url.pathname.startsWith("/@") && req.method === "GET") {

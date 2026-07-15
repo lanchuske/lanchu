@@ -1266,12 +1266,6 @@ export function listContributionEventsForTask(taskId: string): ContributionEvent
   return rows.map(loadContributionEvent);
 }
 
-// A Person's own aggregate total (profile page) is still Piece 4 Task 4's
-// scope (task-mrl5u2dy67) — not built here. The project-scoped aggregate
-// below is this task's own need (the network directory, Piece 6 Task 2)
-// and is deliberately narrow: just what one directory card needs, not a
-// general-purpose ledger API.
-
 /** A project's verified-contribution count and ledger size, for its directory card (Piece 6). */
 export function contributionStatsForProject(projectId: string): { count: number; totalWeight: number } {
   const row = db()
@@ -1280,6 +1274,38 @@ export function contributionStatsForProject(projectId: string): { count: number;
     )
     .get(projectId) as { count: number; totalWeight: number };
   return row;
+}
+
+/**
+ * Piece 4 Task 4: a Person's aggregate ledger for their public profile —
+ * cross-project total plus a per-project breakdown. Correct across every
+ * project/org they've touched with no federation (one shared DB). Rows
+ * carry only project ids and numbers, matching the directory's
+ * anonymization boundary (activity, never a project's name or concept).
+ */
+export interface PersonContributionStats {
+  count: number;
+  totalWeight: number;
+  projects: { projectId: string; count: number; totalWeight: number }[];
+}
+
+export function contributionStatsForPerson(personId: string): PersonContributionStats {
+  const rows = db()
+    .prepare(
+      `SELECT project_id AS projectId, COUNT(*) AS count, COALESCE(SUM(weight), 0) AS totalWeight
+       FROM contribution_event WHERE person_id = ?
+       GROUP BY project_id ORDER BY totalWeight DESC, projectId`,
+    )
+    .all(personId) as { projectId: string; count: number; totalWeight: number }[];
+  // node:sqlite rows have a null prototype — copy into plain objects.
+  const projects = rows.map((r) => ({ projectId: r.projectId, count: r.count, totalWeight: r.totalWeight }));
+  let count = 0;
+  let totalWeight = 0;
+  for (const p of projects) {
+    count += p.count;
+    totalWeight += p.totalWeight;
+  }
+  return { count, totalWeight, projects };
 }
 
 export function listAgents(orgId: string): Agent[] {

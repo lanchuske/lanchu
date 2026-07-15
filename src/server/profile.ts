@@ -51,6 +51,17 @@ const TEMPLATE = `<!doctype html>
         color: var(--accent); background: var(--accent-weak); border-radius: 999px; padding: 5px 12px;
         text-decoration: none; }
   .state { color: var(--muted); }
+  .ledger { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
+  .ledger h2 { font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 0 0 8px;
+               text-transform: uppercase; letter-spacing: .04em; }
+  .ledger .total { margin: 0 0 10px; }
+  .ledger .total strong { font-size: 18px; }
+  .ledger ul { list-style: none; margin: 0; padding: 0; }
+  .ledger li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0;
+               font-size: 12.5px; color: var(--muted); }
+  .ledger li .pid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
+  .ledger li .w { flex: none; color: var(--fg); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -87,6 +98,34 @@ const TEMPLATE = `<!doctype html>
             a.rel = "noopener noreferrer";
             a.textContent = "GitHub: " + p.github_login;
             body.appendChild(a);
+          }
+          // Piece 4 Task 4: the transparent contribution ledger — real
+          // totals from contribution_event, per-project ids only (same
+          // anonymization boundary as the network directory).
+          var c = p.contributions;
+          if (c) {
+            var ledger = el("div", "ledger");
+            ledger.appendChild(el("h2", null, "Contributions"));
+            var total = el("p", "total");
+            var strong = document.createElement("strong");
+            strong.textContent = String(c.totalWeight);
+            total.appendChild(strong);
+            total.appendChild(document.createTextNode(
+              " total weight across " + c.count + " verified contribution" + (c.count === 1 ? "" : "s")));
+            ledger.appendChild(total);
+            if (c.projects && c.projects.length) {
+              var list = document.createElement("ul");
+              c.projects.forEach(function (proj) {
+                var li = document.createElement("li");
+                var pid = el("span", "pid", "project " + proj.projectId);
+                pid.title = proj.projectId;
+                li.appendChild(pid);
+                li.appendChild(el("span", "w", String(proj.totalWeight)));
+                list.appendChild(li);
+              });
+              ledger.appendChild(list);
+            }
+            body.appendChild(ledger);
           }
         })
         .catch(function () {
