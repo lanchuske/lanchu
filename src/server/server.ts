@@ -21,6 +21,7 @@ import { probeServers, readProjectMcpServers } from "../core/mcps.js";
 import { buildMcpServer } from "./mcp.js";
 import { PANEL_BUILD_ID, panelHtml } from "./panel.js";
 import { profileHtml } from "./profile.js";
+import { intakeHtml } from "./intake.js";
 import { startWebhookDelivery } from "./webhooks.js";
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -624,6 +625,31 @@ export function createServer(): http.Server {
         const handle = url.pathname.slice(2);
         res.writeHead(handle && !handle.includes("/") ? 200 : 404, { "content-type": "text/html; charset=utf-8" });
         res.end(profileHtml());
+        return;
+      }
+
+      // Network mode (Piece 2, Task 1): idea intake — someone with an idea
+      // and no team describes it and gets exactly one org + one project,
+      // network-mode from birth, local_path NULL (a browser has no folder to
+      // bind to — a different provisioning class than the terminal-only rule
+      // in "Design: Panel philosophy" protects). No moderator run yet
+      // (Piece 2 Tasks 2/3). See "Design: Idea intake & the moderator".
+      if (url.pathname === "/api/network/idea" && req.method === "POST") {
+        const body = (await readJson(req)) as { title?: string; description?: string; repo_url?: string };
+        try {
+          const result = store.createIdeaIntake({
+            title: body?.title ?? "",
+            description: body?.description ?? "",
+            repoUrl: body?.repo_url,
+          });
+          return sendJson(res, 200, { org: result.org.name, project_id: result.project.id });
+        } catch (err) {
+          return sendJson(res, 400, { error: (err as Error).message });
+        }
+      }
+      if (url.pathname === "/idea" && req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(intakeHtml());
         return;
       }
 
