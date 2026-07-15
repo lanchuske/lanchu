@@ -650,6 +650,89 @@ function publishedOpenTaskCount(projectId: string): number {
   return row.n;
 }
 
+// Hard caps for the intake form — abuse containment for an unauthenticated
+// endpoint, not the vague-idea quality heuristic (that's Piece 2 Task 4).
+const IDEA_TITLE_MAX = 200;
+const IDEA_DESCRIPTION_MAX = 10_000;
+
+/** First free org name for a base slug: `base`, then `base-2`, `base-3`, … */
+function uniqueOrgName(base: string): string {
+  const taken = (name: string) => Boolean(db().prepare("SELECT 1 FROM org WHERE name = ?").get(name));
+  if (!taken(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}`;
+    if (!taken(candidate)) return candidate;
+  }
+}
+
+export interface IdeaIntake {
+  org: { id: string; name: string };
+  project: ProjectRow;
+  /** The submitted idea, stored as a doc in the new org — what the moderator (Piece 2 Task 3) reads. */
+  ideaDocId: string;
+}
+
+/**
+ * Network mode (Piece 2, Task 1): idea intake → org + project, 1:1:1,
+ * network-mode from birth. One idea = one org = one project, always —
+ * `rehydrateContext` resolves an agent's project as the org's first (and
+ * only) project, and per-org scoping is what keeps one idea's roles and
+ * contributors invisible to another's. `local_path` stays NULL: a
+ * network-mode idea has no folder, which is why this creation path is a
+ * different provisioning class than the terminal-only rule in "Design:
+ * Panel philosophy" protects. No moderator run here (Piece 2 Tasks 2/3).
+ * See "Design: Idea intake & the moderator (network mode — Piece 2)".
+ */
+export function createIdeaIntake(input: {
+  title: string;
+  description: string;
+  repoUrl?: string | null;
+}): IdeaIntake {
+  const title = (input.title ?? "").trim();
+  const description = (input.description ?? "").trim();
+  if (!title) throw new Error("idea title required");
+  if (!description) throw new Error("idea description required");
+  if (title.length > IDEA_TITLE_MAX) throw new Error(`idea title too long (max ${IDEA_TITLE_MAX} chars)`);
+  if (description.length > IDEA_DESCRIPTION_MAX)
+    throw new Error(`idea description too long (max ${IDEA_DESCRIPTION_MAX} chars)`);
+  const repoUrl = input.repoUrl?.trim() || null;
+
+  // node:sqlite has no transaction helper — explicit BEGIN/COMMIT so a
+  // failure partway leaves no half-created idea (org without project, etc.).
+  db().exec("BEGIN");
+  try {
+    const name = uniqueOrgName(slugify(title, 40));
+    const org = getOrCreateOrg(name); // name is free, so this always creates
+    const now = nowIso();
+    const projectId = uuid();
+    db()
+      .prepare(
+        "INSERT INTO project(id, org_id, name, repo_url, local_path, network_mode, created_at) VALUES (?,?,?,?,NULL,1,?)",
+      )
+      .run(projectId, org.id, name, repoUrl, now);
+    const ideaDocId = uuid();
+    db()
+      .prepare(
+        "INSERT INTO doc(id, org_id, title, content, category, lifecycle, updated_at, created_at) VALUES (?,?,?,?,'product','record',?,?)",
+      )
+      .run(ideaDocId, org.id, `Idea: ${title}`, description, now, now);
+    recordEvent({
+      org_id: org.id,
+      project_id: projectId,
+      type: "network.idea_submitted",
+      subject_kind: "project",
+      subject_id: projectId,
+      data: { title },
+    });
+    const result = { org, project: getProject(projectId)!, ideaDocId };
+    db().exec("COMMIT");
+    return result;
+  } catch (err) {
+    db().exec("ROLLBACK");
+    throw err;
+  }
+}
+
 /** Fill in a project's repo/path once (won't overwrite values already set). */
 export function setProjectRepo(
   projectId: string,
