@@ -175,12 +175,37 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 /**
+ * Network mode surfaces are public by design: a Person interacting with
+ * Lanchu directly (magic-link login, a profile page, the cross-org
+ * directory, idea intake) has no panel key and was never meant to need
+ * one. ONE deliberate list here, decided once for every network-mode
+ * piece — not exempted endpoint-by-endpoint as each ships (task-mrlgnhl086:
+ * every network-mode GET/POST added after Piece 6 Task 2 quietly inherited
+ * the same 401-under-a-set-key bug because each one copied its sibling
+ * instead of the gate being fixed).
+ */
+const PUBLIC_NETWORK_SURFACES: Array<{ method: string; matches: (pathname: string) => boolean }> = [
+  { method: "GET", matches: (p) => p.startsWith("/@") }, // profile pages (Piece 1 Task 3)
+  { method: "GET", matches: (p) => p.startsWith("/api/profile/") }, // profile API (Piece 1 Task 3)
+  { method: "GET", matches: (p) => p === "/api/network/projects" }, // cross-org directory (Piece 6 Task 2)
+  { method: "POST", matches: (p) => p === "/api/person/login/request" }, // magic-link request (Piece 1 Task 2)
+  { method: "POST", matches: (p) => p === "/api/person/login/verify" }, // magic-link verify (Piece 1 Task 2)
+  { method: "GET", matches: (p) => p === "/idea" }, // idea intake page (Piece 2 Task 1)
+  { method: "POST", matches: (p) => p === "/api/network/idea" }, // idea intake submit (Piece 2 Task 1)
+];
+
+function isPublicNetworkSurface(req: http.IncomingMessage, pathname: string): boolean {
+  return PUBLIC_NETWORK_SURFACES.some((s) => s.method === req.method && s.matches(pathname));
+}
+
+/**
  * When LANCHU_ACCESS_KEY is set, the admin/API surface requires it. The key may
  * arrive as `Authorization: Bearer <key>`, an `x-lanchu-key` header, or a `?key=`
  * query param (the last is for the panel's SSE, which can't set headers). These
  * paths stay open: `/health`, the panel shell `/` (it prompts for the key
- * client-side), `/mcp` (per-agent session tokens), and `/hooks/intake` (its own
- * LANCHU_INTAKE_SECRET). Without a key configured, everything is open as before.
+ * client-side), `/mcp` (per-agent session tokens), `/hooks/intake` (its own
+ * LANCHU_INTAKE_SECRET), and every public network-mode surface above. Without a
+ * key configured, everything is open as before.
  */
 function accessGate(req: http.IncomingMessage, url: URL): { ok: true } | { ok: false } {
   const key = accessKey();
@@ -193,6 +218,7 @@ function accessGate(req: http.IncomingMessage, url: URL): { ok: true } | { ok: f
   // own session token, not the panel key (same class as /mcp).
   if (p === "/api/agent/pending") return { ok: true };
   if (p === "/hooks/agent/session-start" || p === "/hooks/agent/session-end") return { ok: true };
+  if (isPublicNetworkSurface(req, p)) return { ok: true };
   const presented =
     bearer(req.headers.authorization ?? undefined) ??
     (typeof req.headers["x-lanchu-key"] === "string" ? (req.headers["x-lanchu-key"] as string) : null) ??

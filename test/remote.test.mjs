@@ -58,6 +58,42 @@ test("with an access key: admin surface is gated, health/shell/mcp stay reachabl
   }
 });
 
+// Regression for task-mrlgnhl086: with a key set, every network-mode surface
+// meant for a Person acting directly (no panel key, by definition) must stay
+// reachable — a magic-link login, a profile page, the cross-org directory.
+// Each one 401'd before the fix because accessGate only exempted the panel's
+// own surface, and every new network-mode endpoint quietly inherited the bug.
+test("with an access key: public network-mode surfaces stay open, everything else still 401s", async () => {
+  process.env.LANCHU_ACCESS_KEY = KEY;
+  try {
+    store.createPerson({ email: "gategrace@example.com", handle: "gategrace" });
+
+    assert.equal((await req("/api/network/projects")).status, 200);
+    assert.equal((await req("/api/profile/gategrace")).status, 200);
+    assert.equal((await req("/api/profile/no-such-handle")).status, 404, "unknown handle: 404, not 401");
+    assert.equal((await req("/@gategrace")).status, 200);
+    assert.equal((await req("/@no-such-handle")).status, 200, "shell serves even for an unknown handle");
+
+    const loginReq = await req("/api/person/login/request", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "gate-login@example.com" }),
+    });
+    assert.equal(loginReq.status, 200);
+    const loginVerify = await req("/api/person/login/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "not-a-real-token" }),
+    });
+    assert.equal(loginVerify.status, 400, "reaches real login logic (invalid token), not a 401 from the gate");
+
+    // A sibling API surface with no public exemption is still properly gated.
+    assert.equal((await req("/api/orgs")).status, 401);
+  } finally {
+    delete process.env.LANCHU_ACCESS_KEY;
+  }
+});
+
 test("session minting is gated by the key and advertises a reachable mcp url", async () => {
   process.env.LANCHU_ACCESS_KEY = KEY;
   try {
