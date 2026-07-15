@@ -9,7 +9,7 @@ import { detectRuntimes } from "../core/runtimes.js";
 import { sameModelTier, suggestModel } from "../core/routing.js";
 import { QuotaError, ScopeError } from "../core/types.js";
 import { ensureAgentWorktree, ghLogin, gitAuthorIn } from "../core/worktree.js";
-import { ensureContractSandbox } from "../core/contract-sandbox.js";
+import { ensureContractSandbox, writeDeliverableToSandbox } from "../core/contract-sandbox.js";
 import { spawnTerminal, terminalTitle, tileTerminals } from "./cockpit.js";
 import { putContext, type SessionContext } from "./context.js";
 
@@ -556,9 +556,35 @@ export function buildMcpServer(ctx: SessionContext): BuiltServer {
       // Network mode (Piece 5): same lockdown as task_list — a contract task
       // not owned by, or assigned to, the caller doesn't exist for them.
       const task = raw ? store.taskVisibleTo(raw, ctx.agentId) : null;
-      return task
-        ? text({ ...task, applicable_skills: store.skillsForTags(ctx.orgId, task.tags) })
-        : fail(new Error("task not found"));
+      if (!task) return fail(new Error("task not found"));
+      // A contract task's latest submission rides along — same visibility
+      // boundary as the task itself, since taskVisibleTo already gated this.
+      const deliverable =
+        task.kind === "contract" ? store.latestContractDeliverable(task.id) : null;
+      return text({
+        ...task,
+        applicable_skills: store.skillsForTags(ctx.orgId, task.tags),
+        ...(deliverable ? { deliverable } : {}),
+      });
+    },
+  );
+
+  registerTool(
+    "task_submit_contract",
+    {
+      title: "Submit contract deliverable",
+      description:
+        "Network mode: submit your finished work for a kind='contract' task — the isolated-contributor equivalent of attaching a PR (there's no shared repo to PR against). Only the task's own claimed contributor may call this; marks the task done and routes it into the normal SDLC verification gate.",
+      inputSchema: { taskId: z.string(), content: z.string() },
+    },
+    async ({ taskId, content }) => {
+      try {
+        const task = store.submitContractDeliverable({ taskId, agentId: ctx.agentId, content });
+        writeDeliverableToSandbox(taskId, content);
+        return text(task);
+      } catch (err) {
+        return fail(err);
+      }
     },
   );
 

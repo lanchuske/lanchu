@@ -189,6 +189,21 @@ export interface ContributionEvent {
   created_at: string;
 }
 
+/**
+ * Network mode: a contract task's submitted work — the isolated-contributor
+ * equivalent of a normal task's `pr_url`. Multiple rows per task are
+ * expected (resubmission after a FAIL bounce); the most recent is
+ * canonical. See "Design: Contract-based contributor isolation (network
+ * mode — Piece 5)".
+ */
+export interface ContractDeliverable {
+  id: string;
+  task_id: string;
+  content: string;
+  submitted_by_agent_id: string | null;
+  submitted_at: string;
+}
+
 /** Why an agent bounced a task back to definition instead of guessing. */
 export type RejectReason =
   | "out_of_scope"

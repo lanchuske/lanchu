@@ -25,6 +25,7 @@ import {
   type Agent,
   type AgentKind,
   type AgentState,
+  type ContractDeliverable,
   type ContributionEvent,
   type EventOutcome,
   type EventType,
@@ -1581,6 +1582,81 @@ export function listArchivedTasks(projectId: string): Task[] {
     )
     .all(projectId) as Record<string, unknown>[];
   return rows.map(loadTask);
+}
+
+// ─────────────── contract deliverables (network mode, Piece 5) ───────────────
+// A contract task's submitted work — the isolated-contributor equivalent of
+// a normal task's `pr_url`. See "Design: Contract-based contributor
+// isolation (network mode — Piece 5)".
+
+const CONTRACT_DELIVERABLE_COLS = "id, task_id, content, submitted_by_agent_id, submitted_at";
+
+function loadContractDeliverable(row: Record<string, unknown>): ContractDeliverable {
+  return {
+    id: row.id as string,
+    task_id: row.task_id as string,
+    content: row.content as string,
+    submitted_by_agent_id: (row.submitted_by_agent_id as string) ?? null,
+    submitted_at: row.submitted_at as string,
+  };
+}
+
+/** Every deliverable a task has received, oldest first — resubmission after a FAIL bounce keeps history. */
+export function listContractDeliverables(taskId: string): ContractDeliverable[] {
+  const rows = db()
+    .prepare(`SELECT ${CONTRACT_DELIVERABLE_COLS} FROM contract_deliverable WHERE task_id = ? ORDER BY submitted_at`)
+    .all(taskId) as Record<string, unknown>[];
+  return rows.map(loadContractDeliverable);
+}
+
+/** The canonical deliverable for review right now — the most recent submission. */
+export function latestContractDeliverable(taskId: string): ContractDeliverable | null {
+  const rows = listContractDeliverables(taskId);
+  return rows.length ? rows[rows.length - 1]! : null;
+}
+
+/**
+ * Submit a contract task's finished work. Only the task's own assigned
+ * contributor may call this — same trust boundary as claiming it in the
+ * first place. Storing the deliverable is this function's whole job;
+ * running `contract_tests` against it automatically is deliberately NOT
+ * done here (that needs safe, sandboxed execution — Piece 6's Task 4,
+ * "contract-sandbox execution safety," not yet built, since a hostile
+ * `contract_tests` file is untrusted input). Until then, the existing SDLC
+ * verification flow's FAIL-note convention is what gates `done`: a human
+ * or agent verifier reads/runs the tests themselves and reports FAIL if
+ * they don't pass — the same mechanism every other task in Lanchu already
+ * uses, not a new one.
+ */
+export function submitContractDeliverable(input: { taskId: string; agentId: string; content: string }): Task {
+  const task = getTask(input.taskId);
+  const agent = getAgent(input.agentId);
+  if (!task || !agent) throw new Error("unknown task or agent");
+  if (task.kind !== "contract") {
+    throw new ScopeError(`${task.id} is not a contract task — attach a PR with task_update instead.`);
+  }
+  if (task.owner_agent_id !== input.agentId) {
+    recordEvent({
+      org_id: agent.org_id,
+      project_id: task.project_id,
+      type: "scope.violation",
+      actor_agent_id: input.agentId,
+      subject_kind: "task",
+      subject_id: task.id,
+      outcome: "rejected",
+      data: { action: "submit_contract" },
+    });
+    throw new ScopeError(`${task.id} is not assigned to you — only its claimed contributor can submit a deliverable.`);
+  }
+
+  const id = uuid();
+  db()
+    .prepare(
+      `INSERT INTO contract_deliverable(id, task_id, content, submitted_by_agent_id, submitted_at) VALUES (?,?,?,?,?)`,
+    )
+    .run(id, task.id, input.content, input.agentId, nowIso());
+
+  return updateTaskStatus({ agentId: input.agentId, taskId: task.id, status: "done" });
 }
 
 let _taskSeq = 0;
