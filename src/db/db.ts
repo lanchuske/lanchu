@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { dbPath } from "../config.js";
-import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
+import { INDEX_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
 
 let _db: DatabaseSync | null = null;
 
@@ -91,6 +91,10 @@ function migrate(db: DatabaseSync): void {
   addColumn(db, "task", "contract_tests", "TEXT");
   addColumn(db, "task", "contract_deps", "TEXT");
   addColumn(db, "project", "owner_agent_id", "TEXT REFERENCES agent(id)");
+
+  // Indexes go last: several index columns above only exist on an upgraded
+  // database once addColumn has run (see INDEX_SQL's doc comment).
+  db.exec(INDEX_SQL);
 
   const row = db.prepare("SELECT version FROM schema_meta LIMIT 1").get() as
     | { version: number }

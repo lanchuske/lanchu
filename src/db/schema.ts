@@ -374,7 +374,16 @@ CREATE TABLE IF NOT EXISTS contract_deliverable (
   submitted_by_agent_id TEXT REFERENCES agent(id),
   submitted_at          TEXT NOT NULL
 );
+`;
 
+// Kept OUT of SCHEMA_SQL: indexes must run AFTER migrate()'s additive column
+// steps. On a database created before a column existed, CREATE TABLE IF NOT
+// EXISTS is a no-op, so an index on that column aborts the whole schema exec
+// before addColumn ever runs — leaving the DB half-migrated and every query
+// on the new columns failing (this took production down on the v0.5.17
+// restart: idx_agent_person referenced agent.person_id, which only
+// addColumn adds to a pre-Piece-1 database).
+export const INDEX_SQL = /* sql */ `
 CREATE INDEX IF NOT EXISTS idx_task_project_status ON task(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_task_owner          ON task(owner_agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_tag_tag        ON task_tag(tag);
